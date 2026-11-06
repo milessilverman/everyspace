@@ -12,6 +12,15 @@ Free rental management for everything you rent out: homes, rooms, backyards, poo
 
 `index.html` and `everyspace.html` are the same single-file app. It runs entirely in the browser with demo data (saved in your browser's local storage); connections to other sites are simulated until partner integrations and a backend are in place.
 
+## Earnings map
+
+`#/map` shows what a specific home could earn:
+
+- **Event parking:** stadiums, arenas, fairs, festivals and parades around Los Angeles (SoFi, Dodger Stadium, the Rose Bowl, Fiesta La Ballona and more) with walking-distance zones. Tap a home or search an address to see what its driveway could earn on event days. Venue positions are approximate, and event counts and prices are typical figures, not guarantees.
+- **Solar:** tap a roof to measure it from its OpenStreetMap building outline (or draw it), pick the slope, shape and facing, and see the system size and what a solar company could pay.
+
+Data sources, all queried from the visitor's browser: LA County Assessor parcels (public.gis.lacounty.gov), OpenStreetMap buildings (Overpass API) and search (Nominatim), CARTO street tiles and Esri World Imagery. The map library is [Leaflet](https://leafletjs.com) 1.9.4 (BSD-2-Clause), embedded in the page.
+
 ## Tests
 
 The core rules (pricing, the price rule, iCal sync, listing everywhere, privacy) have automated tests:
