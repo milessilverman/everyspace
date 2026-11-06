@@ -2476,8 +2476,16 @@ a.promise-card:hover, a.owner-card:hover { transform: translateY(-2px); box-shad
   .site-row { grid-template-columns: auto 1fr; }
   .sr-how { grid-column: 2; text-align: left; }
   .sr-sub { display: inline; margin-left: 6px; }
+  .sr-more { display: inline; margin-left: 10px; }
   .sr-sub::before { content: '· '; }
 }
+
+.dist-card { margin-bottom: 12px; }
+.dist-card .sp-head a { margin-left: auto; }
+.site-row.muted-row { cursor: default; opacity: .75; }
+.sr-how.ok { color: var(--ok); }
+.site-row:not(.on) .sr-how { color: var(--muted); font-weight: 500; }
+.sr-more { display: block; margin-left: auto; padding: 0; }
 </style>
 </head>
 <body>
@@ -6049,7 +6057,7 @@ function handleApi(store, method, path, body = {}, params = new URLSearchParams(
     ['GET', /^host\/setup$/, () => dist.setup(db, params.get('hostId'))],
     ['GET', /^host\/activity$/, () => dist.activity(db, params.get('hostId'), Number(params.get('limit') ?? 30))],
     ['POST', /^host\/autopilot$/, () => mutate(() => dist.setAutopilot(db, body.hostId, body))],
-    ['POST', /^host\/publish$/, () => mutate(() => dist.publish(db, body.hostId, body.spaceId, body.platform, opts()))],
+    ['POST', /^host\/publish$/, () => mutate(() => dist.publish(db, body.hostId, body.spaceId, body.platform, { ...opts(), concierge: !!body.concierge }))],
     ['POST', /^host\/publish-all$/, () => mutate(() => dist.publishAll(db, body.hostId, opts()))],
     ['POST', /^host\/sites-preview$/, () => dist.previewSites(db, body.hostId, body.items)],
     ['POST', /^host\/list-everywhere$/, () => mutate(() => dist.listEverywhere(db, body.hostId, body.spaceIds ?? [], { skip: body.skip ?? {}, agree: !!body.agree, now: opts().now }))],
@@ -9935,17 +9943,47 @@ function kitSheet(r, spaceId, done) {
 }
 
 // Publish one listing to one site, handling connect-first and paste-once sites.
-async function publishTo(spaceId, site, done) {
+async function publishTo(spaceId, site, done, { selfPost = false } = {}) {
   if (site.connect === 'direct' && !site.connected) {
     const d = await api(`host/distribution?hostId=${state.user}`);
     accountChoice(site.platform, d.connections[site.platform], () => publishTo(spaceId, { ...site, connected: true }, done));
     return;
   }
   try {
-    const r = await api('host/publish', { hostId: state.user, spaceId, platform: site.platform });
-    if (r.status === 'pending') kitSheet(r, spaceId, done);
+    // Our listing team posts to sites without a direct connection, unless the host asks to do it themselves.
+    const r = await api('host/publish', { hostId: state.user, spaceId, platform: site.platform, concierge: !selfPost });
+    if (r.status === 'posting') { playSound('success'); toast(`Our team is posting it on ${r.name}, usually within a day. Nothing for you to do.`); done(); }
+    else if (r.status === 'pending') kitSheet(r, spaceId, done);
     else { playSound('success'); toast(`Live on ${r.name} at ${r.kit.ratesText}. You take home the same.`); done(); }
   } catch (e) { toast(e.message); }
+}
+
+// One listing on the "Where you're listed" page: a switch per site, Everyspace first.
+const SITE_STATE = {
+  live: ['✓ Live', 'ok'], posting: ['🛠️ Our team is posting it', 'assist'], pending: ['⏳ Waiting for you to paste it', 'assist'],
+  recommended: ['Off', ''], needs_price: ['Needs a price', ''],
+};
+function distCard(l) {
+  const c = cat(l.category);
+  const onCount = (l.listedHere ? 1 : 0) + l.sites.filter((x) => ['live', 'posting', 'pending'].includes(x.status)).length;
+  const row = (x) => {
+    const on = ['live', 'posting', 'pending'].includes(x.status);
+    const [label, cls] = SITE_STATE[x.status] ?? ['', ''];
+    if (x.status === 'needs_price') return `<div class="site-row muted-row"><span class="switch"><input type="checkbox" disabled><span></span></span>
+      <span class="sr-main"><strong>${chanDot(x.platform)}${esc(x.name)}</strong><span class="muted small">${esc(x.reason)}</span></span>
+      <a class="sr-how link-text" href="#/host/space/${l.spaceId}">+ ${esc(x.needs)}</a></div>`;
+    return `<label class="site-row ${on ? 'on' : ''}"><span class="switch"><input type="checkbox" data-toggle-site="${l.spaceId}:${x.platform}" ${on ? 'checked' : ''}><span></span></span>
+      <span class="sr-main"><strong>${chanDot(x.platform)}${esc(x.name)}${x.top && !on ? ' <span class="badge">Best fit</span>' : ''}</strong><span class="muted small">${esc(x.reason)}</span></span>
+      <span class="sr-how ${cls}">${label}${on || x.status === 'pending' ? `<button type="button" class="btn link small sr-more" data-site="${x.platform}" data-space="${l.spaceId}">Details</button>` : ''}</span></label>`;
+  };
+  return `<div class="site-pick dist-card">
+    <div class="sp-head"><span class="tile-icon">${c?.icon ?? '🏷️'}</span><div><strong>${esc(l.title)}</strong><div class="muted small">On ${onCount} site${onCount === 1 ? '' : 's'}</div></div>
+      <a class="btn link small" href="#/host/space/${l.spaceId}">Settings</a></div>
+    <label class="site-row ${l.listedHere ? 'on' : ''}"><span class="switch"><input type="checkbox" data-toggle-es="${l.spaceId}" ${l.listedHere ? 'checked' : ''}><span></span></span>
+      <span class="sr-main"><strong>${chanDot('everyspace')}Everyspace</strong><span class="muted small">Our marketplace. You keep ${FEES.k}.</span></span>
+      <span class="sr-how ${l.listedHere ? 'ok' : ''}">${l.listedHere ? '✓ Live' : 'Off'}</span></label>
+    ${l.sites.map(row).join('')}
+  </div>`;
 }
 
 function siteChip(l, x) {
@@ -9994,12 +10032,9 @@ async function renderSites(view) {
       </div>
 
       <div class="row-between section-head wrap"><h2 class="section-title">Where each listing should go ${missing ? `<span class="count">${missing}</span>` : ''}</h2>
-        <button class="btn" id="pub-all" ${missing ? '' : 'disabled'}>${missing ? `🌐 List everywhere (${missing} more)` : 'Listed everywhere it fits'}</button></div>
-      <p class="muted small">✓ is live. <strong>+</strong> is a site it fits: tap to add just that one (the outlined one is the best fit). 🛠️ means our listing team is posting it for you. ⏳ means it's waiting for you to paste.</p>
-      <div class="dist-list">${d.listings.map((l) => `<div class="dist-row">
-          <div class="dist-title"><strong>${esc(l.title)}</strong><span class="muted small">${(() => { const r = l.sites.find((x) => x.status === 'recommended'); return r ? `${r.top ? 'Best fit' : 'Next up'}: ${esc(r.name)}, ${esc(r.reason[0].toLowerCase() + r.reason.slice(1))}` : l.sites.length ? 'On every site we recommend' : 'Best on Everyspace and local groups'; })()}</span></div>
-          <div class="site-chips"><span class="site-chip ${l.listedHere ? 'live' : 'off'}" title="Everyspace">${l.listedHere ? '✓' : '○'} Everyspace</span>${l.sites.map((x) => siteChip(l, x)).join('')}</div>
-        </div>`).join('') || '<div class="muted-block">No listings yet.</div>'}</div>
+        <button class="btn" id="pub-all" ${missing ? '' : 'disabled'}>${missing ? `🌐 Turn on every site (${missing} more)` : 'On every site it fits'}</button></div>
+      <p class="muted small">Switch each site on or off for each listing. Turning one on publishes it there; turning it off stops listing it there (bookings you already have stay).</p>
+      <div class="dist-list">${d.listings.map((l) => distCard(l)).join('') || '<div class="muted-block">No listings yet. <a class="link-text" href="#/host/new?fresh=1">List something</a></div>'}</div>
 
       <h2 class="section-title">Autopilot</h2>
       <div class="autopilot">${AP.map(([k, ic, t, txt]) => `<label class="ap-row"><span class="ap-icon">${ic}</span><span><strong>${t}</strong><span class="muted small">${txt}</span></span>
@@ -10034,7 +10069,7 @@ async function renderSites(view) {
         <p>We'll put every listing on every site it fits${d.setup.profile ? '' : '. First, finish your host profile so we can create accounts'}.</p>
         <p class="small">New accounts needed: <strong>${esc(need.join(', '))}</strong>. We create them with your host profile; each site asks for payout details on its own secure page.</p>
         <label class="check-line strong"><input type="checkbox" id="le-agree"> Create those accounts for me. I agree to each site's terms.</label>
-        <button class="btn wide" id="le-go">List everywhere</button>
+        <button class="btn wide" id="le-go">Turn on every site</button>
         ${d.setup.profile ? '' : '<button class="btn ghost wide" id="le-prof">Fill in host profile</button>'}
         <p class="muted small">Leave it unticked to list only on sites you've already connected.</p></div>`, { title: 'List everywhere' });
     $('#le-go', body).onclick = () => go2($('#le-agree', body).checked);
@@ -10056,16 +10091,39 @@ async function renderSites(view) {
     for (const x of $$('[data-pk-in]', body)) x.onclick = () => { closeSheet(); setTimeout(() => signInSheet(x.dataset.pkIn, d.connections[x.dataset.pkIn], refresh), 250); };
     for (const x of $$('[data-pk-new]', body)) x.onclick = () => { closeSheet(); setTimeout(() => createSheet(x.dataset.pkNew, d.connections[x.dataset.pkNew], refresh), 250); };
   };
-  for (const b of $$('[data-site]', view)) b.onclick = () => {
+  bindSiteToggles(view, d, refresh);
+  for (const b of $$('[data-site]', view)) b.onclick = (e) => {
+    e.preventDefault(); e.stopPropagation();
     const l = d.listings.find((x) => x.spaceId === b.dataset.space);
     const site = l.sites.find((x) => x.platform === b.dataset.site);
     if (site.status === 'recommended') { publishTo(l.spaceId, site, refresh); return; }
     const sheet = openSheet(`<div class="form"><p>${site.status === 'posting' ? `Our listing team is posting ${esc(l.title)} on ${esc(site.name)} for you, usually within one business day. Its bookings and calendar will show up here.` : site.status === 'pending' ? `We wrote your ${esc(site.name)} listing; it's waiting for you to post it.` : `${esc(l.title)} is live on ${esc(site.name)}${site.managed ? ' and Everyspace keeps its price and calendar in step' : ''}.`}</p>
         ${site.status === 'posting' ? '<button class="btn ghost wide" id="s-kit">I\'d rather post it myself</button>' : site.status === 'pending' ? '<button class="btn wide" id="s-kit">Show the listing to paste</button>' : `<a class="btn ghost wide" href="#/host/space/${l.spaceId}">Open listing settings</a>`}
         <button class="btn danger-ghost wide" id="s-stop">${site.status === 'pending' || site.status === 'posting' ? 'Cancel' : `Stop syncing with ${esc(site.name)}`}</button></div>`, { title: `${l.title} on ${site.name}` });
-    if ($('#s-kit', sheet)) $('#s-kit', sheet).onclick = async () => { closeSheet(); await api('host/unpublish', { hostId: state.user, spaceId: l.spaceId, platform: site.platform }); publishTo(l.spaceId, { ...site, status: 'recommended' }, refresh); };
+    if ($('#s-kit', sheet)) $('#s-kit', sheet).onclick = async () => { closeSheet(); await api('host/unpublish', { hostId: state.user, spaceId: l.spaceId, platform: site.platform }); setTimeout(() => publishTo(l.spaceId, { ...site, status: 'recommended' }, refresh, { selfPost: true }), 280); };
     for (const a of $$('a', sheet)) a.onclick = () => closeSheet();
     $('#s-stop', sheet).onclick = async () => { await api('host/unpublish', { hostId: state.user, spaceId: l.spaceId, platform: site.platform }); closeSheet(); toast('Removed'); refresh(); };
+  };
+}
+
+// Switches on the "Where you're listed" page and on a listing's settings page.
+function bindSiteToggles(root, d, refresh) {
+  for (const el of $$('[data-toggle-site]', root)) el.onchange = async () => {
+    const [spaceId, platform] = el.dataset.toggleSite.split(':');
+    const l = d.listings.find((x) => x.spaceId === spaceId);
+    const site = l.sites.find((x) => x.platform === platform);
+    playSound('toggle');
+    if (el.checked) { publishTo(spaceId, { ...site, status: 'recommended' }, refresh); return; }
+    if (!confirm(`Stop listing ${l.title} on ${site.name}? Bookings you already have there stay.`)) { el.checked = true; return; }
+    await api('host/unpublish', { hostId: state.user, spaceId, platform });
+    toast(`Stopped listing on ${site.name}`); refresh();
+  };
+  for (const el of $$('[data-toggle-es]', root)) el.onchange = async () => {
+    playSound('toggle');
+    try {
+      await api(`spaces/${el.dataset.toggleEs}/update`, { actorId: state.user, changes: { listed: el.checked } });
+      toast(el.checked ? 'Live on Everyspace' : 'Off Everyspace. You still manage it here'); refresh();
+    } catch (e) { el.checked = !el.checked; toast(e.message); setTimeout(() => go(`#/host/space/${el.dataset.toggleEs}`), 900); }
   };
 }
 
@@ -10103,7 +10161,7 @@ async function renderExtChat(view, [id]) {
   };
 }
 
-__m['host'] = { renderHostToday, renderHostCalendar, renderHostListings, renderHostEarnings, renderSites, renderExtChat, publishTo, siteChip, chan, chanDot, chanBadge, statusChip, fmtSpan, platformOptions, openAddReservation, download };
+__m['host'] = { renderHostToday, renderHostCalendar, renderHostListings, renderHostEarnings, renderSites, renderExtChat, publishTo, siteChip, distCard, bindSiteToggles, chan, chanDot, chanBadge, statusChip, fmtSpan, platformOptions, openAddReservation, download };
 })();
 
 // ---- public/js/wizard.js ----
@@ -11156,7 +11214,7 @@ __m['earn'] = { renderEarn, renderSaved };
 const { $, $$, api, esc, state, term, icon, money, fmtDate, ago, topbar, bindBack, errorBox, toast, playSound, openSheet, closeSheet, go, TERM_ORDER } = __m['core'];
 const { art } = __m['art'];
 const { calendarPicker } = __m['calendar'];
-const { chan, chanBadge, fmtSpan, platformOptions, openAddReservation, download, siteChip, publishTo } = __m['host'];
+const { chan, chanBadge, fmtSpan, platformOptions, openAddReservation, download, siteChip, publishTo, distCard, bindSiteToggles } = __m['host'];
 
 const isParityError = (e) => /same or lower than on your other sites/.test(e.message);
 
@@ -11532,11 +11590,10 @@ async function renderManage(view, [id]) {
   const strip = $('#dist-strip', view);
   if (strip && !isBiz) api(`host/distribution?hostId=${state.user}`).then((d) => {
     const l = d.listings.find((x) => x.spaceId === s.id);
-    if (!l || !l.sites.length) { strip.innerHTML = ''; return; }
-    const rec = l.sites.find((x) => x.status === 'recommended');
-    strip.innerHTML = `<div class="dist-row compact"><div class="dist-title"><strong>Rents best on</strong><span class="muted small">${rec ? `Start with ${esc(rec.name)}: ${esc(rec.reason[0].toLowerCase() + rec.reason.slice(1))}.` : 'Live everywhere we recommend.'} <a class="link-text" href="#/host/sites">All sites</a></span></div>
-      <div class="site-chips">${l.sites.map((x) => siteChip(l, x)).join('')}</div>
-      ${l.sites.some((x) => x.status === 'recommended') ? `<button class="btn small" id="le-one">🌐 List everywhere (${l.sites.filter((x) => x.status === 'recommended').length} more)</button>` : ''}</div>`;
+    if (!l) { strip.innerHTML = ''; return; }
+    strip.innerHTML = `<h2 class="section-title">Where it's listed</h2>${distCard(l).replace(/<a class="btn link small" href="#\/host\/space\/[^"]*">Settings<\/a>/, '')}
+      ${l.sites.some((x) => x.status === 'recommended') ? `<button class="btn small" id="le-one">🌐 Turn on every site (${l.sites.filter((x) => x.status === 'recommended').length} more)</button>` : ''}`;
+    bindSiteToggles(strip, d, refresh);
     const one = $('#le-one', strip);
     if (one) one.onclick = async () => {
       playSound('click');
@@ -11552,10 +11609,7 @@ async function renderManage(view, [id]) {
       toast(`${live.length ? `Live on ${live.join(', ')}. ` : ''}${team.length ? `Our team is posting to ${team.join(', ')}.` : ''}${!live.length && !team.length ? 'Nothing new to list yet.' : ''}`);
       refresh();
     };
-    for (const b of $$('[data-site]', strip)) b.onclick = () => {
-      const site = l.sites.find((x) => x.platform === b.dataset.site);
-      if (site.status === 'recommended') publishTo(s.id, site, refresh); else go('#/host/sites');
-    };
+    for (const b of $$('[data-site]', strip)) b.onclick = (e) => { e.preventDefault(); e.stopPropagation(); go('#/host/sites'); };
   });
 
   // Features & suggested price
