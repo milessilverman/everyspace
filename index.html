@@ -11156,6 +11156,10 @@ async function renderWizard(view, _params, query) {
         if (!cat(k)?.owners.includes(draft.owner)) continue;
         pick(k, true);
         Object.assign(draft.items[k], { features: [...(v.features ?? [])], size: { ...(v.size ?? {}) }, quantity: v.quantity ?? 1 });
+        if (v.rates) {
+          draft.items[k].keepRates = { ...v.rates };
+          for (const [t, r] of Object.entries(v.rates)) { draft.items[k].rates[t] = r; draft.items[k].on[t] = true; }
+        }
       }
       draft.step = draft.picked.length ? 2 : 1;
     }
@@ -11224,7 +11228,8 @@ async function refreshSuggestion(card, k, it) {
     if (token !== it.suggToken) return;
     it.sugg = sugg;
     if (!it.touched) {
-      for (const [t, v] of Object.entries(it.sugg.rates)) {
+      for (const [t, v0] of Object.entries(it.sugg.rates)) {
+        const v = it.keepRates?.[t] ?? v0; // prices carried over from the earnings map win over the generic suggestion
         it.rates[t] = v;
         const inp = card && $(`[data-rate="${t}"]`, card);
         if (inp) inp.value = v;
@@ -13286,7 +13291,9 @@ async function renderEarnMap(view, _args, params) {
       playSound('click');
       const owner = cls?.kind === 'business' || cls?.kind === 'apartments' ? 'business' : cls?.kind === 'org' ? 'other' : 'home';
       const k = owner === 'home' ? 'parking_spot' : 'lot_parking';
-      state.wizardPrefill = { owner, items: { [k]: { quantity: ui.spots, features: ['near_event'], size: {} } } };
+      // Carry over the event-day price from the best nearby series (the driveway's daily rate; event-day pricing can be raised further per event).
+      const daily = bestSeries?.perCar;
+      state.wizardPrefill = { owner, items: { [k]: { quantity: ui.spots, features: ['near_event'], size: {}, ...(daily ? { rates: { daily } } : {}) } } };
       if (state.me.kind !== 'business') state.setMode('host');
       go('#/host/new?from=quiz');
     };
@@ -13369,7 +13376,7 @@ async function renderEarnMap(view, _args, params) {
     const ls = $('#emap-list-solar', panel); if (ls) ls.onclick = () => {
       playSound('click');
       const owner = cls?.kind === 'business' || cls?.kind === 'apartments' ? 'business' : cls?.kind === 'org' ? 'other' : 'home';
-      state.wizardPrefill = { owner, items: { rooftop_solar: { quantity: 1, features: ui.roof.facing === 'south' ? ['south'] : [], size: { sqft: est.usableSqft } } } };
+      state.wizardPrefill = { owner, items: { rooftop_solar: { quantity: 1, features: ui.roof.facing === 'south' ? ['south'] : [], size: { sqft: est.usableSqft }, rates: { infrastructure: est.rentYear.typical } } } };
       if (state.me.kind !== 'business') state.setMode('host');
       go('#/host/new?from=quiz');
     };
