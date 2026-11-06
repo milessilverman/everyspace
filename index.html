@@ -2425,7 +2425,8 @@ a.promise-card:hover, a.owner-card:hover { transform: translateY(-2px); box-shad
 .check-line.strong { font-weight: 600; }
 .form.two-col { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; }
 .site-chip.posting { border-style: dashed; }
-.everywhere-done > div { display: flex; flex-direction: column; gap: 4px; }
+.everywhere-done > div, .team-posting > div { display: flex; flex-direction: column; gap: 4px; }
+.team-posting { margin: 14px 0; color: inherit; text-decoration: none; }
 
 /* Small-screen overflow fixes */
 .plan code, .plan pre { overflow-wrap: anywhere; white-space: pre-wrap; }
@@ -9415,6 +9416,7 @@ async function renderHostToday(view) {
   const [s, hub, ins, week, crewRes, dist] = await Promise.all([api(`host/summary?hostId=${state.user}`), api(`host/hub?hostId=${state.user}`),
     api(`host/insights?hostId=${state.user}`), api(`host/tasks?hostId=${state.user}&from=${addDays(today(), -1)}&days=15&done=false`), api(`host/team?hostId=${state.user}`), api(`host/distribution?hostId=${state.user}`)]);
   const notYet = dist.listings.flatMap((l) => l.sites.filter((x) => x.status === 'recommended').map((x) => x.name));
+  const teamPosting = dist.listings.flatMap((l) => l.sites.filter((x) => x.status === 'posting').map((x) => ({ title: l.title, name: x.name })));
   const me = state.me;
   const hour = new Date().getHours();
   const month = hostMonthKey();
@@ -9469,8 +9471,11 @@ async function renderHostToday(view) {
       ${week.length ? `<div class="task-list">${week.slice(0, 6).map((t) => taskRow(t, crewRes.members)).join('')}</div>${week.length > 6 ? `<a class="link-text" href="#/host/tasks">${week.length - 6} more ${icon.chevron}</a>` : ''}`
         : '<div class="muted-block">Nothing to clean or fix in the next two weeks.</div>'}
 
+      ${teamPosting.length ? `<a class="notice ok team-posting" href="#/host/sites">🛠️ <div><strong>Our listing team is posting ${teamPosting.length} listing${teamPosting.length === 1 ? '' : 's'} for you</strong>
+        <span class="small">${esc(teamPosting.slice(0, 3).map((x) => `${x.title} on ${x.name}`).join(' · '))}${teamPosting.length > 3 ? ` and ${teamPosting.length - 3} more` : ''}. Usually within a day. Nothing for you to do.</span></div>${icon.chevron}</a>` : ''}
+
       ${notYet.length ? `<a class="host-cta spread-cta" href="#/host/sites"><div><strong>Reach more renters: ${notYet.length} more place${notYet.length === 1 ? '' : 's'} your listings could be</strong>
-        <span>${esc([...new Set(notYet)].slice(0, 4).join(', '))}. One tap each, all managed from here.</span></div><span class="cta-btn">Publish</span></a>` : ''}
+        <span>${esc([...new Set(notYet)].slice(0, 4).join(', '))}. We list them all in one tap and manage everything from here.</span></div><span class="cta-btn">List everywhere</span></a>` : ''}
 
       ${ins.items.length ? `<h2 class="section-title">Insights for you</h2>${insightCards(ins.items)}` : ''}
 
