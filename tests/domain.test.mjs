@@ -107,3 +107,15 @@ test('demo dates move by whole weeks so weekends stay weekends', () => {
   assert.ok(Array.isArray(db.bookings) && db.bookings.length > 0);
   for (const b of db.bookings) assert.ok(!Number.isNaN(Date.parse(b.start)), `bad date ${b.start}`);
 });
+
+test('each site in the listing preview shows a price that pays the host the same, and never undercuts Everyspace', async () => {
+  const { api, m } = fresh();
+  const [yard] = await api('host/sites-preview', { hostId: 'u_maya', items: [{ key: 'y', category: 'backyard', features: [], rates: { hourly: 40 } }] });
+  const usable = yard.sites.filter((x) => x.usable);
+  assert.ok(usable.length > 0);
+  const ours = 40 * (1 + m.pricing.SERVICE_FEE);
+  for (const x of usable) {
+    assert.ok(x.price >= 40, `${x.name} price is never below ours`);
+    assert.ok(x.guestPays >= ours - 0.01, `${x.name} renters pay at least what they pay here`);
+  }
+});
