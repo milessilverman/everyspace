@@ -2657,7 +2657,7 @@ const REQUIRES = {
   battery_site: [['A wall or pad within about 15 ft of your electric panel', ''], ['A property you own, or the owner\'s OK', '']],
   charger_site: [['Parking spaces in a lot you own or control', ''], ['Drivers can reach them from the street', '']],
   telecom_site: [['A roof or high spot a technician can reach', '']],
-  fleet_parking: [['Lot space for vans overnight', ''], ['Zoning that allows commercial vehicles', '']],
+  fleet_parking: [['Lot space for vans or car-share fleets (Turo, Getaround) overnight', ''], ['Zoning that allows commercial vehicles', '']],
   signage: [['A wall, roof or land that faces a busy road', '']],
   parcel_locker: [['About 10 ft of wall, under cover', ''], ['A normal outlet nearby', '']],
   building: [],
@@ -2666,9 +2666,10 @@ const REQUIRES = {
 // Who usually rents it, in plain words.
 const RENTERS = {
   garden_plot: 'Gardeners, urban farms and nonprofits', beehive_site: 'Local beekeepers', pasture: 'Horse and livestock owners',
-  parking_spot: 'Drivers, commuters, neighbors, and Turo or car-share hosts who need a place to keep their cars', lot_parking: 'Event-goers, commuters and neighbors', rv_parking: 'RV, boat and trailer owners',
+  parking_spot: 'Drivers, commuters, neighbors, and Turo or car-share hosts who need a place to keep their cars', lot_parking: 'Event-goers, commuters, neighbors, and Turo or car-share fleets', rv_parking: 'RV, boat and trailer owners',
   backyard: 'People hosting parties and get-togethers', pool: 'Families and small groups', meeting_room: 'Groups, clubs and small businesses',
   kitchen: 'Bakers, caterers and food startups', workspace: 'Makers, artists and small businesses', warehouse_storage: 'Small businesses and online sellers',
+  fleet_parking: 'Delivery and service fleets, and Turo or car-share fleet owners',
 };
 
 // What the owner needs to have, and what the renter or partner company takes care of.
@@ -6170,7 +6171,10 @@ db.offers ??= [];
 const store = {
   get db() { return db; },
   newId: (prefix) => `${prefix}_${db.seq++}`,
-  save() { try { localStorage.setItem(KEY, JSON.stringify(db)); } catch {} },
+  save() {
+    try { localStorage.setItem(KEY, JSON.stringify(db)); }
+    catch { window.dispatchEvent(new CustomEvent('everyspace:save-failed')); }
+  },
   reset() { db = seed(); this.save(); },
 };
 // Pure domain modules, exposed read-only for automated tests (tests/domain.test.mjs).
@@ -6779,6 +6783,14 @@ globalThis.FEES = {
   get h() { return `${Math.round((state.catalog?.fees?.host ?? 0.03) * 1000) / 10}%`; },
   get k() { return `${Math.round((1 - (state.catalog?.fees?.host ?? 0.03)) * 1000) / 10}%`; },
 };
+
+// If the browser can't save (private mode, storage full), say so once instead of losing changes silently.
+let warnedSave = false;
+window.addEventListener('everyspace:save-failed', () => {
+  if (warnedSave) return;
+  warnedSave = true;
+  toast("Your browser isn't saving changes (storage is full or blocked). They'll be lost when you close this tab.");
+});
 
 // Bind Global Shortcuts
 window.addEventListener('keydown', (e) => {
