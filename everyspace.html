@@ -1588,6 +1588,8 @@ h1, h2, h3, h4 { font-family: var(--font-display); line-height: 1.2; letter-spac
 .menu [hidden] { display: none; }
 .catalog-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
 .catalog-grid ul { margin: 8px 0 0; padding-left: 18px; color: var(--muted); font-size: 13px; }
+.catalog-grid > * { min-width: 0; }
+.cat-card .owner-chip { white-space: normal; }
 .term-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
 .term-tags span { font-size: 12px; padding: 2px 8px; border-radius: 6px; background: var(--panel-2); }
 .plan { line-height: 1.6; }
@@ -2425,6 +2427,8 @@ a.promise-card:hover, a.owner-card:hover { transform: translateY(-2px); box-shad
 .where-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .where-chip { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 999px; border: 1px solid var(--line); font-size: 13px; cursor: pointer; background: var(--card); user-select: none; }
 .where-chip input { width: 14px; height: 14px; margin: 0; accent-color: var(--accent); }
+.where-chip:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.pin:focus-visible { transform: scale(1.15); filter: drop-shadow(0 0 3px var(--accent)); }
 .where-chip.on { border-color: var(--accent); background: var(--accent-soft); font-weight: 600; }
 .where-chip.fixed { cursor: default; }
 .where-chip.off { opacity: .7; border-style: dashed; color: inherit; font: inherit; font-size: 13px; }
@@ -11430,7 +11434,23 @@ async function renderManage(view, [id]) {
     if (!l || !l.sites.length) { strip.innerHTML = ''; return; }
     const rec = l.sites.find((x) => x.status === 'recommended');
     strip.innerHTML = `<div class="dist-row compact"><div class="dist-title"><strong>Rents best on</strong><span class="muted small">${rec ? `Start with ${esc(rec.name)}: ${esc(rec.reason[0].toLowerCase() + rec.reason.slice(1))}.` : 'Live everywhere we recommend.'} <a class="link-text" href="#/host/sites">All sites</a></span></div>
-      <div class="site-chips">${l.sites.map((x) => siteChip(l, x)).join('')}</div></div>`;
+      <div class="site-chips">${l.sites.map((x) => siteChip(l, x)).join('')}</div>
+      ${l.sites.some((x) => x.status === 'recommended') ? `<button class="btn small" id="le-one">🌐 List everywhere (${l.sites.filter((x) => x.status === 'recommended').length} more)</button>` : ''}</div>`;
+    const one = $('#le-one', strip);
+    if (one) one.onclick = async () => {
+      playSound('click');
+      const need = l.sites.filter((x) => x.status === 'recommended' && !x.connected).map((x) => x.name);
+      let agree = false;
+      if (need.length) {
+        if (!d.setup.profile) { toast('Fill in your host profile first, so we can create the accounts'); go('#/host/sites'); return; }
+        agree = confirm(`We'll create your accounts on ${need.join(', ')} with your host profile. You agree to each site's terms. OK?`);
+      }
+      const r = await api('host/list-everywhere', { hostId: state.user, spaceIds: [s.id], agree });
+      playSound('success');
+      const team = [...new Set(r.posting.map((x) => x.name))], live = [...new Set(r.live.map((x) => x.name))];
+      toast(`${live.length ? `Live on ${live.join(', ')}. ` : ''}${team.length ? `Our team is posting to ${team.join(', ')}.` : ''}${!live.length && !team.length ? 'Nothing new to list yet.' : ''}`);
+      refresh();
+    };
     for (const b of $$('[data-site]', strip)) b.onclick = () => {
       const site = l.sites.find((x) => x.platform === b.dataset.site);
       if (site.status === 'recommended') publishTo(s.id, site, refresh); else go('#/host/sites');
