@@ -25,7 +25,7 @@
   --panel-3: #e9ecef;
   --ink: #111827;
   --ink-secondary: #374151;
-  --muted: #64748b;
+  --muted: #556070;
   --line: #e2e8f0;
   --line-subtle: #f1f5f9;
 
@@ -35,7 +35,7 @@
   --accent-soft: #f0fdfa;
   --accent-border: #ccfbf1;
 
-  --accent-2: #ea580c;
+  --accent-2: #c2410c;
   --accent-2-soft: #fff7ed;
 
   --biz: #0f172a;
@@ -45,15 +45,15 @@
 
   --gold: #f59e0b;
   --gold-soft: #fffbeb;
-  --ok: #059669;
+  --ok: #047857;
   --ok-soft: #ecfdf5;
-  --warn: #d97706;
+  --warn: #b45309;
   --warn-soft: #fffbeb;
   --bad: #dc2626;
   --bad-soft: #fef2f2;
   --event: #7c3aed;
   --event-soft: #f5f3ff;
-  --star: #f59e0b;
+  --star: #b45309;
 
   --radius-sm: 8px;
   --radius: 16px;
@@ -79,6 +79,7 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --bg: #0b0f17;
+    --star: #fbbf24;
     --panel: #131b26;
     --panel-2: #1b2636;
     --panel-3: #223044;
@@ -121,6 +122,7 @@
 }
 
 :root[data-theme="dark"] {
+  --star: #fbbf24;
   --bg: #0b0f17;
   --panel: #131b26;
   --panel-2: #1b2636;
@@ -169,7 +171,7 @@
   --panel-3: #e9ecef;
   --ink: #111827;
   --ink-secondary: #374151;
-  --muted: #64748b;
+  --muted: #556070;
   --line: #e2e8f0;
   --line-subtle: #f1f5f9;
 
@@ -493,7 +495,7 @@ h1, h2, h3, h4 { font-family: var(--font-display); line-height: 1.2; letter-spac
 .pill.ok { background: var(--ok-soft); color: var(--ok); }
 .pill.warn { background: var(--warn-soft); color: var(--warn); }
 .pill.bad { background: var(--bad-soft); color: var(--bad); }
-.count { display: inline-grid; place-items: center; min-width: 22px; height: 22px; border-radius: 11px; background: var(--bad); color: #fff; font-size: 12px; font-weight: 700; padding: 0 6px; }
+.count { display: inline-grid; place-items: center; min-width: 22px; height: 22px; border-radius: 11px; background: color-mix(in srgb, var(--bad) 82%, #000); color: #fff; font-size: 12px; font-weight: 700; padding: 0 6px; }
 .stars { font-size: 13px; font-weight: 700; color: var(--star); white-space: nowrap; }
 .stars.new { color: var(--muted); font-weight: 600; }
 .avatar { display: inline-grid; place-items: center; flex: none; width: var(--size); height: var(--size); border-radius: 50%; color: #fff; font-weight: 800; font-size: calc(var(--size) * .42); }
@@ -668,7 +670,7 @@ h1, h2, h3, h4 { font-family: var(--font-display); line-height: 1.2; letter-spac
   left: 10px;
   top: 10px;
   background: var(--panel);
-  color: var(--gold);
+  color: var(--star);
   font-size: 11px;
   font-weight: 800;
   padding: 4px 9px;
@@ -1695,7 +1697,7 @@ h1, h2, h3, .page-title, .section-title { letter-spacing: -.02em; }
 .money-flow > div { display: grid; padding: 8px 10px; background: var(--accent); color: var(--accent-ink); min-width: 0; }
 .money-flow > div:nth-child(2) { background: color-mix(in srgb, var(--accent) 55%, var(--panel)); color: var(--ink); }
 .money-flow > div.fee { background: var(--accent-2-soft); color: var(--accent-2); }
-.money-flow span { font-size: 11px; opacity: .85; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.money-flow span { font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .small-flow strong { font-size: 13px; }
 .payout { color: var(--ok); margin-top: 2px; }
 .manage .block > .two { align-items: end; margin-top: 10px; }
@@ -1948,7 +1950,7 @@ svg.art { display: block; max-width: 100%; overflow: hidden; }
 .chan-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--c, var(--muted)); flex: none; }
 .chan-dot.hatch { background: repeating-linear-gradient(45deg, var(--muted) 0 2px, transparent 2px 4px); border: 1px solid var(--muted); }
 .chan-badge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px 3px 7px; border-radius: var(--radius-full); font-size: 12px; font-weight: 700; white-space: nowrap;
-  background: color-mix(in srgb, var(--c) 12%, var(--panel)); color: color-mix(in srgb, var(--c) 80%, var(--ink)); border: 1px solid color-mix(in srgb, var(--c) 25%, transparent); }
+  background: color-mix(in srgb, var(--c) 12%, var(--panel)); color: color-mix(in srgb, var(--c) 55%, var(--ink)); border: 1px solid color-mix(in srgb, var(--c) 25%, transparent); }
 .chan-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; align-items: center; }
 .chan-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 12px 0; }
 .chan-legend span { display: inline-flex; align-items: center; gap: 6px; }
@@ -2130,7 +2132,7 @@ details.more { padding-top: 2px; }
 
 /* ---------- who's renting it out ---------- */
 .owner-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: var(--radius-full); font-size: 11px; font-weight: 700; background: var(--panel-2); color: var(--ink-secondary); white-space: nowrap; }
-.owner-chip.business { background: var(--biz-accent-soft); color: color-mix(in srgb, var(--biz-accent) 70%, var(--ink)); }
+.owner-chip.business { background: var(--biz-accent-soft); color: color-mix(in srgb, var(--biz-accent) 45%, var(--ink)); }
 .who-section { margin: 8px 0 4px; }
 .cat-card .who-does { margin-top: 8px; grid-template-columns: 1fr; }
 .cat-card { display: grid; gap: 6px; align-content: start; }
@@ -3563,7 +3565,7 @@ function quote(db, cart) {
   const ev = evaluateCart(db, cart);
   const availability = checkAvailability(db, ev.items, cart.start, cart.end, { excludeBookingId: cart.excludeBookingId, ignoreListing: !!cart.offer });
   const q = { mode: ev.mode, package: ev.pkg?.name ?? null, availability, ...totals(ev.lines, cart.term, cart.start, cart.end, ev.pkg), offer: cart.offer ? { id: cart.offer.id, rate: cart.offer.rate } : null };
-  // Same space listed elsewhere? Show the comparison and beat any cheaper verified price (single-space bookings).
+  // Same space listed elsewhere? Show what the same booking costs there (single-space bookings).
   if (!ev.pkg && ev.items.length === 1 && !cart.offer) applyComparison(ev.spaces[0], q, { ...cart, items: ev.items });
   q.ourCut ??= ourCut(q, ['hourly', 'daily', 'weekly'].includes(cart.term)); // what Everyspace earns, shown on every receipt
   return q;
@@ -7410,7 +7412,7 @@ function art(space, { className = 'art', view = 'main' } = {}) {
   const sceneSvg = builder(p, view, h);
   const isInterior = ['private_room', 'workspace', 'kitchen', 'garage_storage', 'parcel_locker', 'meeting_room', 'warehouse_storage'].includes(c) || view === 'interior';
 
-  return `<svg class="${className}" viewBox="0 0 300 200" preserveAspectRatio="xMidYMid slice" role="img" aria-label="${(space?.title ?? '').replace(/"/g, '')}">
+  return `<svg class="${className}" viewBox="0 0 300 200" preserveAspectRatio="xMidYMid slice" ${space?.title ? `role="img" aria-label="${String(space.title).replace(/["<>&]/g, '')}"` : 'aria-hidden="true"'}>
     <defs>
       <linearGradient id="${gradId}" x1="0" y1="0" x2="0" y2="1">
         <stop offset="0%" stop-color="${p.sky[0]}"/>
@@ -7719,7 +7721,7 @@ async function loadResults(view) {
     sections.push(`<div class="ideas">${IDEAS.map((i, n) => `<button class="idea tone-${i.tone}" data-idea="${n}"><span>${i.emoji}</span>${esc(i.label)}</button>`).join('')}</div>`);
     sections.push(eventsSection(spaces));
     const loved = spaces.filter((s) => isFavorite(s.rating)).sort((a, b) => b.rating.avg - a.rating.avg || b.rating.count - a.rating.count);
-    if (loved.length) sections.push(`<h2 class="section-title">Guest favorites <span class="badge ok">Top 5% verified</span></h2><div class="hscroll">${loved.map(spaceCard).join('')}</div>`);
+    if (loved.length) sections.push(`<h2 class="section-title">Guest favorites <span class="badge ok">Rated 4.8+ by 2 or more guests</span></h2><div class="hscroll">${loved.map(spaceCard).join('')}</div>`);
   }
   const visiblePkgs = packages.filter(() => !f.category && (!f.group || f.group === 'living' || f.group === 'parking'));
   if (visiblePkgs.length) sections.push(`<h2 class="section-title">Bundles <span class="muted small">A place + parking or storage, combined discount</span></h2><div class="hscroll">${visiblePkgs.map(packageCard).join('')}</div>`);
