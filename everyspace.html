@@ -10176,7 +10176,7 @@ const DEFAULT_TITLE = {
   signage: 'Sign site', parcel_locker: 'Wall for a parcel locker', fleet_parking: 'Overnight van parking', building: 'Building',
 };
 const ANCHOR_CATS = ['apartment_unit', 'adu', 'entire_home', 'private_room'];
-const STEPS = ['Who', 'What', 'Requirements', 'Where', 'Details & prices', 'Sites', 'Confirm', 'Publish'];
+const STEPS = ['Who', 'What', 'Needs', 'Where', 'Prices', 'Sites', 'Confirm', 'Publish'];
 const OWNER_INFO = {
   home: { icon: '🏡', title: "I'm a homeowner", text: 'Rent out parts of your home: driveway, yard, rooms, storage, your pool, or your roof and a wall for solar and batteries.' },
   business: { icon: '🏢', title: 'I own a business or commercial property', text: 'Rent out your parking lot, roof, walls, rooms and storage, to people nearby and to companies that install solar, batteries and EV chargers.' },
@@ -10647,7 +10647,7 @@ async function drawSites(view, d) {
   for (const el of $$('[data-item-all]', box)) el.onclick = () => {
     playSound('toggle'); const [k, v] = el.dataset.itemAll.split(':');
     d.skip[k] = v === 'on' ? [] : (d.preview[k] ?? []).filter((x) => x.usable).map((x) => x.platform);
-    if (v === 'on') d.esOff[k] = false;
+    d.esOff[k] = v !== 'on';
     re();
   };
   for (const el of $$('[data-goprice]', box)) el.onclick = () => { playSound('click'); d.step = 4; $('[data-step-jump="4"]', view)?.click(); window.scrollTo(0, 0); };
@@ -11967,8 +11967,9 @@ async function renderImport(view) {
         const res = await api('host/import-many', { hostId: state.user, propertyId: imp.propertyId, newProperty: { ...imp.newProp, ownerType: imp.owner }, listings });
         triggerConfetti();
         state.importDraft = null;
-        toast(`Imported ${res.spaces.length} listing${res.spaces.length === 1 ? '' : 's'}${res.imported ? ` with ${res.imported} booking${res.imported === 1 ? '' : 's'} from their calendars` : ''}`);
-        go(res.spaces.length === 1 ? `#/host/space/${res.spaces[0].id}` : '#/host/listings');
+        toast(`Imported ${res.spaces.length} listing${res.spaces.length === 1 ? '' : 's'}${res.imported ? ` with ${res.imported} booking${res.imported === 1 ? '' : 's'} from their calendars` : ''}. Switch on any other sites below.`);
+        // Next stop: switch on any other sites they'd rent on (on the listing's page, or "Where you're listed" for several).
+        go(res.spaces.length === 1 ? `#/host/space/${res.spaces[0].id}` : '#/host/sites');
       } catch (err) { $('#imp-msg').innerHTML = errorBox(err); btn.disabled = false; $('#imp-msg').scrollIntoView({ block: 'center', behavior: 'smooth' }); }
     };
   };
