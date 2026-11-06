@@ -3,8 +3,15 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Everyspace — Manage Everything You Rent Out</title>
-  <meta name="description" content="Free rental management for everything you rent out: Airbnb, Vrbo, Swimply, SpotHero and more in one calendar, with calendar sync, double-booking alerts, all-site earnings and pricing help.">
+  <title>Everyspace — Make the most of the property you already own</title>
+  <meta name="description" content="Find out what your roof, wall, driveway, backyard or spare room could earn with a free 2-minute quiz. List once and go live on Everyspace, Airbnb, Vrbo, Booking.com, Expedia, Swimply and more, all managed from one place.">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Everyspace">
+  <meta property="og:title" content="Make the most of the property you already own">
+  <meta property="og:description" content="Free 2-minute quiz: see what your roof, wall, driveway, backyard or spare room could earn. List once, live everywhere.">
+  <meta property="og:url" content="https://milessilverman.github.io/everyspace/">
+  <meta name="twitter:card" content="summary">
+  <link rel="canonical" href="https://milessilverman.github.io/everyspace/">
   <meta name="theme-color" content="#0f766e">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -12032,6 +12039,9 @@ async function route() {
       <strong>${expected ? esc(e.message) : 'Something went wrong'}</strong>${expected ? '' : `<span class="small">${esc(e.message)}</span>`}
       <a class="btn" href="#/">Return home</a></div></div>`;
   }
+  // A tab title for every page (and for screen readers announcing the page change).
+  const heading = view.querySelector('h1, .topbar h2, .topbar strong')?.innerText.trim().replace(/\s+/g, ' ');
+  document.title = path === '/' || !heading ? 'Everyspace — Make the most of the property you already own' : `${heading.slice(0, 60)} · Everyspace`;
   window.scrollTo(0, 0);
   requestAnimationFrame(() => view.classList.remove('enter'));
 }
