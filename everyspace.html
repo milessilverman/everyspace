@@ -2450,6 +2450,34 @@ a.promise-card:hover, a.owner-card:hover { transform: translateY(-2px); box-shad
 .check-list { list-style: none; padding: 0; margin: 8px 0; display: grid; gap: 6px; }
 .check-list li { padding-left: 24px; position: relative; font-size: 14px; }
 .check-list li::before { content: '✓'; position: absolute; left: 4px; color: var(--accent-2); font-weight: 700; }
+
+/* Sites step (listing wizard) */
+.sites-quick { justify-content: flex-start; flex-wrap: wrap; margin: 6px 0 14px; }
+.site-pick { border: 1px solid var(--line); border-radius: 16px; padding: 12px; margin-bottom: 14px; background: var(--panel); }
+.sp-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.sp-head > div:nth-child(2) { flex: 1; min-width: 0; }
+.sp-all { display: flex; gap: 4px; }
+.site-row { display: grid; grid-template-columns: auto 1fr auto; gap: 12px; align-items: center; padding: 10px; border-radius: 12px; border: 1px solid transparent; cursor: pointer; }
+.site-row + .site-row { margin-top: 4px; }
+.site-row.on { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
+.site-row:hover { border-color: var(--line); }
+.site-row .switch { margin: 0; }
+.sr-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.sr-main strong { display: flex; align-items: center; gap: 6px; }
+.sr-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--c); flex: none; display: inline-block; }
+.sr-how { font-size: 12px; font-weight: 600; text-align: right; white-space: nowrap; }
+.sr-sub { display: block; font-weight: 500; color: var(--muted); }
+.sr-how.assist { color: var(--accent-2); }
+.sp-later { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--line); }
+.sp-none { padding: 6px 10px; }
+.sites-total { display: flex; flex-direction: column; gap: 4px; padding: 12px; border-radius: 12px; background: var(--panel-2); margin-top: 6px; }
+.review-sites { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin-top: 6px; }
+@media (max-width: 520px) {
+  .site-row { grid-template-columns: auto 1fr; }
+  .sr-how { grid-column: 2; text-align: left; }
+  .sr-sub { display: inline; margin-left: 6px; }
+  .sr-sub::before { content: '· '; }
+}
 </style>
 </head>
 <body>
@@ -4884,9 +4912,15 @@ function previewSites(db, hostId, items) {
     // Sites it would also fit with another price (e.g. Neighbor needs a monthly price): shown, but off until a price is added.
     const allPriced = { ...s, rates: Object.fromEntries(CATEGORIES[s.category].terms.map((t) => [t, s.rates[t] ?? 1])) };
     const more = sitesFor(allPriced).filter(([pl]) => !now.some(([x]) => x === pl));
-    const row = ([platform, reason], usable) => ({ platform, name: conn[platform].name, reason, connect: SITE_INFO[platform].connect, connected: conn[platform].connected,
-      usable: usable && SITE_INFO[platform].terms.some((t) => s.rates[t] != null),
-      needs: `a ${SITE_INFO[platform].terms.filter((t) => CATEGORIES[s.category].terms.includes(t)).map((t) => TERMS[t].label.toLowerCase()).join(' or ')} price` });
+    const row = ([platform, reason], usable) => {
+      const t = SITE_INFO[platform].terms.find((x) => s.rates[x] != null);
+      const p = PLATFORMS[platform];
+      const price = t ? priceThere(platform, s.rates[t]) : null;
+      return { platform, name: conn[platform].name, reason, bestFor: SITE_INFO[platform].bestFor, connect: SITE_INFO[platform].connect, connected: conn[platform].connected,
+        usable: usable && !!t, term: t ?? null, unit: t ? TERMS[t].unit : null, price,
+        guestPays: price != null ? Math.round((price * (1 + p.guestFeePct) + p.perBookingFee) * 100) / 100 : null,
+        needs: `a ${SITE_INFO[platform].terms.filter((x) => CATEGORIES[s.category].terms.includes(x)).map((x) => TERMS[x].label.toLowerCase()).join(' or ')} price` };
+    };
     return { key: it.key, sites: [...now.map((x) => row(x, true)), ...more.map((x) => row(x, false))] };
   });
 }
@@ -9944,7 +9978,7 @@ async function renderSites(view) {
 
       ${state.lastEverywhere ? (() => { const r = state.lastEverywhere; state.lastEverywhere = null;
         const live = [...new Set(r.live.map((x) => x.name))], team = [...new Set(r.posting.map((x) => x.name))];
-        return `<div class="notice ok everywhere-done">🎉 <div><strong>Listed everywhere it fits.</strong>
+        return `<div class="notice ok everywhere-done">🎉 <div><strong>You're listed!</strong>
           ${live.length ? `<span class="small">Live now on Everyspace, ${esc(live.join(', '))}.</span>` : '<span class="small">Live now on Everyspace.</span>'}
           ${team.length ? `<span class="small">🛠️ Our listing team is posting to ${esc(team.join(', '))} for you, usually within a day. Nothing for you to do.</span>` : ''}
           ${r.created.length ? `<span class="small">✨ New accounts created: ${esc(r.created.join(', '))}. Check your email to verify the ones that ask.</span>` : ''}
@@ -10084,7 +10118,7 @@ const DEFAULT_TITLE = {
   signage: 'Sign site', parcel_locker: 'Wall for a parcel locker', fleet_parking: 'Overnight van parking', building: 'Building',
 };
 const ANCHOR_CATS = ['apartment_unit', 'adu', 'entire_home', 'private_room'];
-const STEPS = ['Who', 'What', 'Requirements', 'Where', 'Details & prices', 'Confirm', 'Publish'];
+const STEPS = ['Who', 'What', 'Requirements', 'Where', 'Details & prices', 'Sites', 'Confirm', 'Publish'];
 const OWNER_INFO = {
   home: { icon: '🏡', title: "I'm a homeowner", text: 'Rent out parts of your home: driveway, yard, rooms, storage, your pool, or your roof and a wall for solar and batteries.' },
   business: { icon: '🏢', title: 'I own a business or commercial property', text: 'Rent out your parking lot, roof, walls, rooms and storage, to people nearby and to companies that install solar, batteries and EV chargers.' },
@@ -10096,7 +10130,7 @@ const freshItem = (k) => ({ category: k, title: DEFAULT_TITLE[k] ?? cat(k).label
   rates: Object.fromEntries(cat(k).terms.map((t) => [t, cat(k).typical?.[t] ?? ''])), on: Object.fromEntries(cat(k).terms.map((t, i) => [t, cat(k).terms.length <= 2 || i < 2])),
   policy: 'standalone', anchorCats: [], anchorIds: [], maxPerAnchor: 1, addonMonthly: '', event: { name: '', start: '', end: '', daily: '', hourly: '' },
   checklist: [], access: '', features: [], size: {}, touched: false, sugg: null, req: [] });
-const fresh = () => ({ step: 0, owner: '', picked: [], items: {}, propertyId: '', newProp: { title: '', city: 'Riverside', type: '' }, listMode: 'list', spread: true, skip: {}, agreeSites: false });
+const fresh = () => ({ step: 0, owner: '', picked: [], items: {}, propertyId: '', newProp: { title: '', city: 'Riverside', type: '' }, listMode: 'list', spread: true, skip: {}, esOff: {}, agreeSites: false });
 
 async function renderWizard(view, _params, query) {
   const props = await api(`properties?hostId=${state.user}`);
@@ -10322,28 +10356,31 @@ function draw(view, props) {
       ${d.picked.map((k) => itemCard(k, props, prop)).join('')}
       <a class="btn ghost small" href="#" data-goto="1">${icon.plus} Add something else</a>`;
   } else if (d.step === 5) {
-    const listing = d.listMode === 'list';
+    body = `<h1 class="page-title">Where do you want to list ${d.picked.filter(rentable).length > 1 ? 'them' : 'it'}?</h1>
+      <p class="muted">Turn each site on or off for each listing. We publish to all of them at once and keep calendars, prices and messages in sync from here. You can change this any time.</p>
+      <div class="sites-quick btn-row"><button type="button" class="btn small ghost" data-allsites="on">Turn on every site</button><button type="button" class="btn small ghost" data-allsites="es">Only Everyspace</button><button type="button" class="btn small ghost" data-allsites="off">Just manage for now (list nowhere)</button></div>
+      <section id="sites-box"><div class="muted small">Finding every site each one fits…</div></section>`;
+  } else if (d.step === 6) {
+    const goingOut = (k) => !d.esOff[k] || (d.preview?.[k] ?? []).some((x) => x.usable && !(d.skip[k] ?? []).includes(x.platform));
     body = `<h1 class="page-title">Almost done</h1>
-      <div class="segmented three" role="radiogroup" aria-label="How to publish">
-        <label><input type="radio" name="mode" value="list" ${listing ? 'checked' : ''}><span>🌐 List everywhere now</span></label>
-        <label><input type="radio" name="mode" value="manage" ${listing ? '' : 'checked'}><span>🗂 Just manage for now</span></label>
-      </div>
-      <p class="muted small">${listing ? 'We list it here and on every other site it fits, all at once. Confirm a few quick things for each so renters know what to expect.' : 'Nothing goes on the marketplace yet. You still get the calendar, sync and earnings tools, and can list any of them later.'}</p>
-      ${d.picked.filter(rentable).map((k) => { const it = d.items[k]; const c = cat(k);
-        return `<section class="item-card" data-item="${k}"><div class="item-head"><span class="tile-icon">${c.icon}</span><div><strong>${esc(it.title)}</strong><div class="muted small">${esc(c.label)}</div></div></div>
+      <p class="muted small">Confirm a few quick things so renters know what to expect${d.picked.filter(rentable).some((k) => !goingOut(k)) ? '. Things you\'re only managing don\'t need the checklist' : ''}.</p>
+      ${d.picked.filter(rentable).map((k) => { const it = d.items[k]; const c = cat(k); const listing = goingOut(k);
+        return `<section class="item-card" data-item="${k}"><div class="item-head"><span class="tile-icon">${c.icon}</span><div><strong>${esc(it.title)}</strong><div class="muted small">${esc(c.label)}${listing ? '' : ' · managing only'}</div></div></div>
           ${listing && c.checklist.length ? `<div class="checklist">${c.checklist.map((x, i) => `<label class="check-line"><input type="checkbox" data-check="${i}" ${it.checklist.includes(x) ? 'checked' : ''}> ${esc(x)}</label>`).join('')}</div>` : ''}
           ${c.turnkey ? `<p class="muted small">That's all. ${esc(c.handled)}.</p>` : `<label class="form">How renters get in <span class="muted small">(shown only after they book)</span>
             <textarea data-f="access" rows="2" placeholder="Gate code, where to park, lockbox…">${esc(it.access)}</textarea></label>`}
         </section>`; }).join('')}`;
-  } else if (d.step === 6) {
+  } else if (d.step === 7) {
     body = `<h1 class="page-title">Review & publish</h1>
-      <p class="muted">${d.picked.length} thing${d.picked.length === 1 ? '' : 's'} at <strong>${esc(prop?.title ?? d.newProp.title)}</strong>, listed by ${OWNER_WORDS[d.owner].a} · ${d.listMode === 'list' ? 'listed everywhere it fits' : 'managing only'}</p>
+      <p class="muted">${d.picked.length} thing${d.picked.length === 1 ? '' : 's'} at <strong>${esc(prop?.title ?? d.newProp.title)}</strong>, listed by ${OWNER_WORDS[d.owner].a}</p>
       <div class="review-list">${d.picked.map((k) => { const it = d.items[k]; const c = cat(k);
         const prices = c.terms.filter((t) => it.on[t] && Number(it.rates[t]) > 0).map((t) => `${money(it.rates[t])}/${term(t).unit}`).join(' · ');
         return `<div class="list-row"><span class="pkg-icon">${c.icon}</span><div><strong>${esc(it.title)}</strong>
           <div class="muted small">${esc(c.label)}${it.quantity > 1 ? ` · ${it.quantity} of them` : ''}${c.audience === 'business' ? ' · leased to companies' : ''}</div>
-          <div class="small">${prices || (rentable(k) ? '' : 'Groups other spaces')}</div></div></div>`; }).join('')}</div>
-      ${d.listMode === 'list' ? `<section class="where-box" id="where"><h2 class="section-title">Where it'll be listed</h2><div class="muted small">Finding every site it fits…</div></section>` : ''}
+          <div class="small">${prices || (rentable(k) ? '' : 'Groups other spaces')}</div>
+          ${rentable(k) ? `<div class="review-sites">${(() => { const on = sitesOn(d, k); return on.length ? on.map((n) => `<span class="where-chip on fixed">${esc(n)}</span>`).join('') : '<span class="muted small">Managing only, not listed anywhere yet</span>'; })()}
+            <button type="button" class="btn link small" data-step-jump="5">Change</button></div>` : ''}</div></div>`; }).join('')}</div>
+      ${needsAccounts(d).length ? `<div class="notice ${d.agreeSites ? 'ok' : 'warn'} small">${d.agreeSites ? `✨ We'll create your ${esc(needsAccounts(d).join(', '))} account${needsAccounts(d).length === 1 ? '' : 's'} with your host profile.` : `⚠️ You don't have accounts on ${esc(needsAccounts(d).join(', '))} yet and didn't ask us to create them, so we'll skip those for now. <button type="button" class="btn link small" data-step-jump="5">Change</button>`}</div>` : ''}
       <div id="pub-msg"></div>`;
   }
 
@@ -10356,7 +10393,7 @@ function draw(view, props) {
     <div class="reserve-bar wizard-bar">
       <button class="btn ghost" id="prev" ${pos === 0 ? 'disabled' : ''}>Back</button>
       <span class="muted small" id="why">${ok ? (d.step === 1 ? `${d.picked.length} selected` : '') : esc(whyNot(d))}</span>
-      <button class="btn" id="next" ${ok ? '' : 'disabled'}>${d.step === 6 ? `Publish ${d.picked.length > 1 ? `all ${d.picked.length}` : ''} 🎉` : 'Next'}</button>
+      <button class="btn" id="next" ${ok ? '' : 'disabled'}>${d.step === 7 ? (d.picked.filter(rentable).some((k) => sitesOn(d, k).length) ? 'Publish 🎉' : 'Save') : 'Next'}</button>
     </div>`;
   bind(view, props);
 }
@@ -10386,8 +10423,16 @@ function bind(view, props) {
   for (const b of $$('[data-cat]', view)) b.onclick = () => { playSound('click'); pick(b.dataset.cat, !d.picked.includes(b.dataset.cat)); redraw(); };
   for (const b of $$('[data-remove]', view)) b.onclick = () => { playSound('click'); pick(b.dataset.remove, false); if (!d.picked.length) d.step = 1; redraw(); };
   for (const b of $$('[data-prop]', view)) b.onclick = () => { playSound('click'); d.propertyId = b.dataset.prop; for (const k of d.picked) d.items[k].parentId = ''; redraw(); };
-  for (const r of $$('[name="mode"]', view)) r.onchange = () => { playSound('toggle'); d.listMode = r.value; redraw(); };
-  if (d.step === 6 && d.listMode === 'list') drawWhere(view, d);
+  if (d.step === 5) drawSites(view, d);
+  for (const b of $$('[data-allsites]', view)) b.onclick = () => {
+    playSound('toggle');
+    for (const k of d.picked.filter(rentable)) {
+      const usable = (d.preview?.[k] ?? []).filter((x) => x.usable).map((x) => x.platform);
+      d.esOff[k] = b.dataset.allsites === 'off';
+      d.skip[k] = b.dataset.allsites === 'on' ? [] : usable;
+    }
+    drawSites(view, d);
+  };
 
   const bindInput = (sel, fn) => { const el = $(sel, view); if (el) el.oninput = () => { fn(el.value); sync(); }; };
   bindInput('#np-title', (v) => { d.newProp.title = v; });
@@ -10432,62 +10477,100 @@ function bind(view, props) {
   $('#prev').onclick = () => { playSound('click'); d.step = Math.max(0, d.step - 1); redraw(); window.scrollTo(0, 0); };
   $('#next').onclick = async () => {
     playSound('click');
-    if (d.step < 6) { d.step++; redraw(); window.scrollTo(0, 0); return; }
+    if (d.step === 5 && d.agreeSites && $('#wh-profile', view)) {
+      try { await saveInlineProfile(view); } catch (e) { $('#sites-msg', view).innerHTML = errorBox(e); return; }
+    }
+    if (d.step < 7) { d.step++; redraw(); window.scrollTo(0, 0); return; }
     $('#next').disabled = true;
     try {
-      if (d.listMode === 'list' && d.agreeSites && $('#wh-profile', view)) await saveInlineProfile(view);
       const r = await publish(d);
       let everywhere = null;
-      if (d.listMode === 'list') {
+      const anyOther = d.picked.some((k) => (d.preview?.[k] ?? []).some((x) => x.usable && !(d.skip[k] ?? []).includes(x.platform)));
+      if (anyOther) {
+        // Only the sites the host left on: everything else (and anything that didn't fit) is skipped.
         const skip = {};
-        for (const sp of r.spaces) if (d.skip[sp.category]?.length) skip[sp.id] = d.skip[sp.category];
+        for (const sp of r.spaces) {
+          const k = sp.category;
+          const on = new Set((d.preview?.[k] ?? []).filter((x) => x.usable && !(d.skip[k] ?? []).includes(x.platform)).map((x) => x.platform));
+          skip[sp.id] = Object.keys(state.channels ?? {}).filter((pl) => !on.has(pl));
+        }
         everywhere = await api('host/list-everywhere', { hostId: state.user, spaceIds: r.spaces.map((x) => x.id), skip, agree: d.agreeSites });
       }
+      d.listMode = d.picked.some((k) => !d.esOff[k]) || anyOther ? 'list' : 'manage';
       playSound('success');
       triggerConfetti();
       draft = null;
       if (everywhere) {
         const names = [...new Set(everywhere.live.map((x) => x.name))];
         const team = [...new Set(everywhere.posting.map((x) => x.name))];
-        toast(`Live on Everyspace${names.length ? `, ${names.join(', ')}` : ''} 🎉${team.length ? ` Our team is posting to ${team.join(', ')}.` : ''}`);
+        const es = r.spaces.some((x) => x.listed !== false && x.rentable !== false);
+        toast(`${es || names.length ? `Live on ${[...(es ? ['Everyspace'] : []), ...names].join(', ')} 🎉` : 'Saved.'}${team.length ? ` Our team is posting to ${team.join(', ')}.` : ''}`);
         state.lastEverywhere = everywhere;
-      } else toast(`Added ${r.spaces.length} to your listings`);
-      go(d.listMode === 'list' ? '#/host/sites' : r.spaces.length === 1 && rentable(r.spaces[0].category) ? `#/host/space/${r.spaces[0].id}` : '#/host/listings');
+      } else toast(d.listMode === 'list' ? `Live on Everyspace 🎉` : `Added ${r.spaces.length} to your listings`);
+      go(everywhere ? '#/host/sites' : r.spaces.length === 1 && rentable(r.spaces[0].category) ? `#/host/space/${r.spaces[0].id}` : '#/host/listings');
     } catch (e) { $('#pub-msg').innerHTML = errorBox(e); $('#next').disabled = false; }
   };
 }
 
-// The "Where it'll be listed" box on the review step: every site each item fits, all on by default.
-async function drawWhere(view, d) {
-  const box = $('#where', view);
+// Which sites an item is going on (names), for the review step.
+function sitesOn(d, k) {
+  return [...(d.esOff[k] ? [] : ['Everyspace']), ...(d.preview?.[k] ?? []).filter((x) => x.usable && !(d.skip[k] ?? []).includes(x.platform)).map((x) => x.name)];
+}
+function needsAccounts(d) {
+  return [...new Set(d.picked.flatMap((k) => (d.preview?.[k] ?? []).filter((x) => x.usable && !x.connected && !(d.skip[k] ?? []).includes(x.platform)).map((x) => x.name)))];
+}
+
+// The "Sites" step: every site each item fits, one switch per site, Everyspace included.
+async function drawSites(view, d) {
+  const box = $('#sites-box', view);
   if (!box) return;
-  const items = d.picked.filter(rentable).map((k) => {
+  const keys = d.picked.filter(rentable);
+  const items = keys.map((k) => {
     const it = d.items[k]; const rates = {};
     for (const t of cat(k).terms) if (it.on[t] && Number(it.rates[t]) > 0) rates[t] = Number(it.rates[t]);
     return { key: k, category: k, features: it.features, rates, size: it.size, policy: it.policy };
   });
   const [prev, prof] = await Promise.all([api('host/sites-preview', { hostId: state.user, items }), api(`host/profile?hostId=${state.user}`)]);
   if (!box.isConnected) return;
-  const needAccounts = new Set();
+  d.preview = Object.fromEntries(prev.map((p) => [p.key, p.sites]));
+  const fee = state.catalog.fees;
+  const dot = (pl) => `<span class="sr-dot" style="--c:${esc(state.channels?.[pl]?.color ?? '#0f766e')}"></span>`;
   const rows = prev.map((p) => {
     const it = d.items[p.key]; const c = cat(p.key);
-    const skip = d.skip[p.key] ??= [];
-    const chips = p.sites.map((x) => {
-      const on = x.usable && !skip.includes(x.platform);
-      if (on && !x.connected) needAccounts.add(x.name);
-      return x.usable
-        ? `<label class="where-chip ${on ? 'on' : ''}" title="${esc(x.reason)}"><input type="checkbox" data-where="${p.key}:${x.platform}" ${on ? 'checked' : ''}>${esc(x.name)}${x.connect === 'assist' ? ' <span class="wc-note">we post it</span>' : ''}</label>`
-        : `<button type="button" class="where-chip off" data-goprice title="Add ${esc(x.needs)} to list it here too">${esc(x.name)} <span class="wc-note">+ add ${esc(x.needs)}</span></button>`;
-    }).join('');
-    return `<div class="where-row"><div class="where-head"><span class="tile-icon">${c.icon}</span><strong>${esc(it.title)}</strong></div>
-      <div class="where-chips"><span class="where-chip on fixed">✓ Everyspace</span>${chips || (c.audience === 'business' ? '<span class="muted small">Shown to companies on Everyspace for Business</span>' : (it.policy ?? 'standalone') === 'addon' ? '<span class="muted small">Add-on: offered with its main listing</span>' : '')}</div></div>`;
+    // Sites with a catch (e.g. Sniffspot needs a fenced yard) start off; everything else starts on.
+    const skip = d.skip[p.key] ??= p.sites.filter((x) => x.usable && /needs/i.test(x.reason)).map((x) => x.platform);
+    const firstT = c.terms.find((t) => it.on[t] && Number(it.rates[t]) > 0);
+    const ours = firstT ? Number(it.rates[firstT]) : null;
+    const usable = p.sites.filter((x) => x.usable), later = p.sites.filter((x) => !x.usable);
+    const onCount = (d.esOff[p.key] ? 0 : 1) + usable.filter((x) => !skip.includes(x.platform)).length;
+    const business = c.audience === 'business', addon = (it.policy ?? 'standalone') === 'addon';
+    const siteRow = (x) => {
+      const on = !skip.includes(x.platform);
+      return `<label class="site-row ${on ? 'on' : ''}">
+        <span class="switch"><input type="checkbox" data-where="${p.key}:${x.platform}" ${on ? 'checked' : ''}><span></span></span>
+        <span class="sr-main"><strong>${dot(x.platform)}${esc(x.name)}</strong><span class="muted small">${esc(x.reason)}</span>
+          ${x.price != null ? `<span class="small">Renters pay about ${money(x.guestPays)}/${esc(x.unit)} there · you take home the same as here</span>` : ''}</span>
+        <span class="sr-how ${x.connect}">${x.connect === 'direct' ? '⚡ Goes live now' : '🛠️ We post it for you'}${x.connected ? '' : '<span class="sr-sub">new account</span>'}</span></label>`;
+    };
+    return `<div class="site-pick">
+      <div class="sp-head"><span class="tile-icon">${c.icon}</span><div><strong>${esc(it.title)}</strong><div class="muted small">${business ? 'Leased to companies on Everyspace for Business' : addon ? 'Add-on: offered with its main listing on Everyspace' : `On ${onCount} site${onCount === 1 ? '' : 's'}`}</div></div>
+        ${usable.length ? `<div class="sp-all"><button type="button" class="btn link small" data-item-all="${p.key}:on">All</button><button type="button" class="btn link small" data-item-all="${p.key}:off">None</button></div>` : ''}</div>
+      <label class="site-row es ${d.esOff[p.key] ? '' : 'on'}">
+        <span class="switch"><input type="checkbox" data-es="${p.key}" ${d.esOff[p.key] ? '' : 'checked'}><span></span></span>
+        <span class="sr-main"><strong>${dot('everyspace')}${business ? 'Everyspace for Business' : 'Everyspace'}</strong><span class="muted small">${business ? 'Solar, battery, charging and other companies find it here and send you proposals. They handle everything.' : `Our marketplace. You keep ${FEES.k}, the most of any site.`}</span>
+          ${ours != null && !business ? `<span class="small">Renters pay ${money(Math.round(ours * (1 + fee.service) * 100) / 100)}/${esc(term(firstT).unit)} here, all-in</span>` : ''}</span>
+        <span class="sr-how direct">⚡ Live now</span></label>
+      ${usable.map(siteRow).join('')}
+      ${later.length ? `<div class="sp-later"><span class="muted small">Also fits, once you add a price:</span>
+        ${later.map((x) => `<button type="button" class="where-chip off" data-goprice title="${esc(x.reason)}">${dot(x.platform)}${esc(x.name)} <span class="wc-note">+ add ${esc(x.needs)}</span></button>`).join('')}</div>` : ''}
+      ${!usable.length && !later.length && !business && !addon ? '<div class="muted small sp-none">Other sites don\'t take this kind of space yet. It\'s listed on Everyspace, and you still manage it from here.</div>' : ''}
+    </div>`;
   }).join('');
-  const total = prev.reduce((n, p) => n + p.sites.filter((x) => x.usable && !(d.skip[p.key] ?? []).includes(x.platform)).length, 0);
-  box.innerHTML = `<h2 class="section-title">Where it'll be listed</h2>
-    <p class="muted small">Every site that fits, all at once${total ? ` (${total + d.picked.filter(rentable).length} listings in total)` : ''}. Untick any you don't want. Calendars, prices and messages stay in sync from here.</p>
-    ${rows}
-    ${needAccounts.size ? `<div class="where-accounts">
-      <label class="check-line strong"><input type="checkbox" id="wh-agree" ${d.agreeSites ? 'checked' : ''}> Create my accounts on ${esc([...needAccounts].join(', '))} for me, using my host profile. I agree to each site's terms.</label>
+  const need = needsAccounts(d);
+  const total = keys.reduce((n, k) => n + sitesOn(d, k).length, 0);
+  box.innerHTML = `${rows}
+    ${need.length ? `<div class="where-accounts">
+      <label class="check-line strong"><input type="checkbox" id="wh-agree" ${d.agreeSites ? 'checked' : ''}> Create my ${esc(need.join(', '))} account${need.length === 1 ? '' : 's'} for me with my host profile. I agree to each site's terms.</label>
       ${prof.complete ? `<div class="muted small">Using ${esc(prof.legalName)} · ${esc(prof.email)} · ${esc(prof.phone)}. Each site asks for payout details on its own secure page.</div>`
         : `<div class="form two-col" id="wh-profile">
           <label>Full name<input name="legalName" value="${esc(prof.legalName)}" autocomplete="name"></label>
@@ -10495,16 +10578,21 @@ async function drawWhere(view, d) {
           <label>Phone<input name="phone" inputmode="tel" value="${esc(prof.phone)}" autocomplete="tel"></label>
           <label>City<input name="city" value="${esc(prof.city || d.newProp.city || '')}"></label></div>
           <div class="muted small">Filled in once, reused for every site.</div>`}
-      <div class="muted small">Leave it unticked and we'll list on Everyspace and any site you've already connected; add the rest later from "Where you're listed".</div>
+      <div class="muted small">Already have accounts there? Leave this unticked and connect them on "Where you're listed" after publishing.</div>
     </div>` : ''}
-    <div class="muted small">Prices on other sites are set so you take home the same as here. Their fees are higher, so renters pay a little more there.</div>`;
-  for (const el of $$('[data-where]', box)) el.onchange = () => {
-    playSound('toggle');
-    const [k, pl] = el.dataset.where.split(':');
-    toggle(d.skip[k] ??= [], pl, !el.checked);
-    drawWhere(view, d);
+    <div id="sites-msg"></div>
+    <div class="sites-total"><span>${total ? `<strong>${total} listing${total === 1 ? '' : 's'}</strong> will go out when you publish.` : '<strong>Nothing will be listed.</strong> You can still manage everything from here and list later.'}</span>
+      <span class="muted small">Prices on other sites are set so you take home the same as here. Their fees are higher, so renters pay a little more there.</span></div>`;
+  const re = () => drawSites(view, d);
+  for (const el of $$('[data-where]', box)) el.onchange = () => { playSound('toggle'); const [k, pl] = el.dataset.where.split(':'); toggle(d.skip[k] ??= [], pl, !el.checked); re(); };
+  for (const el of $$('[data-es]', box)) el.onchange = () => { playSound('toggle'); d.esOff[el.dataset.es] = !el.checked; re(); };
+  for (const el of $$('[data-item-all]', box)) el.onclick = () => {
+    playSound('toggle'); const [k, v] = el.dataset.itemAll.split(':');
+    d.skip[k] = v === 'on' ? [] : (d.preview[k] ?? []).filter((x) => x.usable).map((x) => x.platform);
+    if (v === 'on') d.esOff[k] = false;
+    re();
   };
-  for (const el of $$('[data-goprice]', box)) el.onclick = () => { playSound('click'); $('[data-step-jump="4"]', view)?.click(); window.scrollTo(0, 0); };
+  for (const el of $$('[data-goprice]', box)) el.onclick = () => { playSound('click'); d.step = 4; $('[data-step-jump="4"]', view)?.click(); window.scrollTo(0, 0); };
   const ag = $('#wh-agree', box); if (ag) ag.onchange = () => { playSound('toggle'); d.agreeSites = ag.checked; };
 }
 
@@ -10535,7 +10623,7 @@ function whyNot(d) {
     case 2: { const k = d.picked.filter(rentable).find((x) => !reqDone(x)); return k ? `Confirm what ${cat(k).label.toLowerCase()} needs, or remove it` : ''; }
     case 3: return d.propertyId === 'new' ? 'Add the name and city' : 'Choose where it is';
     case 4: return d.picked.map(itemProblem).find(Boolean) ?? '';
-    case 5: { const k = d.picked.filter(rentable).find((x) => !cat(x).checklist.every((i) => d.items[x].checklist.includes(i))); return k ? `Confirm everything for ${d.items[k].title}` : ''; }
+    case 6: { const k = d.picked.filter(rentable).find((x) => sitesOn(d, x).length && !cat(x).checklist.every((i) => d.items[x].checklist.includes(i))); return k ? `Confirm everything for ${d.items[k].title}` : ''; }
     default: return '';
   }
 }
@@ -10547,7 +10635,8 @@ function validate(d) {
     case 2: return d.picked.filter(rentable).every(reqDone);
     case 3: return d.propertyId === 'new' ? !!(d.newProp.title.trim() && d.newProp.city.trim()) : !!d.propertyId;
     case 4: return d.picked.length > 0 && d.picked.every((k) => !itemProblem(k));
-    case 5: return d.listMode === 'manage' || d.picked.filter(rentable).every((k) => cat(k).checklist.every((i) => d.items[k].checklist.includes(i)));
+    case 5: return true;
+    case 6: return d.picked.filter(rentable).every((k) => !sitesOn(d, k).length || cat(k).checklist.every((i) => d.items[k].checklist.includes(i)));
     default: return true;
   }
 }
@@ -10559,7 +10648,7 @@ function publish(d) {
     const rates = {};
     if (!container) for (const t of c.terms) if (it.on[t] && Number(it.rates[t]) > 0) rates[t] = Number(it.rates[t]);
     const body = { category: k, title: it.title.trim(), description: it.description.trim(), quantity: container ? 1 : it.quantity, rates, rentable: !container,
-      listed: d.listMode === 'list', checklist: it.checklist, access: it.access.trim() || undefined, parentId: it.parentId || undefined,
+      listed: !container && !d.esOff[k], checklist: it.checklist, access: it.access.trim() || undefined, parentId: it.parentId || undefined,
       amenities: it.amenities.split(',').map((x) => x.trim()).filter(Boolean), policy: container ? 'standalone' : it.policy };
     const size = Object.fromEntries(Object.entries(it.size).filter(([, v]) => v !== '' && v != null).map(([kk, v]) => [kk, Number(v)]));
     if (it.sqft) size.sqft = Number(it.sqft);
