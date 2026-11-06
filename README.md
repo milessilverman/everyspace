@@ -17,7 +17,7 @@ Free rental management for everything you rent out: homes, rooms, backyards, poo
 The core rules (pricing, the price rule, iCal sync, listing everywhere, privacy) have automated tests:
 
 ```bash
-node --test tests/
+node --test
 ```
 
 They load the app's domain code straight from `index.html`, so the site stays a single file.
