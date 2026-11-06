@@ -10337,7 +10337,7 @@ function draw(view, props) {
         </section>`; }).join('')}`;
   } else if (d.step === 6) {
     body = `<h1 class="page-title">Review & publish</h1>
-      <p class="muted">${d.picked.length} thing${d.picked.length === 1 ? '' : 's'} at <strong>${esc(prop?.title ?? d.newProp.title)}</strong>, listed by ${OWNER_WORDS[d.owner].a} · ${d.listMode === 'list' ? 'live on Everyspace' : 'managing only'}</p>
+      <p class="muted">${d.picked.length} thing${d.picked.length === 1 ? '' : 's'} at <strong>${esc(prop?.title ?? d.newProp.title)}</strong>, listed by ${OWNER_WORDS[d.owner].a} · ${d.listMode === 'list' ? 'listed everywhere it fits' : 'managing only'}</p>
       <div class="review-list">${d.picked.map((k) => { const it = d.items[k]; const c = cat(k);
         const prices = c.terms.filter((t) => it.on[t] && Number(it.rates[t]) > 0).map((t) => `${money(it.rates[t])}/${term(t).unit}`).join(' · ');
         return `<div class="list-row"><span class="pkg-icon">${c.icon}</span><div><strong>${esc(it.title)}</strong>
