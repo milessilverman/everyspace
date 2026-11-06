@@ -3233,6 +3233,14 @@ a.promise-card:hover, a.owner-card:hover { transform: translateY(-2px); box-shad
 .map-promo:hover { border-color: var(--accent); }
 
 .emap-map.drawing { cursor: crosshair; }
+
+.soon-list { display: grid; gap: 4px; }
+.soon { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; text-align: left; border: 1px solid var(--line); background: var(--accent-2-soft); border-radius: 12px; padding: 8px 10px; cursor: pointer; }
+.soon > span:first-child { font-size: 20px; }
+.soon > span:nth-child(2) { display: flex; flex-direction: column; min-width: 0; }
+.soon-when { font-size: 12px; text-align: right; color: var(--accent-2); font-weight: 700; }
+.soon:hover { border-color: var(--accent-2); }
+.emap-erow .pill { font-size: 11px; padding: 1px 6px; }
 </style>
 </head>
 <body>
@@ -5771,54 +5779,54 @@ const { HOST_FEE } = __m['pricing'];
 const { BookingError } = __m['booking'];
 
 // kind: stadium | arena | fair | festival | parade | concert | beach | track
-// events: [name, when (plain words), days per year, typical driveway price per car per day close by]
+// events: [name, when (plain words), days per year, typical driveway price per car per day close by, months it runs (1-12)]
 const VENUES = [
   { id: 'sofi', name: 'SoFi Stadium', city: 'Inglewood', kind: 'stadium', lat: 33.9535, lng: -118.3392, events: [
-    ['Rams & Chargers home games', 'Sep–Jan, mostly Sundays', 20, 40], ['Stadium concerts & big events', 'Year-round', 22, 35]] },
+    ['Rams & Chargers home games', 'Sep–Jan, mostly Sundays', 20, 40, [9, 10, 11, 12, 1]], ['Stadium concerts & big events', 'Year-round', 22, 35, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]]] },
   { id: 'forum', name: 'Kia Forum', city: 'Inglewood', kind: 'arena', lat: 33.9583, lng: -118.3419, events: [
-    ['Concerts & shows', 'Year-round, many weeknights', 110, 20]] },
+    ['Concerts & shows', 'Year-round, many weeknights', 110, 20, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]]] },
   { id: 'intuit', name: 'Intuit Dome', city: 'Inglewood', kind: 'arena', lat: 33.9447, lng: -118.3410, events: [
-    ['Clippers home games', 'Oct–Apr', 41, 22], ['Concerts', 'Year-round', 20, 22]] },
+    ['Clippers home games', 'Oct–Apr', 41, 22, [10, 11, 12, 1, 2, 3, 4]], ['Concerts', 'Year-round', 20, 22, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]]] },
   { id: 'dodgers', name: 'Dodger Stadium', city: 'Los Angeles (Elysian Park)', kind: 'stadium', lat: 34.0739, lng: -118.2400, events: [
-    ['Dodgers home games', 'Apr–Sep, plus playoffs', 81, 25], ['Stadium concerts', 'Summer', 6, 30]] },
+    ['Dodgers home games', 'Apr–Sep, plus playoffs', 81, 25, [4, 5, 6, 7, 8, 9, 10]], ['Stadium concerts', 'Summer', 6, 30, [6, 7, 8, 9]]] },
   { id: 'crypto', name: 'Crypto.com Arena', city: 'Downtown LA', kind: 'arena', lat: 34.0430, lng: -118.2673, events: [
-    ['Lakers & Kings home games', 'Oct–Apr', 82, 20], ['Concerts & award shows', 'Year-round', 40, 20]] },
+    ['Lakers & Kings home games', 'Oct–Apr', 82, 20, [10, 11, 12, 1, 2, 3, 4]], ['Concerts & award shows', 'Year-round', 40, 20, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]]] },
   { id: 'coliseum', name: 'LA Memorial Coliseum', city: 'Exposition Park', kind: 'stadium', lat: 34.0141, lng: -118.2879, events: [
-    ['USC football home games', 'Sep–Nov, Saturdays', 7, 40], ['Concerts & festivals', 'Year-round', 8, 30]] },
+    ['USC football home games', 'Sep–Nov, Saturdays', 7, 40, [9, 10, 11]], ['Concerts & festivals', 'Year-round', 8, 30, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]]] },
   { id: 'bmo', name: 'BMO Stadium', city: 'Exposition Park', kind: 'stadium', lat: 34.0127, lng: -118.2848, events: [
-    ['LAFC home matches', 'Feb–Oct', 20, 20]] },
+    ['LAFC home matches', 'Feb–Oct', 20, 20, [2, 3, 4, 5, 6, 7, 8, 9, 10]]] },
   { id: 'rosebowl', name: 'Rose Bowl', city: 'Pasadena', kind: 'stadium', lat: 34.1613, lng: -118.1676, events: [
-    ['UCLA football home games', 'Sep–Nov, Saturdays', 6, 40], ['Rose Bowl Game', 'January 1', 1, 60], ['Stadium concerts', 'Summer', 5, 40],
-    ['Rose Bowl Flea Market', 'Second Sunday of every month', 12, 15]] },
+    ['UCLA football home games', 'Sep–Nov, Saturdays', 6, 40, [9, 10, 11]], ['Rose Bowl Game', 'January 1', 1, 60, [1]], ['Stadium concerts', 'Summer', 5, 40, [6, 7, 8, 9]],
+    ['Rose Bowl Flea Market', 'Second Sunday of every month', 12, 15, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]]] },
   { id: 'roseparade', name: 'Rose Parade (Colorado Blvd)', city: 'Pasadena', kind: 'parade', lat: 34.1459, lng: -118.1448, events: [
-    ['Tournament of Roses Parade', 'January 1 (overnight parking the night before)', 1, 50]] },
+    ['Tournament of Roses Parade', 'January 1 (overnight parking the night before)', 1, 50, [1]]] },
   { id: 'dignity', name: 'Dignity Health Sports Park', city: 'Carson', kind: 'stadium', lat: 33.8644, lng: -118.2611, events: [
-    ['LA Galaxy home matches', 'Feb–Oct', 17, 15], ['Concerts & festivals', 'Year-round', 8, 20]] },
+    ['LA Galaxy home matches', 'Feb–Oct', 17, 15, [2, 3, 4, 5, 6, 7, 8, 9, 10]], ['Concerts & festivals', 'Year-round', 8, 20, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]]] },
   { id: 'hbowl', name: 'Hollywood Bowl', city: 'Hollywood', kind: 'concert', lat: 34.1122, lng: -118.3391, events: [
-    ['Summer concert season', 'Jun–Sep, most nights', 60, 25]] },
+    ['Summer concert season', 'Jun–Sep, most nights', 60, 25, [6, 7, 8, 9]]] },
   { id: 'greek', name: 'Greek Theatre', city: 'Griffith Park', kind: 'concert', lat: 34.1196, lng: -118.2966, events: [
-    ['Concert season', 'Apr–Oct', 50, 20]] },
+    ['Concert season', 'Apr–Oct', 50, 20, [4, 5, 6, 7, 8, 9, 10]]] },
   { id: 'santaanita', name: 'Santa Anita Park', city: 'Arcadia', kind: 'track', lat: 34.1394, lng: -118.0436, events: [
-    ['Horse racing days', 'Dec–Jun, weekends', 60, 10]] },
+    ['Horse racing days', 'Dec–Jun, weekends', 60, 10, [12, 1, 2, 3, 4, 5, 6]]] },
   { id: 'fairplex', name: 'Fairplex (LA County Fair)', city: 'Pomona', kind: 'fair', lat: 34.0838, lng: -117.7686, events: [
-    ['LA County Fair', 'May, Thu–Sun for about 4 weeks', 20, 20], ['Fairplex shows & events', 'Year-round weekends', 20, 10]] },
+    ['LA County Fair', 'May, Thu–Sun for about 4 weeks', 20, 20, [5]], ['Fairplex shows & events', 'Year-round weekends', 20, 10, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]]] },
   { id: 'lbgp', name: 'Long Beach Grand Prix', city: 'Long Beach', kind: 'festival', lat: 33.7640, lng: -118.1920, events: [
-    ['Acura Grand Prix of Long Beach', 'April, 3 days', 3, 40]] },
+    ['Acura Grand Prix of Long Beach', 'April, 3 days', 3, 40, [4]]] },
   { id: 'ballona', name: 'Fiesta La Ballona (Veterans Memorial Park)', city: 'Culver City', kind: 'festival', lat: 34.0128, lng: -118.4010, events: [
-    ['Fiesta La Ballona', 'Late August, Fri–Sun', 3, 25]] },
+    ['Fiesta La Ballona', 'Late August, Fri–Sun', 3, 25, [8]]] },
   { id: 'abbotkinney', name: 'Abbot Kinney Festival', city: 'Venice', kind: 'festival', lat: 33.9897, lng: -118.4664, events: [
-    ['Abbot Kinney Festival', 'Late September, 1 day', 1, 30], ['Venice beach weekends', 'Summer weekends', 26, 20]] },
+    ['Abbot Kinney Festival', 'Late September, 1 day', 1, 30, [9]], ['Venice beach weekends', 'Summer weekends', 26, 20, [6, 7, 8]]] },
   { id: 'smpier', name: 'Santa Monica Pier & beach', city: 'Santa Monica', kind: 'beach', lat: 34.0094, lng: -118.4973, events: [
-    ['Summer beach weekends & holidays', 'Memorial Day–Labor Day weekends', 30, 25], ['Twilight concerts & events', 'Summer', 6, 25]] },
+    ['Summer beach weekends & holidays', 'Memorial Day–Labor Day weekends', 30, 25, [5, 6, 7, 8, 9]], ['Twilight concerts & events', 'Summer', 6, 25, [6, 7, 8, 9]]] },
   { id: 'hwparade', name: 'Hollywood Christmas Parade', city: 'Hollywood', kind: 'parade', lat: 34.1016, lng: -118.3387, events: [
-    ['Hollywood Christmas Parade', 'Sunday after Thanksgiving', 1, 30]] },
+    ['Hollywood Christmas Parade', 'Sunday after Thanksgiving', 1, 30, [11, 12]]] },
   { id: 'wehopride', name: 'WeHo Pride (West Hollywood Park)', city: 'West Hollywood', kind: 'festival', lat: 34.0837, lng: -118.3853, events: [
-    ['WeHo Pride', 'Early June, weekend', 2, 35], ['Halloween Carnaval', 'October 31', 1, 30]] },
+    ['WeHo Pride', 'Early June, weekend', 2, 35, [6]], ['Halloween Carnaval', 'October 31', 1, 30, [10]]] },
   { id: 'angel', name: 'Angel Stadium', city: 'Anaheim', kind: 'stadium', lat: 33.8003, lng: -117.8827, events: [
-    ['Angels home games', 'Apr–Sep', 81, 15]] },
+    ['Angels home games', 'Apr–Sep', 81, 15, [4, 5, 6, 7, 8, 9]]] },
 ];
 // LA28 Olympic and Paralympic Games (summer 2028): a one-time boost near these venues.
-const LA28 = { name: 'LA28 Olympics & Paralympics', when: 'Jul–Aug 2028 (one time)', venues: ['sofi', 'coliseum', 'rosebowl', 'crypto', 'intuit', 'dignity', 'bmo'], days: 8, price: 75 };
+const LA28 = { name: 'LA28 Olympics & Paralympics', when: 'Jul–Aug 2028 (one time)', months: [7, 8], venues: ['sofi', 'coliseum', 'rosebowl', 'crypto', 'intuit', 'dignity', 'bmo'], days: 8, price: 75 };
 
 const KIND_ICON = { stadium: '🏟️', arena: '🏀', fair: '🎡', festival: '🎉', parade: '🎺', concert: '🎵', beach: '🏖️', track: '🐎' };
 
@@ -5844,15 +5852,15 @@ function parkingEstimate({ lat, lng, spots = 2, olympics = false } = {}) {
     const b = band(d);
     if (!b) continue;
     const [, pf, fill, walk] = b;
-    for (const [name, when, days, price] of v.events) {
+    for (const [name, when, days, price, months] of v.events) {
       const perCar = Math.round(price * pf);
       const yearly = days * cars * perCar * fill * (1 - HOST_FEE);
-      rows.push({ venue: v.id, venueName: v.name, kind: v.kind, icon: KIND_ICON[v.kind], event: name, when, days, perCar, fill, walk, miles: Math.round(d * 100) / 100,
+      rows.push({ venue: v.id, venueName: v.name, kind: v.kind, icon: KIND_ICON[v.kind], event: name, when, days, months, perCar, fill, walk, miles: Math.round(d * 100) / 100,
         perEvent: Math.round(cars * perCar * fill * (1 - HOST_FEE)), yearly: Math.round(yearly) });
     }
     if (olympics && LA28.venues.includes(v.id)) {
       const perCar = Math.round(LA28.price * pf);
-      rows.push({ venue: v.id, venueName: v.name, kind: v.kind, icon: '🏅', event: LA28.name, when: LA28.when, days: LA28.days, perCar, fill, walk, miles: Math.round(d * 100) / 100,
+      rows.push({ venue: v.id, venueName: v.name, kind: v.kind, icon: '🏅', event: LA28.name, when: LA28.when, months: LA28.months, days: LA28.days, perCar, fill, walk, miles: Math.round(d * 100) / 100,
         perEvent: Math.round(cars * perCar * fill * (1 - HOST_FEE)), yearly: Math.round(LA28.days * cars * perCar * fill * (1 - HOST_FEE)), oneTime: true });
     }
   }
@@ -13246,10 +13254,20 @@ async function renderEarnMap(view, _args, params) {
   const setPin = (ll) => { if (pin) map.removeLayer(pin); pin = L.circleMarker([ll.lat, ll.lng], { radius: 8, color: '#0f766e', weight: 3, fillColor: '#14b8a6', fillOpacity: 0.9 }).addTo(map); };
 
   // ---------- parking ----------
+  const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const nowM = new Date().getMonth() + 1;
+  const ahead = (months, n = 3) => { for (let i = 0; i < n; i++) { const m = ((nowM - 1 + i) % 12) + 1; if (months?.includes(m)) return i; } return -1; };
+  const timing = (months) => { if (!months) return ''; const i = ahead(months, 12); return i === 0 ? '<span class="pill ok">On now</span>' : i > 0 ? `<span class="pill">Next: ${MONTHS[((nowM - 1 + i) % 12)]}</span>` : ''; };
   const parkingIntro = () => {
+    // Special one-off and short events coming up soon (not the all-year ones): the moments that pay most.
+    const soon = meta.venues.flatMap((v) => v.events.filter((e) => e[4].length <= 7 && ahead(e[4]) >= 0).map((e) => ({ v, e, i: ahead(e[4]) })))
+      .sort((a, b) => a.i - b.i || b.e[3] - a.e[3]).slice(0, 8);
     const list = [...meta.venues].sort((a, b) => b.events.reduce((s, e) => s + e[2], 0) - a.events.reduce((s, e) => s + e[2], 0));
     panel.innerHTML = `<h2 class="emap-panel-title">🅿️ Rent your driveway on game and festival days</h2>
       <p class="small">Drivers pay to park close to stadiums, concerts, fairs and parades, and a driveway a few minutes' walk away beats a $50 lot. <strong>Tap a home inside an orange circle</strong> to see what its driveway could earn.</p>
+      ${soon.length ? `<h3 class="small-title">Coming up in the next 3 months</h3>
+        <div class="soon-list">${soon.map(({ v, e, i }) => `<button type="button" class="soon" data-venue="${v.id}"><span>${meta.icons[v.kind]}</span><span><strong>${esc(e[0])}</strong>
+          <span class="muted small">${esc(v.name)} · ${esc(e[1])}</span></span><span class="soon-when">${i === 0 ? 'Now' : MONTHS[((nowM - 1 + i) % 12)]}<br><b>~$${e[3]}/car</b></span></button>`).join('')}</div>` : ''}
       <h3 class="small-title">Big events on the map</h3>
       <div class="venue-list">${list.map((v) => `<button type="button" class="venue-row" data-venue="${v.id}"><span>${meta.icons[v.kind]}</span><span><strong>${esc(v.name)}</strong>
         <span class="muted small">${esc(v.city)} · ${esc(v.events.map((e) => e[0]).slice(0, 2).join(', '))}</span></span></button>`).join('')}</div>`;
@@ -13276,7 +13294,7 @@ async function renderEarnMap(view, _args, params) {
           <em>from about ${est.eventDays} event days, after our ${FEES.h} fee</em></div>
         ${bestSeries ? `<div class="emap-best">Best series: <strong>${esc(bestSeries.event)}</strong>, about ${money(bestSeries.perEvent)} each event day (${esc(bestSeries.when)})</div>` : ''}
         <div class="emap-rows">${est.rows.map((r) => `<div class="emap-erow ${r.oneTime ? 'one' : ''}"><span class="e-ic">${r.icon}</span><div><strong>${esc(r.event)}</strong>
-          <div class="muted small">${esc(r.venueName)} · ${r.miles} mi (${esc(r.walk)}) · ${esc(r.when)}</div>
+          <div class="muted small">${esc(r.venueName)} · ${r.miles} mi (${esc(r.walk)}) · ${esc(r.when)} ${timing(r.months)}</div>
           <div class="small">~${r.days} day${r.days === 1 ? '' : 's'} × ${est.spots} car${est.spots === 1 ? '' : 's'} × ~$${r.perCar} · fills about ${Math.round(r.fill * 100)}% of the time</div></div>
           <strong>${money(r.yearly)}${r.oneTime ? '<small> once</small>' : '<small>/yr</small>'}</strong></div>`).join('')}</div>
         <label class="check-line small"><input type="checkbox" id="emap-la28" ${ui.olympics ? 'checked' : ''}> Include the LA28 Olympics (summer 2028, one time)</label>
