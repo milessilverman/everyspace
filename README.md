@@ -11,3 +11,13 @@ Free rental management for everything you rent out: homes, rooms, backyards, poo
 **Live site:** https://milessilverman.github.io/everyspace/
 
 `index.html` and `everyspace.html` are the same single-file app. It runs entirely in the browser with demo data (saved in your browser's local storage); connections to other sites are simulated until partner integrations and a backend are in place.
+
+## Tests
+
+The core rules (pricing, the price rule, iCal sync, listing everywhere, privacy) have automated tests:
+
+```bash
+node --test tests/
+```
+
+They load the app's domain code straight from `index.html`, so the site stays a single file.

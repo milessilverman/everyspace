@@ -2430,6 +2430,11 @@ a.promise-card:hover, a.owner-card:hover { transform: translateY(-2px); box-shad
 .plan code, .plan pre { overflow-wrap: anywhere; white-space: pre-wrap; }
 .cat-card .row-between { flex-wrap: wrap; gap: 6px; }
 @media (max-width: 480px) { .row-between > .badge { white-space: normal; } }
+
+.fee-value { margin: 14px 0; }
+.check-list { list-style: none; padding: 0; margin: 8px 0; display: grid; gap: 6px; }
+.check-list li { padding-left: 24px; position: relative; font-size: 14px; }
+.check-list li::before { content: '✓'; position: absolute; left: 4px; color: var(--accent-2); font-weight: 700; }
 </style>
 </head>
 <body>
@@ -6147,6 +6152,8 @@ const store = {
   save() { try { localStorage.setItem(KEY, JSON.stringify(db)); } catch {} },
   reset() { db = seed(); this.save(); },
 };
+// Pure domain modules, exposed read-only for automated tests (tests/domain.test.mjs).
+Object.defineProperty(window, 'everyspaceDomain', { value: Object.freeze({ ...__m }), configurable: false });
 window.everyspaceApi = async (path, body) => {
   const [p, qs] = path.split('?');
   try {
@@ -6744,6 +6751,13 @@ function updateAppHeader() {
   $('#sound-btn').onclick = () => state.toggleSound();
   $('#help-btn').onclick = openShortcutsModal;
 }
+
+// Fee percentages as text, always from the live pricing constants (never hard-coded in the UI).
+globalThis.FEES = {
+  get s() { return `${Math.round((state.catalog?.fees?.service ?? 0.1) * 1000) / 10}%`; },
+  get h() { return `${Math.round((state.catalog?.fees?.host ?? 0.03) * 1000) / 10}%`; },
+  get k() { return `${Math.round((1 - (state.catalog?.fees?.host ?? 0.03)) * 1000) / 10}%`; },
+};
 
 // Bind Global Shortcuts
 window.addEventListener('keydown', (e) => {
@@ -7851,7 +7865,7 @@ function spaceCard(s) {
       </div>
       <div class="muted small card-meta">${esc(s.property.title)} · ${esc(s.property.city)} ${ownerChip(s.property.ownerType, { short: true })}</div>
       <div class="price-row">
-        ${r ? `<div class="price">from ${priceTag({ ...r, amount: s.allIn ?? r.amount })} <span class="all-in" title="10% service fee already included in this price">all-in</span></div>` : ''}
+        ${r ? `<div class="price">from ${priceTag({ ...r, amount: s.allIn ?? r.amount })} <span class="all-in" title="${FEES.s} service fee already included in this price">all-in</span></div>` : ''}
       </div>
       ${s.compare?.cheaperHere && s.compare.theirs - s.compare.ours >= 0.5 ? `<div class="cmp-line ok">✓ ${money(s.compare.theirs - s.compare.ours)} less than on ${esc(s.compare.vs)}</div>` : ''}
       ${badges ? `<div class="badges">${badges}</div>` : ''}
@@ -8085,7 +8099,7 @@ function advancedFiltersSheet(done) {
     <div class="form adv-filter-form">
       <div class="filter-section">
         <h3>Price Range</h3>
-        <p class="muted small">All-in price (including 10% fee)</p>
+        <p class="muted small">All-in price (including ${FEES.s} fee)</p>
         <div class="two">
           <label>Min ($)<input type="number" id="f-min" value="${esc(f.minPrice || '')}" min="0" placeholder="0"></label>
           <label>Max ($)<input type="number" id="f-max" value="${esc(f.maxPrice || '')}" min="0" placeholder="No limit"></label>
@@ -8190,7 +8204,7 @@ function priceCheck(s) {
   const flow = base ? `<div class="money-flow small-flow" aria-label="Where your money goes">
       <div style="flex:${(1 - hostFee) * 100}"><strong>${money(base * (1 - hostFee))}</strong><span>owner payout</span></div>
       <div style="flex:${hostFee * 100 + 8}"><strong>${money(base * hostFee)}</strong><span>owner fee</span></div>
-      <div style="flex:${fee * 100 + 8}" class="fee"><strong>${money(base * fee)}</strong><span>service fee (10%)</span></div></div>
+      <div style="flex:${fee * 100 + 8}" class="fee"><strong>${money(base * fee)}</strong><span>service fee (${FEES.s})</span></div></div>
       <div class="muted small">Per ${unit}: you pay ${money(base * (1 + fee))}. The owner keeps ${Math.round((1 - hostFee) * 100)}% of their price. No hidden fees.</div>` : '';
   const compareRows = cmp ? `<div class="compare">
       <div class="compare-row ours"><span><strong>Everyspace</strong><span class="muted small">all-in, 1 ${unit}</span></span><strong>${money(cmp.ours)}</strong></div>
@@ -8607,7 +8621,7 @@ async function renderBook(view, params) {
       q$.innerHTML = `${q.lines.map((l) => `<div class="qline"><div>${l.qty > 1 ? `${l.qty} × ` : ''}${esc(l.title)}${l.asAddon ? ' <span class="badge ok">tenant price</span>' : ''}
           <div class="muted small">${esc(l.detail)} × ${money(l.unitRate)}${l.events.length ? ` · <span class="event-text">${esc(l.events.join(', '))} rate</span>` : ''}</div></div><span>${money(l.amount)}</span></div>`).join('')}
         ${q.packageDiscount ? `<div class="qline ok"><span>Bundle discount</span><span>−${money(q.packageDiscount)}</span></div>` : ''}
-        <div class="qline"><span>Service fee (10% all-in)</span><span>${money(q.serviceFee)}</span></div>
+        <div class="qline"><span>Service fee (${FEES.s} all-in)</span><span>${money(q.serviceFee)}</span></div>
         <div class="qline total"><span>Total</span><span>${money(q.total)}</span></div>
         <div class="qline muted"><span>Due today${q.schedule.recurring ? `, then ${money(q.schedule.recurring)}/${q.schedule.every}` : ''}</span><span>${money(q.schedule.dueNow)}</span></div>
         ${q.deposit ? `<div class="qline muted"><span>Refundable deposit (held, not charged)</span><span>${money(q.deposit)}</span></div>` : ''}
@@ -8800,11 +8814,11 @@ async function renderTrip(view, [id]) {
         <div class="quote">
           ${q.lines.map((l) => `<div class="qline"><div>${l.qty > 1 ? `${l.qty} × ` : ''}${esc(l.title)}<div class="muted small">${esc(l.detail)} × ${money(l.unitRate)}</div></div><span>${money(l.amount)}</span></div>`).join('')}
           ${q.packageDiscount ? `<div class="qline ok"><span>Bundle discount</span><span>−${money(q.packageDiscount)}</span></div>` : ''}
-          ${q.serviceFee != null ? `<div class="qline"><span>Service fee (10% all-in)</span><span>${money(q.serviceFee)}</span></div>` : ''}
+          ${q.serviceFee != null ? `<div class="qline"><span>Service fee (${FEES.s} all-in)</span><span>${money(q.serviceFee)}</span></div>` : ''}
           <div class="qline total"><span>Total Paid</span><span>${money(q.total)}</span></div>
           ${q.schedule?.recurring ? `<div class="qline muted"><span>Billed every ${q.schedule.every}</span><span>${money(q.schedule.recurring)}</span></div>` : ''}
           ${q.ourCut != null ? `<div class="qline muted"><span>Everyspace earns</span><span>${money(q.ourCut)}${q.schedule?.recurring ? `/${q.schedule.every}` : ''}</span></div>` : ''}
-          ${isHost && q.hostPayout != null ? `<div class="qline ok"><span>Your payout (after 3% owner fee)</span><span>${money(q.hostPayout)}</span></div>` : ''}
+          ${isHost && q.hostPayout != null ? `<div class="qline ok"><span>Your payout (after ${FEES.h} owner fee)</span><span>${money(q.hostPayout)}</span></div>` : ''}
         </div>
       </section>` : ''}
 
@@ -8900,7 +8914,7 @@ async function renderOffer(view, [id]) {
 
       ${q ? `<section class="block"><h2>Price breakdown</h2><div class="quote">
         ${q.lines.map((l) => `<div class="qline"><span>${l.qty > 1 ? `${l.qty} × ` : ''}${esc(l.title)}<div class="muted small">${esc(l.detail)} × ${money(l.unitRate)}</div></span><span>${money(l.amount)}</span></div>`).join('')}
-        <div class="qline"><span>Service fee (10%)</span><span>${money(q.serviceFee)}</span></div>
+        <div class="qline"><span>Service fee (${FEES.s})</span><span>${money(q.serviceFee)}</span></div>
         <div class="qline total"><span>Total</span><span>${money(q.total)}</span></div>
         ${q.schedule.recurring ? `<div class="qline"><span>Then each ${esc(q.schedule.every)}</span><span>${money(q.schedule.recurring)}</span></div>` : ''}
         ${q.deposit ? `<div class="qline"><span>Refundable deposit (held, not charged)</span><span>${money(q.deposit)}</span></div>` : ''}
@@ -9649,7 +9663,7 @@ async function renderHostEarnings(view) {
       <div class="earn-hero">
         <span>Booked for the next 6 months, every site</span>
         <strong>${money(r2(next6))}</strong>
-        <div class="small">Everyspace payouts after our 3% host fee, plus what other sites pay you · All-time on Everyspace: ${money(e.allTime)}</div>
+        <div class="small">Everyspace payouts after our ${FEES.h} host fee, plus what other sites pay you · All-time on Everyspace: ${money(e.allTime)}</div>
       </div>
       <div class="cal-legend chan-legend">${used.map((k) => `<span>${chanDot(k)}${esc(chan(k).name)}</span>`).join('')}</div>
       <div class="bars stacked" role="img" aria-label="Payouts by month across all sites">
@@ -9664,10 +9678,10 @@ async function renderHostEarnings(view) {
       ${rows.length ? `<div class="table-wrap"><table class="earn-table">
         <thead><tr><th>Site</th><th>Your payouts</th><th>Fees that site kept <span class="muted">(est.)</span></th></tr></thead>
         <tbody>${rows.map((r) => `<tr><td>${chanBadge(r.platform)}</td><td><strong>${money(r.payout)}</strong></td>
-          <td>${r.fees == null ? '<span class="muted">unknown</span>' : `${money(r.fees)}${r.ours ? ' <span class="muted">(3%)</span>' : ''}`}</td></tr>`).join('')}</tbody>
+          <td>${r.fees == null ? '<span class="muted">unknown</span>' : `${money(r.fees)}${r.ours ? ` <span class="muted">(${FEES.h})</span>` : ''}`}</td></tr>`).join('')}</tbody>
       </table></div>` : '<div class="muted-block">No payouts in this window yet. Add bookings from other sites on the Calendar to see them here.</div>'}
       ${hub.otherEarnings.feesThere > 0 ? `<div class="notice ok">💡 <div><strong>Other sites kept about ${money(hub.otherEarnings.feesThere)} of your bookings.</strong>
-        At Everyspace's 3% host fee, the same bookings would have paid you about ${money(hub.otherEarnings.wouldKeep)} more. Keep listing wherever you like; this is just so you can see it.
+        At Everyspace's ${FEES.h} host fee, the same bookings would have paid you about ${money(hub.otherEarnings.wouldKeep)} more. Keep listing wherever you like; this is just so you can see it.
         Fee rates are our estimates of each site's published host fees.</div></div>` : ''}
 
       <div class="row-between section-head"><h2 class="section-title">Expenses</h2><button class="btn small" id="add-exp">${icon.plus} Add expense</button></div>
@@ -10267,7 +10281,7 @@ function draw(view, props) {
         <label>Type<select id="np-type">${types.map(([v, l]) => `<option value="${v}" ${d.newProp.type === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label></div>` : ''}`;
   } else if (d.step === 4) {
     body = `<h1 class="page-title">Details & prices</h1>
-      <p class="muted">We filled in typical local prices. You keep 97%; renters see one all-in price with our 10% fee included.</p>
+      <p class="muted">We filled in typical local prices. You keep ${FEES.k}; renters see one all-in price with our ${FEES.s} fee included.</p>
       ${d.picked.map((k) => itemCard(k, props, prop)).join('')}
       <a class="btn ghost small" href="#" data-goto="1">${icon.plus} Add something else</a>`;
   } else if (d.step === 5) {
@@ -10973,7 +10987,7 @@ async function showEstimate(view, q, have) {
   el.innerHTML = `<div class="earn-total quiz-total">
       <span>Your ${esc(QUIZ_PROPERTY.find((p) => p.key === q.prop)?.label.toLowerCase() ?? 'property')} could make about</span>
       <strong>${money(low)}–${money(high)}<small>/month</small></strong>
-      <em>≈ ${money(Math.round(low * 12 / 100) * 100)}–${money(Math.round(high * 12 / 100) * 100)} a year, after our 3% fee</em>
+      <em>≈ ${money(Math.round(low * 12 / 100) * 100)}–${money(Math.round(high * 12 / 100) * 100)} a year, after our ${FEES.h} fee</em>
       ${cos > 0 && people > 0 ? `<div class="earn-split"><div><i class="dot consumer"></i>From people nearby: <b>${money(Math.round(people))}</b></div><div><i class="dot business"></i>From company leases: <b>${money(Math.round(cos))}</b></div></div>` : ''}
     </div>
     <h2 class="section-title">Where it comes from</h2>
@@ -11101,7 +11115,7 @@ async function renderManage(view, [id]) {
             <div class="small payout" data-payout="${t}">${v ? `Renter pays ${renterPays(v)} · <strong>you get ${payout(v)}</strong>` : 'Off'}</div></div>
             <label class="money-input">$<input type="number" min="0" step="1" data-rate="${t}" value="${esc(v)}" placeholder="off" ${ceil != null ? `data-ceil="${ceil}"` : ''} aria-label="${esc(term(t).label)} price"><span>/${term(t).unit}</span></label></div>`;
         }).join('')}</div>
-        <p class="muted small">You keep 97% of your price. Renters see one all-in price with our 10% service fee included.</p>
+        <p class="muted small">You keep ${FEES.k} of your price. Renters see one all-in price with our ${FEES.s} service fee included.</p>
         ${terms.some((t) => ['hourly', 'daily'].includes(t)) ? `<label class="inline-select">Fridays & Saturdays cost
           <select id="weekend">${[0, 5, 10, 15, 20, 25, 30, 40, 50].map((v) => `<option value="${v}" ${(s.weekendPct ?? 0) === v ? 'selected' : ''}>${v ? `${v}% more` : 'the same'}</option>`).join('')}</select></label>` : ''}
         <button class="btn" id="save-prices">Save prices</button>
@@ -11586,8 +11600,8 @@ async function renderFairPrice(view) {
         <div style="flex:${p.hostFee * 100 + 6}"><strong>${pct(p.hostFee)}</strong><span>Host Fee</span></div>
         <div style="flex:${p.serviceFee * 100 + 6}" class="fee"><strong>+${pct(p.serviceFee)}</strong><span>Service Fee (All-in)</span></div></div>
       <ul>
-        <li><strong>All-in Transparent Pricing:</strong> Every price card already includes the 10% guest fee.</li>
-        <li><strong>Hosts Keep 97%:</strong> Everyspace retains only a 3% host processing fee.</li>
+        <li><strong>All-in Transparent Pricing:</strong> Every price card already includes the ${FEES.s} guest fee.</li>
+        <li><strong>Hosts Keep ${FEES.k}:</strong> Everyspace retains only a ${FEES.h} host processing fee.</li>
         <li><strong>Zero Security Deposit Markup:</strong> Deposits are held via authorization, never charged unless physical damage is documented by arrival inspection photos.</li>
       </ul>
 
@@ -11774,7 +11788,7 @@ function renderPromise(view) {
         <div class="promise-card"><span>🔓</span><strong>No exclusivity</strong><p>Keep every listing you have on other sites. We never ask you to take one down.</p></div>
         <div class="promise-card"><span>🛡️</span><strong>No penalties</strong><p>Listing elsewhere never lowers your search ranking, your payouts, or your access to any feature here.</p></div>
         <div class="promise-card"><span>🆓</span><strong>Managing is free</strong><p>Calendar sync, double-booking protection, the unified calendar and all-site earnings cost nothing. We never charge on bookings from other sites.</p></div>
-        <div class="promise-card"><span>💸</span><strong>You keep 97%</strong><p>On Everyspace bookings our host fee is 3%. Renters pay a 10% fee that's shown in every price.</p></div>
+        <div class="promise-card"><span>💸</span><strong>You keep ${FEES.k}</strong><p>On Everyspace bookings our host fee is ${FEES.h}. Renters pay a ${FEES.s} fee that's shown in every price.</p></div>
         <div class="promise-card"><span>🗂</span><strong>Managing-only listings</strong><p>Bring a listing in just to manage it. Put it on the Everyspace marketplace later, or never.</p></div>
         <div class="promise-card"><span>🚪</span><strong>Leave any time</strong><p>Export every booking from every site as a spreadsheet and your calendar as an .ics file whenever you want.</p></div>
       </div>
@@ -11782,7 +11796,7 @@ function renderPromise(view) {
       <h2>The one rule: the same price or lower here</h2>
       <p>Renters choose Everyspace because it's never the more expensive place to book. So when a space is on Everyspace and another site, its Everyspace price has to be the <strong>same or lower</strong> than its price there.</p>
       <ul>
-        <li><strong>It usually pays you more anyway.</strong> Most other sites keep 3–30% of each booking; we keep 3%. At the same price, you usually take home the same or more here.</li>
+        <li><strong>It usually pays you more anyway.</strong> Most other sites keep 3–30% of each booking; we keep ${FEES.h}. At the same price, you usually take home the same or more here.</li>
         <li><strong>We check when you save.</strong> If an Everyspace price is above what you charge elsewhere, we show you the number and a one-tap fix.</li>
         <li><strong>Raised your price elsewhere?</strong> You're free to raise it here up to that price.</li>
         <li><strong>Prices drift sometimes.</strong> If another site ends up cheaper, you get a heads-up and a one-tap fix (or let price sync do it for you). No penalties, no hidden ranking drops.</li>
@@ -11852,7 +11866,20 @@ function renderWelcome(view) {
         <div class="bw-card"><span>🧑‍💼</span><strong>You take home the same on every site?</strong><p>Then your renters pay less here, so you get booked more.</p></div>
         <div class="bw-card"><span>🧳</span><strong>Renters pay the same on every site?</strong><p>Then you take home more from every booking here.</p></div>
       </div>
-      <p class="muted small">Owners keep 97% here. <a class="link-text" href="#/fair-price">How our pricing works</a></p>
+      <div class="card pad fee-value">
+        <strong>What our ${Math.round((state.catalog?.fees?.host ?? 0.03) * 100)}% covers</strong>
+        <p class="muted small">Managing your rentals is free. We only take a small fee when someone books through Everyspace, and it pays for all of this:</p>
+        <ul class="check-list">
+          <li>We list you on every site that fits, and create the accounts for you</li>
+          <li>Our listing team posts to the sites that don't have a direct connection</li>
+          <li>Calendars synced every 15 minutes, so no double-bookings</li>
+          <li>Prices kept in step everywhere, so you take home the same on every site</li>
+          <li>One inbox for guest messages from every site</li>
+          <li>Cleanings scheduled after every checkout, on every site</li>
+          <li>Payout reports from every site, ready for taxes</li>
+        </ul>
+        <a class="link-text small" href="#/fair-price">How our pricing works</a>
+      </div>
 
       <h2 class="section-title">How it works</h2>
       <ol class="steps-list">
