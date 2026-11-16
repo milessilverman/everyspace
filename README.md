@@ -21,15 +21,44 @@ Free rental management for everything you rent out: homes, rooms, backyards, poo
 
 Data sources, all queried from the visitor's browser: LA County Assessor parcels (public.gis.lacounty.gov), OpenStreetMap buildings (Overpass API) and search (Nominatim), CARTO street tiles and Esri World Imagery. The map library is [Leaflet](https://leafletjs.com) 1.9.4 (BSD-2-Clause), embedded in the page.
 
+## Backend (`platform/`)
+
+The real backend now lives in [`platform/`](platform/). It runs on Supabase's free plan in West US, launching in Los Angeles. It has:
+
+- **Two-way calendar sync** with Airbnb, Vrbo and others, every 15 minutes.
+- **No-double-booking rules:** one instant-book site per space; requests on other sites hold the dates, and are marked safe to accept only after the dates are proven closed everywhere; plus a guard that flags anything that slips.
+- **Revenue-share billing:** 10% of the extra money Everyspace brings in, until the fee reaches $30 in a month, then 3%.
+
+See [`platform/README.md`](platform/README.md) and the game plan in [`platform/docs/PLAN.md`](platform/docs/PLAN.md).
+
+## Next version of the app (`next/`)
+
+[`next/index.html`](next/index.html) is the newest version of the app, adding:
+
+- earnings quiz, gear and rides categories, and the realistic publish flow;
+- ride cursors and color themes.
+
+It isn't the live site yet: the tests below still target the current `index.html`, and it doesn't include the earnings map above yet.
+
 ## Tests
 
 The core rules (pricing, the price rule, iCal sync, listing everywhere, privacy) have automated tests:
 
 ```bash
-node --test
+node --test tests/*.test.mjs
 ```
 
 They load the app's domain code straight from `index.html`, so the site stays a single file.
+
+The backend has its own 31 tests. From `platform/`:
+
+```bash
+npm install
+```
+
+```bash
+npm test
+```
 
 ## What's needed before launch
 
