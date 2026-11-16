@@ -1,5 +1,5 @@
 // Tests for Everyspace's core rules (pricing, the price rule, iCal sync, listing everywhere, privacy).
-// Run with: node --test
+// Run with: node --test tests/*.test.mjs
 // They load the domain modules straight out of index.html, so the site stays a single file.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

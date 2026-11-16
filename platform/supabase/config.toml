@@ -1,0 +1,12 @@
+# Supabase project settings used by the CLI (`supabase functions deploy`).
+# The calendar feed is fetched by Airbnb, Vrbo and other sites without a login, so its JWT check is off.
+# Its own 64-character token is the credential.
+
+[functions.calendar-feed]
+verify_jwt = false
+
+[functions.calendar-sync]
+verify_jwt = true
+
+[functions.booking-guard]
+verify_jwt = true
