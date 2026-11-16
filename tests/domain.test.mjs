@@ -119,3 +119,54 @@ test('each site in the listing preview shows a price that pays the host the same
     assert.ok(x.guestPays >= ours - 0.01, `${x.name} renters pay at least what they pay here`);
   }
 });
+
+test('event parking: a driveway by Fiesta La Ballona earns on festival days; one far from any venue earns nothing', async () => {
+  const { api } = fresh();
+  const near = await api('geo/parking', { lat: 34.0140, lng: -118.4000, spots: 3 });
+  const fiesta = near.rows.find((r) => r.event === 'Fiesta La Ballona');
+  assert.ok(fiesta, 'Fiesta La Ballona is within walking distance');
+  assert.ok(fiesta.perEvent > 0 && fiesta.yearly > 0);
+  const far = await api('geo/parking', { lat: 34.25, lng: -118.62, spots: 3 });
+  assert.equal(far.rows.length, 0);
+  assert.equal(far.yearly, 0);
+});
+
+test('event parking: closer pays more per car, and more cars earn more', async () => {
+  const { api } = fresh();
+  const close = await api('geo/parking', { lat: 33.9560, lng: -118.3392, spots: 2 });
+  const farther = await api('geo/parking', { lat: 33.9680, lng: -118.3392, spots: 2 });
+  const rams = (e) => e.rows.find((r) => r.event.startsWith('Rams'));
+  assert.ok(rams(close).perCar > rams(farther).perCar);
+  const more = await api('geo/parking', { lat: 33.9560, lng: -118.3392, spots: 4 });
+  assert.ok(more.yearly > close.yearly);
+});
+
+test('solar: bigger and sunnier roofs earn more; north-facing roofs are flagged', async () => {
+  const { api } = fresh();
+  const south = await api('geo/solar', { footprintSqft: 1800, pitch: 'low', facing: 'south', shape: 'gable' });
+  const north = await api('geo/solar', { footprintSqft: 1800, pitch: 'low', facing: 'north', shape: 'gable' });
+  const shaded = await api('geo/solar', { footprintSqft: 1800, pitch: 'low', facing: 'south', shape: 'gable', shade: 'heavy' });
+  const warehouse = await api('geo/solar', { footprintSqft: 40000, pitch: 'flat' });
+  assert.ok(south.kw > north.kw && south.kwhYear > north.kwhYear);
+  assert.equal(north.bigEnough, false);
+  assert.ok(shaded.rentYear.typical < south.rentYear.typical);
+  assert.ok(warehouse.rentYear.typical > south.rentYear.typical * 10);
+  assert.ok(south.usableSqft < south.roofSqft, 'usable area leaves room for walkways and edges');
+  await assert.rejects(api('geo/solar', { footprintSqft: 0 }));
+});
+
+test('roof measuring: a 30 m by 20 m outline is about 6,460 sq ft', async () => {
+  const { api } = fresh();
+  const lat = 34, lng = -118.3, dLat = 20 / 111320, dLng = 30 / (111320 * Math.cos(lat * Math.PI / 180));
+  const pts = [{ lat, lng }, { lat, lng: lng + dLng }, { lat: lat + dLat, lng: lng + dLng }, { lat: lat + dLat, lng }];
+  const r = await api('geo/area', { points: pts });
+  assert.ok(Math.abs(r.sqft - 6458) < 30, `got ${r.sqft}`);
+  assert.ok(Math.abs(r.bearing - 90) <= 1, 'long edge runs east-west');
+});
+
+test('county parcels: vacant land is land (no house to rent), a single-family home is a house', async () => {
+  const { api } = fresh();
+  assert.equal((await api('geo/classify', { UseCode: '010V', UseType: 'Residential' })).kind, 'land');
+  assert.equal((await api('geo/classify', { UseCode: '0100', UseType: 'Residential', SQFTmain1: 1500, Units1: 1 })).kind, 'home');
+  assert.equal((await api('geo/classify', { UseCode: '1100', UseType: 'Commercial' })).kind, 'business');
+});
