@@ -41,14 +41,19 @@ The real backend now lives in [`platform/`](platform/). It runs on Supabase's fr
 
 See [`platform/README.md`](platform/README.md) and the game plan in [`platform/docs/PLAN.md`](platform/docs/PLAN.md).
 
-## Next version of the app (`next/`)
+## What's in the app (`index.html`)
 
-[`next/index.html`](next/index.html) is the newest version of the app, adding:
+`index.html` (and its copy `everyspace.html`) is the full app, combining the newest version with everything the earlier site had:
 
-- earnings quiz, gear and rides categories, and the realistic publish flow;
-- ride cursors and color themes.
+- **Earnings quiz** as the home page. Landing cards like "Have a roof?" open it with that item ticked. Bare land and condos only show what they can really rent.
+- **Earnings map** (`#/map`): event parking near LA venues and roof solar estimates.
+- **Listing wizard** with photos, an AI description, smart pricing, a site picker and a results screen.
+- **"Where you're listed"**: one host profile, sign-in or account creation on each site, per-site switches, "Turn on every site", and the listing team posting where there's no direct connection.
+- **Host Command Center**: zones, smart locks, insurance, and a monthly statement.
+- **Destination ride cursors and color themes**, including mixed colors.
+- **Pricing**: managing other sites is free. Everyspace earns a revenue share only on what it brings in: 10% until $30 a month, then 3%.
 
-It isn't the live site yet: the tests below still target the current `index.html`, and it doesn't include the earnings map above yet.
+It links to the real [Host Console](host/) for running actual listings.
 
 ## Tests
 
