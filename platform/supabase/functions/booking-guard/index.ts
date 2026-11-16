@@ -6,14 +6,15 @@
 //   { "action": "release", "hold_id", "reason"? }                                               → the request was declined
 // Answers { safe, step, message }. step: "accept" | "close_dates" | "connect_calendar" | "decline" | "retry".
 import { createClient } from 'npm:@supabase/supabase-js@2.45.4';
+import { CORS, preflight } from '../_shared/cors.ts';
 import { parseIcs, localDayToUtc } from '../_shared/ical.ts';
 import { fetchCalendar } from '../_shared/fetch.ts';
-import { checkDoor, describeDates, siteName, VERIFIABLE_BY_CALENDAR } from '../_shared/guard.ts';
+import { checkDoor, describeDates, describeDays, describeNights, siteName, VERIFIABLE_BY_CALENDAR } from '../_shared/guard.ts';
 
 const URL_ = Deno.env.get('SUPABASE_URL')!;
 const ANON = Deno.env.get('SUPABASE_ANON_KEY')!;
 const admin = createClient(URL_, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!, { auth: { persistSession: false } });
-const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...CORS, 'content-type': 'application/json' } });
 
 type Verdict = { safe: boolean; step: 'accept' | 'close_dates' | 'connect_calendar' | 'decline' | 'retry'; message: string; hold_id?: string };
 
@@ -52,7 +53,7 @@ async function check(holdId: string): Promise<Verdict> {
       return { safe: false, step: 'decline', hold_id: h.id, message: `A guest booked ${dates} on ${site} first. Decline this request.` };
     }
     if (!result.ok) {
-      return { safe: false, step: 'close_dates', hold_id: h.id, message: `On ${site}, close ${describeDates(result.gapStart, result.gapEnd, h.all_day, timeZone)} for "${where}", then tap Check again. Everyspace is holding these dates for you meanwhile.` };
+      return { safe: false, step: 'close_dates', hold_id: h.id, message: `On ${site}, close ${h.all_day ? describeNights(result.gapStart, result.gapEnd, timeZone) : `${describeDays(result.gapStart, result.gapEnd, timeZone)} (${site} closes whole days)`} for "${where}", then tap Check again. Everyspace is holding these dates for you meanwhile.` };
     }
   }
   const { data: ok } = await admin.rpc('mark_hold_safe', { p_hold: h.id });
@@ -62,6 +63,7 @@ async function check(holdId: string): Promise<Verdict> {
 }
 
 Deno.serve(async (req) => {
+  const pre = preflight(req); if (pre) return pre;
   if (req.method !== 'POST') return json({ error: 'Use POST' }, 405);
   const user = createClient(URL_, ANON, { auth: { persistSession: false }, global: { headers: { Authorization: req.headers.get('Authorization') ?? '' } } });
   const body = await req.json().catch(() => ({})) as Record<string, string | boolean | undefined>;

@@ -80,3 +80,21 @@ export function describeDates(startIso: string, endIso: string, allDay: boolean,
   const s = new Date(startIso); const e = new Date(endIso);
   return allDay ? `${day.format(s)} – ${day.format(e)}` : `${day.format(s)}, ${time.format(s)} – ${time.format(e)}`;
 }
+
+/**
+ * The nights to close on a site, for instructions: "the night of Dec 1" or "the nights of Dec 1 – Dec 3".
+ * Check-out day isn't included, so the host doesn't lose a night they could rent.
+ */
+export function describeNights(startIso: string, endIso: string, timeZone: string): string {
+  const day = new Intl.DateTimeFormat('en-US', { timeZone, month: 'short', day: 'numeric' });
+  const first = day.format(new Date(startIso));
+  const last = day.format(new Date(Date.parse(endIso) - 12 * 3_600_000)); // the last night starts the evening before check-out
+  return first === last ? `the night of ${first}` : `the nights of ${first} – ${last}`;
+}
+
+/** For an hourly booking: the day(s) to close on a site that only closes whole days (Airbnb, Vrbo). */
+export function describeDays(startIso: string, endIso: string, timeZone: string): string {
+  const day = new Intl.DateTimeFormat('en-US', { timeZone, month: 'short', day: 'numeric' });
+  const first = day.format(new Date(startIso)); const last = day.format(new Date(Date.parse(endIso) - 1));
+  return first === last ? `all of ${first}` : `all of ${first} – ${last}`;
+}

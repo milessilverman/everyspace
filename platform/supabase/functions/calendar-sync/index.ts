@@ -5,6 +5,7 @@
 // - Called by a signed-in host right after they paste a link ("Sync now"); then only their own calendars are read,
 //   enforced by row-level security on calendar_imports.
 import { createClient } from 'npm:@supabase/supabase-js@2.45.4';
+import { CORS, preflight } from '../_shared/cors.ts';
 import { parseIcs } from '../_shared/ical.ts';
 import { planImport } from '../_shared/sync.ts';
 import { fetchCalendar } from '../_shared/fetch.ts';
@@ -18,7 +19,7 @@ const BATCH = 200;
 const CONCURRENCY = 5;
 
 type Import = { id: string; space_id: string; channel: string; url: string };
-const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...CORS, 'content-type': 'application/json' } });
 
 async function syncOne(imp: Import) {
   const started = new Date().toISOString();
@@ -75,6 +76,7 @@ async function syncOne(imp: Import) {
 }
 
 Deno.serve(async (req) => {
+  const pre = preflight(req); if (pre) return pre;
   if (req.method !== 'POST') return json({ error: 'Use POST' }, 405);
   const auth = req.headers.get('Authorization') ?? '';
   const body = await req.json().catch(() => ({})) as { space_id?: string };

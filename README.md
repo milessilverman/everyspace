@@ -21,6 +21,16 @@ Free rental management for everything you rent out: homes, rooms, backyards, poo
 
 Data sources, all queried from the visitor's browser: LA County Assessor parcels (public.gis.lacounty.gov), OpenStreetMap buildings (Overpass API) and search (Nominatim), CARTO street tiles and Esri World Imagery. The map library is [Leaflet](https://leafletjs.com) 1.9.4 (BSD-2-Clause), embedded in the page.
 
+## Host Console (`host/`)
+
+[`host/index.html`](host/index.html) is the real, signed-in app for hosts, connected to the live backend. Once it's on `main` it will be at `https://milessilverman.github.io/everyspace/host/`. Hosts can:
+
+- add places, spaces (a room can sit inside the whole home) and the sites each is listed on;
+- connect each site's calendar both ways, with copy-paste links and steps for each site;
+- choose the one site that takes instant bookings;
+- add a request before accepting it, and get "Close these nights on Airbnb", then "Safe to accept", or "Decline";
+- see alerts, a calendar across every site, and earnings.
+
 ## Backend (`platform/`)
 
 The real backend now lives in [`platform/`](platform/). It runs on Supabase's free plan in West US, launching in Los Angeles. It has:

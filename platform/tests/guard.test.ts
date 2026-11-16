@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseIcs, localDayToUtc } from '../supabase/functions/_shared/ical.ts';
-import { checkDoor, doorGaps, describeDates } from '../supabase/functions/_shared/guard.ts';
+import { checkDoor, doorGaps, describeDates, describeDays, describeNights } from '../supabase/functions/_shared/guard.ts';
 
 const LA = 'America/Los_Angeles';
 const cal = (...ev: string[]) => parseIcs(`BEGIN:VCALENDAR\n${ev.join('\n')}\nEND:VCALENDAR`, { defaultTimeZone: LA });
@@ -48,4 +48,13 @@ test('guard lists every booking the instant site no longer shows as busy', () =>
 test('dates read the way hosts say them', () => {
   assert.equal(describeDates(localDayToUtc('2026-12-01', LA), localDayToUtc('2026-12-04', LA), true, LA), 'Dec 1 – Dec 4');
   assert.equal(describeDates('2026-12-05T21:00:00.000Z', '2026-12-06T00:00:00.000Z', false, LA), 'Dec 5, 1:00 PM – 4:00 PM');
+});
+
+test('closing instructions name the nights, not the check-out day', () => {
+  assert.equal(describeNights(localDayToUtc('2026-12-01', LA), localDayToUtc('2026-12-04', LA), LA), 'the nights of Dec 1 – Dec 3');
+  assert.equal(describeNights(localDayToUtc('2026-12-08', LA), localDayToUtc('2026-12-09', LA), LA), 'the night of Dec 8');
+});
+
+test('hourly bookings ask for the whole day to be closed on day-based sites', () => {
+  assert.equal(describeDays('2026-12-20T21:00:00.000Z', '2026-12-21T00:00:00.000Z', LA), 'all of Dec 20');
 });

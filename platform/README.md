@@ -14,9 +14,10 @@ The real backend behind the Everyspace demo (`../everyspace__1-1.html`). It runs
 | `supabase/functions/calendar-sync` | Reads every connected calendar link. Runs every 15 minutes, or when a host taps "Sync now". |
 | `supabase/functions/calendar-feed` | The link a host pastes into Airbnb, Vrbo and others, so a booking anywhere blocks the dates everywhere. It never shows guest names or prices. |
 | `supabase/migrations/20261116010000_no_double_booking.sql` | The no-double-booking rules: one instant site per space, date holds under a lock, the guard, and alerts. |
+| `supabase/functions/_shared/cors.ts` | Lets the Host Console call the functions from the browser. Access still depends on the login token. |
 | `supabase/functions/booking-guard` | "Is it safe to accept this request?" Holds the dates, reads the instant site's calendar live, and answers accept, close the dates first, or decline. |
 | `supabase/cron/calendar_sync.sql` | Schedules the sync and the daily revenue-share accrual. Run it once after deploying. Already done on the live project. |
-| `tests/` | 31 tests, including the full schema run in an in-memory Postgres with row-level security checks. |
+| `tests/` | 34 tests, including the full schema run in an in-memory Postgres with row-level security checks. |
 
 ## Run the tests
 

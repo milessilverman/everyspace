@@ -1,0 +1,701 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Everyspace Host Console</title>
+<meta name="description" content="Run every rental site from one place, with no double bookings.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<style>
+:root {
+  --bg: #f6f8f9; --surface: #ffffff; --surface-2: #f1f5f6; --ink: #0f1720; --ink-2: #3a4652; --muted: #66727e;
+  --line: #e2e8ec; --accent: #0f766e; --accent-ink: #ffffff; --accent-soft: #e6f6f3; --accent-line: #b9e6df;
+  --ok: #15803d; --ok-soft: #e8f6ec; --warn: #b45309; --warn-soft: #fdf3e3; --bad: #c62828; --bad-soft: #fdecec;
+  --shadow: 0 1px 2px rgba(15, 23, 32, .06), 0 4px 16px rgba(15, 23, 32, .05);
+  --font: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --display: 'Outfit', 'Plus Jakarta Sans', sans-serif;
+  --s-airbnb: #e0475e; --s-vrbo: #2a5bd7; --s-booking_com: #0b3d91; --s-expedia: #c9a400; --s-swimply: #0ea5e9;
+  --s-peerspace: #7c3aed; --s-neighbor: #16a34a; --s-direct: #0f766e; --s-everyspace: #0f766e; --s-other: #64748b;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0b1016; --surface: #121a23; --surface-2: #18222d; --ink: #eef3f6; --ink-2: #c3ced7; --muted: #8a98a6;
+    --line: #243241; --accent: #2dd4bf; --accent-ink: #062b28; --accent-soft: rgba(45, 212, 191, .12); --accent-line: rgba(45, 212, 191, .3);
+    --ok: #4ade80; --ok-soft: rgba(74, 222, 128, .12); --warn: #fbbf24; --warn-soft: rgba(251, 191, 36, .12); --bad: #f87171; --bad-soft: rgba(248, 113, 113, .13);
+    --shadow: 0 1px 2px rgba(0, 0, 0, .3); color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0b1016; --surface: #121a23; --surface-2: #18222d; --ink: #eef3f6; --ink-2: #c3ced7; --muted: #8a98a6;
+  --line: #243241; --accent: #2dd4bf; --accent-ink: #062b28; --accent-soft: rgba(45, 212, 191, .12); --accent-line: rgba(45, 212, 191, .3);
+  --ok: #4ade80; --ok-soft: rgba(74, 222, 128, .12); --warn: #fbbf24; --warn-soft: rgba(251, 191, 36, .12); --bad: #f87171; --bad-soft: rgba(248, 113, 113, .13);
+  --shadow: 0 1px 2px rgba(0, 0, 0, .3); color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--ink); font: 15px/1.5 var(--font); -webkit-font-smoothing: antialiased; }
+h1, h2, h3 { font-family: var(--display); letter-spacing: -.01em; margin: 0; line-height: 1.2; }
+h1 { font-size: 26px; } h2 { font-size: 19px; } h3 { font-size: 16px; }
+a { color: var(--accent); }
+button, input, select { font: inherit; color: inherit; }
+.wrap { max-width: 1080px; margin: 0 auto; padding: 0 16px; }
+.muted { color: var(--muted); } .small { font-size: 13px; } .tiny { font-size: 12px; }
+.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.between { justify-content: space-between; }
+.stack > * + * { margin-top: 12px; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+
+/* top bar */
+.top { position: sticky; top: 0; z-index: 10; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }
+.top .wrap { display: flex; align-items: center; gap: 14px; height: 60px; }
+.logo { font-family: var(--display); font-weight: 700; font-size: 20px; display: flex; align-items: center; gap: 8px; }
+.logo i { width: 22px; height: 22px; border-radius: 7px; background: linear-gradient(135deg, var(--accent), #22d3ee); display: inline-block; }
+.logo span { color: var(--muted); font-weight: 500; font-size: 14px; }
+.tabs { display: flex; gap: 4px; margin-left: auto; overflow-x: auto; scrollbar-width: none; }
+.tabs button { border: 0; background: none; padding: 8px 12px; border-radius: 9px; cursor: pointer; color: var(--ink-2); font-weight: 600; font-size: 14px; white-space: nowrap; position: relative; }
+.tabs button[aria-current="page"] { background: var(--accent-soft); color: var(--accent); }
+.tabs .dot { position: absolute; top: 4px; right: 4px; width: 8px; height: 8px; border-radius: 50%; background: var(--bad); }
+.who { display: flex; align-items: center; gap: 8px; }
+@media (max-width: 760px) {
+  .top .wrap { height: auto; flex-wrap: wrap; padding-top: 10px; padding-bottom: 6px; gap: 8px; }
+  .tabs { order: 3; width: 100%; margin-left: 0; }
+  .who { margin-left: auto; }
+  .who .name { display: none; }
+}
+
+main { padding: 22px 0 60px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 18px; box-shadow: var(--shadow); }
+.card.flat { box-shadow: none; }
+.section-title { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin: 26px 0 12px; flex-wrap: wrap; }
+.section-title:first-child { margin-top: 0; }
+
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 1px solid var(--line); background: var(--surface); padding: 8px 14px; border-radius: 10px; font-weight: 600; font-size: 14px; cursor: pointer; text-decoration: none; color: var(--ink); min-height: 38px; }
+.btn:hover { border-color: var(--accent-line); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.btn.primary:hover { filter: brightness(1.06); }
+.btn.ghost { background: transparent; border-color: transparent; color: var(--accent); padding-left: 8px; padding-right: 8px; }
+.btn.danger { color: var(--bad); }
+.btn.sm { min-height: 32px; padding: 5px 10px; font-size: 13px; border-radius: 8px; }
+.btn[disabled] { opacity: .55; cursor: progress; }
+
+label.f { display: block; font-size: 13px; font-weight: 600; color: var(--ink-2); }
+label.f > input, label.f > select { display: block; width: 100%; margin-top: 5px; }
+input[type=text], input[type=email], input[type=password], input[type=url], input[type=date], input[type=time], input[type=number], select {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 9px 11px; min-height: 40px; width: 100%;
+}
+input:focus, select:focus, .btn:focus-visible, .tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.seg button { border: 0; background: var(--surface); padding: 7px 12px; cursor: pointer; font-weight: 600; font-size: 13px; color: var(--ink-2); }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 700; background: var(--surface-2); color: var(--ink-2); white-space: nowrap; }
+.chip.ok { background: var(--ok-soft); color: var(--ok); } .chip.warn { background: var(--warn-soft); color: var(--warn); }
+.chip.bad { background: var(--bad-soft); color: var(--bad); } .chip.accent { background: var(--accent-soft); color: var(--accent); }
+.site { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
+.site::before { content: ''; width: 9px; height: 9px; border-radius: 3px; background: var(--sc, var(--s-other)); }
+
+.callout { border-radius: 12px; padding: 14px 16px; border: 1px solid var(--line); background: var(--surface-2); }
+.callout.ok { background: var(--ok-soft); border-color: color-mix(in srgb, var(--ok) 35%, transparent); }
+.callout.warn { background: var(--warn-soft); border-color: color-mix(in srgb, var(--warn) 35%, transparent); }
+.callout.bad { background: var(--bad-soft); border-color: color-mix(in srgb, var(--bad) 35%, transparent); }
+.callout .big { font-family: var(--display); font-size: 18px; font-weight: 700; margin-bottom: 4px; }
+
+.list { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--surface); }
+.list > .item { padding: 12px 14px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.list > .item + .item { border-top: 1px solid var(--line); }
+.item .grow { flex: 1 1 220px; min-width: 0; }
+
+.steps { counter-reset: s; display: grid; gap: 12px; }
+.step { border: 1px solid var(--line); border-radius: 12px; padding: 14px; background: var(--surface); }
+.step h4 { margin: 0 0 6px; font-size: 14px; display: flex; align-items: center; gap: 8px; }
+.step h4::before { counter-increment: s; content: counter(s); width: 22px; height: 22px; border-radius: 50%; display: inline-grid; place-items: center; background: var(--accent-soft); color: var(--accent); font-size: 12px; }
+.copy { display: flex; gap: 8px; }
+.copy input { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+
+/* calendar strip */
+.cal { display: grid; grid-template-columns: 150px 1fr; gap: 6px 10px; align-items: center; }
+.cal .days { display: grid; grid-template-columns: repeat(var(--n), minmax(0, 1fr)); gap: 2px; }
+.cal .d { height: 26px; border-radius: 4px; background: var(--surface-2); position: relative; }
+.cal .d.b { background: var(--sc); }
+.cal .d.k { background: repeating-linear-gradient(135deg, var(--line), var(--line) 3px, var(--surface-2) 3px, var(--surface-2) 6px); }
+.cal .d.h { outline: 2px dashed var(--warn); outline-offset: -2px; }
+.cal .d.x { outline: 2px solid var(--bad); outline-offset: -2px; }
+.cal .d.t::after { content: ''; position: absolute; left: 50%; bottom: -5px; width: 4px; height: 4px; margin-left: -2px; border-radius: 50%; background: var(--accent); }
+.cal .hdr { font-size: 11px; color: var(--muted); text-align: center; line-height: 1.25; }
+.cal .hdr b { color: var(--ink-2); font-weight: 700; }
+.cal .label { font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 760px) { .cal { grid-template-columns: 1fr; } .cal .days .hdr:nth-child(odd) { visibility: hidden; } }
+.legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin-top: 12px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+
+/* auth */
+.auth { max-width: 420px; margin: 8vh auto; }
+.auth .card { padding: 26px; }
+.hero-note { display: grid; gap: 8px; margin: 18px 0 0; padding: 0; list-style: none; }
+.hero-note li { display: flex; gap: 10px; align-items: flex-start; font-size: 14px; color: var(--ink-2); }
+.hero-note li::before { content: '✓'; color: var(--accent); font-weight: 700; }
+
+.toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 10px; font-weight: 600; font-size: 14px; box-shadow: var(--shadow); z-index: 50; max-width: calc(100% - 32px); }
+.toast.bad { background: var(--bad); color: #fff; }
+.empty { text-align: center; padding: 26px 16px; color: var(--muted); }
+details.more > summary { cursor: pointer; color: var(--accent); font-weight: 600; font-size: 13px; list-style: none; }
+details.more > summary::-webkit-details-marker { display: none; }
+.kpi { font-family: var(--display); font-size: 28px; font-weight: 700; }
+dialog { border: 1px solid var(--line); border-radius: 16px; padding: 0; background: var(--surface); color: var(--ink); width: min(560px, calc(100% - 32px)); box-shadow: 0 20px 60px rgba(0,0,0,.25); }
+dialog::backdrop { background: rgba(10, 15, 20, .45); }
+dialog .dh { padding: 18px 20px 0; } dialog .db { padding: 16px 20px; } dialog .df { padding: 0 20px 18px; display: flex; gap: 10px; justify-content: flex-end; flex-wrap: wrap; }
+</style>
+</head>
+<body>
+<div id="app"><div class="wrap"><p class="muted" style="padding:40px 0">Loading…</p></div></div>
+<dialog id="dlg"></dialog>
+
+<script>
+'use strict';
+// ------------------------------------------------------------------ connection (public values; access is enforced by row-level security)
+const SUPABASE_URL = 'https://hnzcwfvxpfsyjpbebevp.supabase.co';
+const ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhuemN3ZnZ4cGZzeWpwYmViZXZwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTQ3OTc1OTQsImV4cCI6MjExMDM3MzU5NH0.1f_cTQkLdy4_yph68M-AcTNhbEfmPtMotia-zZPoDCE';
+const sb = window.supabase.createClient(SUPABASE_URL, ANON_KEY);
+const feedUrl = (token) => `${SUPABASE_URL}/functions/v1/calendar-feed/${token}.ics`;
+
+// ------------------------------------------------------------------ catalog
+const SITES = {
+  airbnb: 'Airbnb', vrbo: 'Vrbo', booking_com: 'Booking.com', expedia: 'Expedia', furnished_finder: 'Furnished Finder',
+  swimply: 'Swimply', peerspace: 'Peerspace', neighbor: 'Neighbor', spothero: 'SpotHero', sniffspot: 'Sniffspot', hipcamp: 'Hipcamp',
+  getmyboat: 'GetMyBoat', outdoorsy: 'Outdoorsy', rvshare: 'RVshare', craigslist: 'Craigslist', facebook: 'Facebook Marketplace',
+  direct: 'Direct booking', other: 'Other site', everyspace: 'Everyspace',
+};
+const SITE_GROUPS = [
+  ['Stays', ['airbnb', 'vrbo', 'booking_com', 'expedia', 'furnished_finder']],
+  ['Spaces by the hour', ['swimply', 'peerspace', 'neighbor', 'spothero', 'sniffspot', 'hipcamp']],
+  ['Gear & rides', ['getmyboat', 'outdoorsy', 'rvshare']],
+  ['Other', ['direct', 'craigslist', 'facebook', 'other']],
+];
+const SPACE_TYPES = {
+  entire_home: 'Whole home', private_room: 'Room', adu: 'ADU / guest house', pool: 'Pool', backyard: 'Backyard',
+  parking_spot: 'Parking spot', garage: 'Garage', storage: 'Storage', studio: 'Studio / workspace', other: 'Other',
+};
+// Where each site keeps its calendar links. Menu names change now and then; these point to the right area.
+const SITE_HELP = {
+  airbnb: { out: 'Airbnb: Calendar → pick the listing → Availability → Connect calendars → Connect to another website. Copy the Airbnb calendar link shown there.',
+            in: 'On that same Airbnb screen, choose “Connect to another website”, paste the Everyspace link and name it “Everyspace”.' },
+  vrbo: { out: 'Vrbo: Calendar → Import & export → Export calendar. Copy the link.', in: 'Vrbo: Calendar → Import & export → Import calendar. Paste the Everyspace link.' },
+  booking_com: { out: 'Booking.com extranet: Rates & Availability → Sync calendars → Export calendar.', in: 'Same page → Add calendar connection. Paste the Everyspace link.' },
+};
+const helpFor = (c) => SITE_HELP[c] ?? { out: `In ${SITES[c] ?? 'the site'}'s calendar settings, look for “Export calendar”, “iCal” or “Sync calendar” and copy the link.`, in: `In the same settings, look for “Import calendar” and paste the Everyspace link.` };
+// Sites whose calendar export separates guest bookings from dates the host closed, so Everyspace can verify them.
+const VERIFIABLE = new Set(['airbnb', 'vrbo']);
+const siteName = (c) => SITES[c] ?? c;
+const siteVar = (c) => `--sc: var(--s-${c in { airbnb: 1, vrbo: 1, booking_com: 1, expedia: 1, swimply: 1, peerspace: 1, neighbor: 1, direct: 1, everyspace: 1 } ? c : 'other'})`;
+
+// ------------------------------------------------------------------ helpers
+const $ = (s, el = document) => el.querySelector(s);
+const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const money = (cents) => (cents / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: cents % 100 ? 2 : 0 });
+const prettyError = (m) => String(m ?? 'Something went wrong.').replace(/\b(airbnb|vrbo|booking_com|expedia|swimply|peerspace|neighbor|hipcamp|direct)\b/g, (c) => siteName(c));
+function tzOffset(tz, ms) {
+  const p = new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }).formatToParts(new Date(ms));
+  const g = (t) => +p.find((x) => x.type === t).value;
+  return (Date.UTC(g('year'), g('month') - 1, g('day'), g('hour') % 24, g('minute'), g('second')) - ms) / 60000;
+}
+function zoned(day, time, tz) { // 'YYYY-MM-DD', 'HH:MM' in a time zone → epoch ms
+  const [y, mo, d] = day.split('-').map(Number); const [h, mi] = (time || '00:00').split(':').map(Number);
+  const guess = Date.UTC(y, mo - 1, d, h, mi);
+  return guess - tzOffset(tz, guess - tzOffset(tz, guess) * 60000) * 60000;
+}
+const localDay = (ms, tz) => new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(ms));
+const addDays = (day, n) => { const [y, m, d] = day.split('-').map(Number); return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10); };
+function when(startIso, endIso, allDay, tz) {
+  const day = new Intl.DateTimeFormat('en-US', { timeZone: tz, month: 'short', day: 'numeric' });
+  const time = new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit' });
+  const s = new Date(startIso), e = new Date(endIso);
+  return allDay ? `${day.format(s)} – ${day.format(e)}` : `${day.format(s)}, ${time.format(s)} – ${time.format(e)}`;
+}
+const ago = (iso) => {
+  if (!iso) return 'never';
+  const m = Math.round((Date.now() - Date.parse(iso)) / 60000);
+  return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`;
+};
+let toastTimer;
+function toast(msg, bad = false) {
+  document.querySelector('.toast')?.remove();
+  const t = document.createElement('div'); t.className = `toast${bad ? ' bad' : ''}`; t.setAttribute('role', 'status'); t.textContent = msg;
+  document.body.append(t); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.remove(), bad ? 7000 : 3500);
+}
+async function callFn(name, body) {
+  const { data: { session } } = await sb.auth.getSession();
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/${name}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', apikey: ANON_KEY, Authorization: `Bearer ${session?.access_token ?? ANON_KEY}` }, body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  return { status: res.status, ...data };
+}
+const must = ({ data, error }) => { if (error) throw new Error(prettyError(error.message)); return data; };
+
+// ------------------------------------------------------------------ state
+const S = { user: null, profile: null, tab: 'today', properties: [], spaces: [], listings: [], imports: [], feeds: [], reservations: [], holds: [], alerts: [], conflicts: [], ledger: [], verdict: null, openSpace: null, authMode: 'signin' };
+const tzOf = (spaceId) => S.properties.find((p) => p.id === S.spaces.find((s) => s.id === spaceId)?.property_id)?.timezone ?? 'America/Los_Angeles';
+const spaceTitle = (id) => S.spaces.find((s) => s.id === id)?.title ?? 'Space';
+function descendants(spaceId) { const out = new Set(); let grew = true; while (grew) { grew = false; for (const s of S.spaces) if ((s.parent_space_id === spaceId || out.has(s.parent_space_id)) && !out.has(s.id)) { out.add(s.id); grew = true; } } return out; }
+const related = (spaceId) => { const f = new Set([spaceId, ...descendants(spaceId)]); for (let p = S.spaces.find((s) => s.id === spaceId)?.parent_space_id, n = 0; p && n < 20; n++) { f.add(p); p = S.spaces.find((s) => s.id === p)?.parent_space_id; } return f; };
+const liveListing = (l) => ['pending', 'live'].includes(l.status);
+const doorsFor = (spaceId) => S.listings.filter((l) => l.booking_mode === 'instant' && liveListing(l) && related(spaceId).has(l.space_id));
+
+async function loadAll() {
+  const since = new Date(Date.now() - 86400000).toISOString();
+  const [profile, properties, spaces, listings, imports, feeds, reservations, holds, alerts, conflicts, ledger] = await Promise.all([
+    sb.from('profiles').select('id, full_name').eq('id', S.user.id).maybeSingle(),
+    sb.from('properties').select('id, title, address, city, timezone, created_at').order('created_at'),
+    sb.from('spaces').select('id, property_id, parent_space_id, category, title, quantity, created_at').order('created_at'),
+    sb.from('channel_listings').select('id, space_id, channel, status, booking_mode, url, created_at').order('created_at'),
+    sb.from('calendar_imports').select('id, space_id, channel, url, last_synced_at, last_status, last_error, event_count'),
+    sb.from('calendar_feeds').select('id, space_id, for_channel, token, last_fetched_at'),
+    sb.from('reservations').select('id, space_id, channel, kind, status, starts_at, ends_at, all_day, guest_name, summary, payout_cents').eq('status', 'confirmed').gte('ends_at', since).order('starts_at').limit(1000),
+    sb.from('booking_holds').select('id, space_id, channel, guest_name, starts_at, ends_at, all_day, status, released_reason, expires_at, verified_at, created_at').order('created_at', { ascending: false }).limit(60),
+    sb.from('booking_alerts').select('id, space_id, kind, channel, message, created_at, reservation:reservations(channel, starts_at, ends_at, all_day, guest_name)').is('resolved_at', null).order('created_at', { ascending: false }),
+    sb.from('conflicts').select('id, space_id, detected_at, a:reservations!conflicts_a_reservation_id_fkey(channel, starts_at, ends_at, all_day), b:reservations!conflicts_b_reservation_id_fkey(channel, starts_at, ends_at, all_day)').is('resolved_at', null),
+    sb.from('earnings_ledger').select('id, period, gross_cents, attributed, share_pct, fee_cents, reservation:reservations(channel, space_id, starts_at, ends_at)').order('period', { ascending: false }),
+  ]);
+  for (const r of [properties, spaces, listings, imports, feeds, reservations, holds, alerts, conflicts, ledger]) if (r.error) throw new Error(r.error.message);
+  Object.assign(S, { profile: profile.data, properties: properties.data, spaces: spaces.data, listings: listings.data, imports: imports.data, feeds: feeds.data,
+    reservations: reservations.data, holds: holds.data, alerts: alerts.data, conflicts: conflicts.data, ledger: ledger.data });
+}
+async function refresh(quiet = true) {
+  try { await loadAll(); render(); } catch (e) { if (!quiet) toast(e.message, true); console.error(e); }
+}
+
+// ------------------------------------------------------------------ rendering
+const TABS = [['today', 'Today'], ['requests', 'Requests'], ['calendar', 'Calendar'], ['places', 'Places & sites'], ['earnings', 'Earnings']];
+function render() {
+  const app = $('#app');
+  if (!S.user) { app.innerHTML = authView(); return; }
+  const alertCount = S.alerts.length + S.conflicts.length;
+  const waiting = S.holds.filter((h) => h.status === 'holding' && Date.parse(h.expires_at) > Date.now()).length;
+  app.innerHTML = `
+    <header class="top"><div class="wrap">
+      <div class="logo"><i aria-hidden="true"></i>Everyspace <span>Host</span></div>
+      <nav class="tabs" aria-label="Sections">${TABS.map(([k, label]) => `<button data-tab="${k}" ${S.tab === k ? 'aria-current="page"' : ''}>${label}${(k === 'today' && alertCount) || (k === 'requests' && waiting) ? '<span class="dot" aria-label="needs attention"></span>' : ''}</button>`).join('')}</nav>
+      <div class="who"><span class="name small muted">${esc(S.profile?.full_name || S.user.email)}</span><button class="btn sm" data-act="signout">Sign out</button></div>
+    </div></header>
+    <main><div class="wrap">${({ today: todayView, requests: requestsView, calendar: calendarView, places: placesView, earnings: earningsView })[S.tab]()}</div></main>`;
+}
+
+function authView() {
+  const up = S.authMode === 'signup';
+  return `<div class="wrap"><div class="auth">
+    <div class="logo" style="justify-content:center;margin-bottom:18px"><i aria-hidden="true"></i>Everyspace <span>Host</span></div>
+    <div class="card">
+      <h1 style="font-size:22px">${up ? 'Create your host account' : 'Sign in'}</h1>
+      <p class="muted small" style="margin:6px 0 18px">Run Airbnb, Vrbo and every other site from one place, with no double bookings.</p>
+      <form id="authForm" class="stack">
+        ${up ? '<label class="f">Your name<input type="text" name="name" autocomplete="name" required></label>' : ''}
+        <label class="f">Email<input type="email" name="email" autocomplete="email" required></label>
+        <label class="f">Password<input type="password" name="password" autocomplete="${up ? 'new-password' : 'current-password'}" minlength="8" required></label>
+        <button class="btn primary" style="width:100%" type="submit">${up ? 'Create account' : 'Sign in'}</button>
+        <p class="small muted" id="authMsg" role="alert" style="margin:0"></p>
+      </form>
+      <p class="small" style="margin:16px 0 0;text-align:center">${up ? 'Already have an account?' : 'New to Everyspace?'} <a href="#" data-act="authmode">${up ? 'Sign in' : 'Create an account'}</a></p>
+    </div>
+    <ul class="hero-note">
+      <li>Keep using Airbnb exactly as you do today. Everyspace works alongside it.</li>
+      <li>No monthly fee. Everyspace only earns a share of the extra money it brings you.</li>
+      <li>Before you accept any request, Everyspace checks every site so the same dates can't be sold twice.</li>
+    </ul></div></div>`;
+}
+
+function setupGaps() { // what's still needed for the no-double-booking promise, per space
+  const gaps = [];
+  if (!S.properties.length) gaps.push({ msg: 'Add your first place to get started.', go: 'places' });
+  for (const sp of S.spaces) {
+    const ls = S.listings.filter((l) => l.space_id === sp.id && liveListing(l));
+    if (!ls.length) { gaps.push({ msg: `“${sp.title}”: add the sites it's listed on.`, go: 'places', space: sp.id }); continue; }
+    for (const l of ls) {
+      const imp = S.imports.find((i) => i.space_id === sp.id && i.channel === l.channel);
+      const feed = S.feeds.find((f) => f.space_id === sp.id && f.for_channel === l.channel);
+      if (!imp) gaps.push({ msg: `“${sp.title}” on ${siteName(l.channel)}: add ${siteName(l.channel)}'s calendar link (step 1).`, go: 'places', space: sp.id });
+      else if (imp.last_status === 'error') gaps.push({ msg: `“${sp.title}” on ${siteName(l.channel)}: couldn't read the calendar. ${imp.last_error ?? ''}`, go: 'places', space: sp.id, bad: true });
+      if (feed && !feed.last_fetched_at) gaps.push({ msg: `“${sp.title}” on ${siteName(l.channel)}: paste the Everyspace link into ${siteName(l.channel)} (step 2). It hasn't read it yet.`, go: 'places', space: sp.id });
+      if (l.booking_mode === 'instant' && !VERIFIABLE.has(l.channel)) gaps.push({ msg: `“${sp.title}”: ${siteName(l.channel)} takes instant bookings, but its calendar can't be checked by link. Switch it to request-to-book, or make Airbnb or Vrbo the instant site.`, go: 'places', space: sp.id, bad: true });
+    }
+  }
+  return gaps;
+}
+
+function todayView() {
+  const tzDefault = S.properties[0]?.timezone ?? 'America/Los_Angeles';
+  const now = Date.now();
+  const open = S.holds.filter((h) => ['holding', 'safe'].includes(h.status) && Date.parse(h.expires_at) > now);
+  const upcoming = S.reservations.filter((r) => r.kind === 'booking' && Date.parse(r.ends_at) > now).slice(0, 6);
+  const gaps = setupGaps();
+  const hello = (S.profile?.full_name || '').split(' ')[0];
+  return `
+    <div class="section-title"><h1>${hello ? `Hi ${esc(hello)}` : 'Today'}</h1><div class="row"><button class="btn" data-act="syncall">Sync calendars now</button><button class="btn primary" data-act="newreq">New request</button></div></div>
+    ${S.alerts.length || S.conflicts.length ? `<div class="stack">${S.conflicts.map((c) => `
+      <div class="callout bad"><div class="big">Double booking on “${esc(spaceTitle(c.space_id))}”</div>
+        <div>${siteName(c.a?.channel)} ${esc(when(c.a?.starts_at, c.a?.ends_at, c.a?.all_day, tzOf(c.space_id)))} overlaps ${siteName(c.b?.channel)} ${esc(when(c.b?.starts_at, c.b?.ends_at, c.b?.all_day, tzOf(c.space_id)))}. Contact one guest now and help them rebook.</div></div>`).join('')}
+      ${S.alerts.map(alertCard).join('')}</div>`
+      : `<div class="callout ok"><div class="big">No double bookings</div><div class="small">Everyspace checks every connected calendar every 15 minutes.</div></div>`}
+
+    <div class="grid2" style="margin-top:14px">
+      <div class="card"><div class="row between"><h2>Requests waiting</h2><a href="#" data-tab="requests" class="small">See all</a></div>
+        ${open.length ? `<div class="list" style="margin-top:12px">${open.slice(0, 4).map(holdRow).join('')}</div>` : `<p class="muted small" style="margin:10px 0 0">None right now. When a request comes in on a request-to-book site, tap “New request” before you accept it.</p>`}</div>
+      <div class="card"><div class="row between"><h2>Coming up</h2><a href="#" data-tab="calendar" class="small">Calendar</a></div>
+        ${upcoming.length ? `<div class="list" style="margin-top:12px">${upcoming.map((r) => `<div class="item"><span class="site" style="${siteVar(r.channel)}">${siteName(r.channel)}</span><div class="grow"><div style="font-weight:600">${esc(when(r.starts_at, r.ends_at, r.all_day, tzOf(r.space_id)))}</div><div class="small muted">${esc(spaceTitle(r.space_id))}${r.guest_name ? ` · ${esc(r.guest_name)}` : ''}</div></div></div>`).join('')}</div>`
+          : `<p class="muted small" style="margin:10px 0 0">No upcoming bookings yet. They appear here as soon as the sites' calendars are connected.</p>`}</div>
+    </div>
+
+    ${gaps.length ? `<div class="section-title"><h2>Finish setting up</h2><span class="small muted">${gaps.length} to do</span></div>
+      <div class="list">${gaps.slice(0, 8).map((g) => `<div class="item"><span class="chip ${g.bad ? 'bad' : 'warn'}">${g.bad ? 'Fix' : 'To do'}</span><div class="grow small">${esc(g.msg)}</div><button class="btn sm" data-tab="places" ${g.space ? `data-space="${g.space}"` : ''}>Open</button></div>`).join('')}</div>` : ''}
+    <p class="tiny muted" style="margin-top:22px">Times shown in ${esc(tzDefault.replace('_', ' '))} time.</p>`;
+}
+
+function alertCard(a) {
+  const where = `“${esc(spaceTitle(a.space_id))}” · ${ago(a.created_at)}`;
+  if (a.kind === 'door_open') {
+    return `<div class="callout bad"><div class="big">Close dates on ${siteName(a.channel)} now</div><div>${esc(a.message)}</div>
+      <div class="small muted" style="margin-top:6px">${where}. This clears by itself at the next sync once the dates are closed.</div></div>`;
+  }
+  const r = a.reservation;
+  const doors = doorsFor(a.space_id).map((d) => siteName(d.channel));
+  const what = r ? `${siteName(r.channel)} ${when(r.starts_at, r.ends_at, r.all_day, tzOf(a.space_id))}${r.guest_name ? ` (${r.guest_name})` : ''}` : 'A booking';
+  return `<div class="callout warn"><div class="big">Accepted without the check</div>
+    <div>${esc(what)} was accepted before Everyspace confirmed the dates were closed everywhere.${doors.length ? ` Make sure those nights are closed on ${esc(doors.join(' and '))}.` : ''} Next time, add the request here first.</div>
+    <div class="row" style="margin-top:10px"><button class="btn sm" data-act="dismiss" data-id="${a.id}">Got it, I checked</button><span class="small muted">${where}</span></div></div>`;
+}
+
+function holdRow(h) {
+  const tz = tzOf(h.space_id);
+  const st = h.status === 'safe' ? '<span class="chip ok">Safe to accept</span>' : h.status === 'holding' ? '<span class="chip warn">Dates held</span>'
+    : h.status === 'confirmed' ? '<span class="chip accent">Booked</span>' : `<span class="chip">${h.released_reason === 'taken' ? 'Taken elsewhere' : h.released_reason === 'expired' ? 'Expired' : 'Declined'}</span>`;
+  const live = ['holding', 'safe'].includes(h.status) && Date.parse(h.expires_at) > Date.now();
+  return `<div class="item"><span class="site" style="${siteVar(h.channel)}">${siteName(h.channel)}</span>
+    <div class="grow"><div style="font-weight:600">${esc(when(h.starts_at, h.ends_at, h.all_day, tz))}</div><div class="small muted">${esc(spaceTitle(h.space_id))}${h.guest_name ? ` · ${esc(h.guest_name)}` : ''}</div></div>
+    ${st}${live ? `<button class="btn sm" data-act="check" data-id="${h.id}">${h.status === 'safe' ? 'Recheck' : 'Check again'}</button><button class="btn sm ghost danger" data-act="release" data-id="${h.id}">Declined it</button>` : ''}</div>`;
+}
+
+function verdictCard(v) {
+  if (!v) return '';
+  const tone = { accept: 'ok', close_dates: 'warn', connect_calendar: 'warn', retry: 'warn', decline: 'bad' }[v.step] ?? 'warn';
+  const head = { accept: 'Safe to accept', close_dates: 'Close the dates first', connect_calendar: 'One more step before you accept', retry: "Couldn't check just now", decline: 'Decline this request' }[v.step] ?? 'Check';
+  const what = { accept: `Go to ${siteName(v.channel)} and accept the request. Everyspace has the dates locked and will block them everywhere.`, decline: 'Turn the request down on the site. Those dates are no longer free.' }[v.step];
+  return `<div class="callout ${tone}" id="verdict" tabindex="-1"><div class="big">${head}</div><div>${esc(v.message)}</div>${what ? `<div class="small" style="margin-top:6px">${esc(what)}</div>` : ''}
+    ${v.hold_id && ['close_dates', 'connect_calendar', 'retry'].includes(v.step) ? `<div class="row" style="margin-top:12px"><button class="btn primary sm" data-act="check" data-id="${v.hold_id}">I closed them. Check again</button><button class="btn sm ghost danger" data-act="release" data-id="${v.hold_id}">Declined it</button></div>` : ''}</div>`;
+}
+
+function requestsView() {
+  const open = S.holds.filter((h) => ['holding', 'safe'].includes(h.status) && Date.parse(h.expires_at) > Date.now());
+  const past = S.holds.filter((h) => !open.includes(h));
+  return `
+    <div class="section-title"><div><h1>Requests</h1><p class="muted small" style="margin:4px 0 0">Got a request on a request-to-book site? Add it here before accepting. Everyspace holds the dates and tells you when it's safe.</p></div><button class="btn primary" data-act="newreq">New request</button></div>
+    ${verdictCard(S.verdict)}
+    <div class="section-title"><h2>Open</h2></div>
+    ${open.length ? `<div class="list">${open.map(holdRow).join('')}</div>` : '<div class="card flat empty">No open requests.</div>'}
+    ${past.length ? `<div class="section-title"><h2>Earlier</h2></div><div class="list">${past.slice(0, 20).map(holdRow).join('')}</div>` : ''}
+    <details class="more" style="margin-top:22px"><summary>How this keeps double bookings from happening</summary>
+      <div class="steps" style="margin-top:12px">
+        <div class="step"><h4>One site books instantly</h4><div class="small muted">For each space, only one site (usually Airbnb) has Instant Book on. Every other site is set to request-to-book.</div></div>
+        <div class="step"><h4>Requests get held here first</h4><div class="small muted">When a request arrives elsewhere, add it here. Everyspace locks those dates so nothing else can take them.</div></div>
+        <div class="step"><h4>Close the dates on the instant site</h4><div class="small muted">Everyspace reads that site's calendar live and only says “Safe to accept” once the dates are closed there.</div></div>
+        <div class="step"><h4>Everyspace keeps watching</h4><div class="small muted">Every 15 minutes it checks that the dates are still closed, and alerts you if anything slips.</div></div>
+      </div></details>`;
+}
+
+function calendarView() {
+  const N = window.innerWidth < 760 ? 14 : 28;
+  if (!S.spaces.length) return `<div class="section-title"><h1>Calendar</h1></div><div class="card flat empty">Add a place and its spaces first.</div>`;
+  const now = Date.now();
+  const byProp = S.properties.map((p) => {
+    const tz = p.timezone; const today = localDay(now, tz);
+    const days = Array.from({ length: N }, (_, i) => addDays(today, i));
+    const mon = (d) => new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' });
+    const hdr = days.map((d, i) => { const n = new Date(`${d}T12:00:00Z`).getUTCDate(); return `<div class="hdr">${i === 0 || n === 1 ? `<b>${mon(d)}</b><br>` : '<br>'}${n}</div>`; }).join('');
+    const rows = S.spaces.filter((s) => s.property_id === p.id).map((s) => {
+      const fam = related(s.id);
+      const cells = days.map((d) => {
+        const a = zoned(d, '00:00', tz), b = zoned(addDays(d, 1), '00:00', tz);
+        const hits = S.reservations.filter((r) => fam.has(r.space_id) && Date.parse(r.starts_at) < b && Date.parse(r.ends_at) > a);
+        const book = hits.filter((r) => r.kind === 'booking'); const block = hits.find((r) => r.kind !== 'booking');
+        const held = S.holds.some((h) => fam.has(h.space_id) && ['holding', 'safe'].includes(h.status) && Date.parse(h.expires_at) > now && Date.parse(h.starts_at) < b && Date.parse(h.ends_at) > a);
+        const cls = ['d', book.length ? 'b' : block ? 'k' : '', held ? 'h' : '', book.length > 1 ? 'x' : '', d === today ? 't' : ''].join(' ');
+        const label = `${d}: ${book.length ? book.map((r) => siteName(r.channel)).join(' + ') : block ? 'closed' : 'open'}${held ? ', request held' : ''}`;
+        return `<div class="${cls}" style="${book[0] ? siteVar(book[0].channel) : ''}" title="${esc(label)}" aria-label="${esc(label)}"></div>`;
+      }).join('');
+      return `<div class="label">${esc(s.title)}</div><div class="days" style="--n:${N}">${cells}</div>`;
+    }).join('');
+    return `<div class="card" style="margin-bottom:14px"><h2 style="margin-bottom:12px">${esc(p.title)}</h2><div class="cal"><div></div><div class="days" style="--n:${N}">${hdr}</div>${rows}</div></div>`;
+  }).join('');
+  const used = [...new Set(S.reservations.filter((r) => r.kind === 'booking').map((r) => r.channel))];
+  const list = S.reservations.filter((r) => Date.parse(r.ends_at) > now).slice(0, 40);
+  return `<div class="section-title"><div><h1>Calendar</h1><p class="muted small" style="margin:4px 0 0">Next ${N} days across every site. A booking on the whole home also shows on the rooms inside it.</p></div><button class="btn" data-act="syncall">Sync now</button></div>
+    ${byProp}
+    <div class="legend">${used.map((c) => `<span><i style="background:var(--s-${c in { airbnb: 1, vrbo: 1, booking_com: 1, expedia: 1, swimply: 1, peerspace: 1, neighbor: 1, direct: 1, everyspace: 1 } ? c : 'other'})"></i>${siteName(c)}</span>`).join('')}
+      <span><i style="background:repeating-linear-gradient(135deg,var(--line),var(--line) 3px,var(--surface-2) 3px,var(--surface-2) 6px)"></i>Closed</span>
+      <span><i style="outline:2px dashed var(--warn);outline-offset:-2px;background:var(--surface-2)"></i>Request held</span>
+      <span><i style="outline:2px solid var(--bad);outline-offset:-2px;background:var(--surface-2)"></i>Double booked</span></div>
+    <div class="section-title"><h2>Upcoming</h2></div>
+    ${list.length ? `<div class="list">${list.map((r) => `<div class="item"><span class="site" style="${siteVar(r.channel)}">${siteName(r.channel)}</span><div class="grow"><div style="font-weight:600">${esc(when(r.starts_at, r.ends_at, r.all_day, tzOf(r.space_id)))}</div><div class="small muted">${esc(spaceTitle(r.space_id))}${r.guest_name ? ` · ${esc(r.guest_name)}` : ''}</div></div><span class="chip ${r.kind === 'booking' ? 'accent' : ''}">${r.kind === 'booking' ? 'Booking' : 'Closed'}</span></div>`).join('')}</div>` : '<div class="card flat empty">Nothing booked yet.</div>'}`;
+}
+
+function placesView() {
+  if (!S.properties.length) return `<div class="section-title"><h1>Places & sites</h1></div>
+    <div class="card"><h2>Add your first place</h2><p class="muted small">A place is an address. Next you'll add what you rent there (the whole home, rooms, the pool, parking) and the sites each one is listed on.</p>${placeForm()}</div>`;
+  return `<div class="section-title"><div><h1>Places & sites</h1><p class="muted small" style="margin:4px 0 0">Connect each site's calendar both ways, and choose the one site that books instantly.</p></div><button class="btn" data-act="addplace">Add a place</button></div>
+    ${S.properties.map((p) => `<div class="card" style="margin-bottom:16px">
+      <div class="row between"><div><h2>${esc(p.title)}</h2><div class="small muted">${esc([p.address, p.city].filter(Boolean).join(', ') || 'Los Angeles')}</div></div>
+        <div class="row"><button class="btn sm" data-act="addspace" data-id="${p.id}">Add a space</button><button class="btn sm ghost danger" data-act="delplace" data-id="${p.id}">Remove</button></div></div>
+      ${S.spaces.filter((s) => s.property_id === p.id).map(spaceCard).join('') || '<p class="muted small" style="margin:14px 0 0">Add what you rent here: the whole home, a room, the pool, a parking spot…</p>'}
+    </div>`).join('')}`;
+}
+
+function spaceCard(s) {
+  const ls = S.listings.filter((l) => l.space_id === s.id);
+  const parent = S.spaces.find((x) => x.id === s.parent_space_id);
+  const doors = doorsFor(s.id);
+  const open = S.openSpace === s.id;
+  return `<div class="step" style="margin-top:14px" id="space-${s.id}">
+    <div class="row between"><div><h3>${esc(s.title)}</h3><div class="small muted">${esc(SPACE_TYPES[s.category] ?? s.category)}${parent ? ` · inside “${esc(parent.title)}”` : ''}${s.quantity > 1 ? ` · ${s.quantity} available` : ''}</div></div>
+      <div class="row">${doors.length ? `<span class="chip accent">Instant: ${doors.map((d) => siteName(d.channel)).join(', ')}</span>` : ls.length ? '<span class="chip">All request-to-book</span>' : ''}
+        <button class="btn sm" data-act="addsite" data-id="${s.id}">Add a site</button><button class="btn sm ghost danger" data-act="delspace" data-id="${s.id}">Remove</button></div></div>
+    ${ls.length ? `<div class="list" style="margin-top:12px">${ls.map((l) => siteRow(s, l, open)).join('')}</div>` : '<p class="small muted" style="margin:10px 0 0">Which sites is this listed on? Add each one.</p>'}
+  </div>`;
+}
+
+function siteRow(s, l, openSpace) {
+  const imp = S.imports.find((i) => i.space_id === s.id && i.channel === l.channel);
+  const feed = S.feeds.find((f) => f.space_id === s.id && f.for_channel === l.channel);
+  const h = helpFor(l.channel);
+  const status = !imp ? '<span class="chip warn">Link needed</span>' : imp.last_status === 'error' ? '<span class="chip bad">Can\'t read</span>' : imp.last_synced_at ? `<span class="chip ok">Synced ${ago(imp.last_synced_at)}</span>` : '<span class="chip">Not synced yet</span>';
+  const reading = feed?.last_fetched_at ? `<span class="chip ok">${siteName(l.channel)} reads Everyspace</span>` : '<span class="chip warn">Paste Everyspace link</span>';
+  const key = `${s.id}:${l.channel}`;
+  return `<div class="item" style="display:block">
+    <div class="row between"><div class="row"><span class="site" style="${siteVar(l.channel)}">${siteName(l.channel)}</span>${status}${reading}</div>
+      <div class="seg" role="group" aria-label="How ${esc(siteName(l.channel))} takes bookings">
+        <button data-act="mode" data-id="${l.id}" data-mode="instant" aria-pressed="${l.booking_mode === 'instant'}">Instant Book</button>
+        <button data-act="mode" data-id="${l.id}" data-mode="request" aria-pressed="${l.booking_mode === 'request'}">Request to book</button></div></div>
+    <details class="more" style="margin-top:8px" ${openSpace || !imp || !feed?.last_fetched_at ? 'open' : ''} data-key="${esc(key)}"><summary>Calendar connection</summary>
+      <div class="steps" style="margin-top:10px">
+        <div class="step"><h4>${siteName(l.channel)} → Everyspace</h4><div class="small muted" style="margin-bottom:8px">${esc(h.out)}</div>
+          <form class="copy" data-form="import" data-space="${s.id}" data-channel="${l.channel}"><input type="url" name="url" placeholder="https://… (${esc(siteName(l.channel))} calendar link)" value="${esc(imp?.url ?? '')}" required aria-label="${esc(siteName(l.channel))} calendar link"><button class="btn sm primary" type="submit">${imp ? 'Save & sync' : 'Connect'}</button></form>
+          ${imp?.last_status === 'error' ? `<div class="small" style="color:var(--bad);margin-top:6px">${esc(imp.last_error)}</div>` : imp?.last_synced_at ? `<div class="tiny muted" style="margin-top:6px">Read ${imp.event_count ?? 0} dates · ${ago(imp.last_synced_at)}</div>` : ''}</div>
+        <div class="step"><h4>Everyspace → ${siteName(l.channel)}</h4><div class="small muted" style="margin-bottom:8px">${esc(h.in)} This link shows everything booked on your other sites as “Not available”, never guest names or prices.</div>
+          ${feed ? `<div class="copy"><input type="text" readonly value="${esc(feedUrl(feed.token))}" aria-label="Everyspace calendar link for ${esc(siteName(l.channel))}"><button class="btn sm" data-act="copy" data-text="${esc(feedUrl(feed.token))}">Copy</button></div>
+            <div class="tiny muted" style="margin-top:6px">${feed.last_fetched_at ? `${siteName(l.channel)} last read it ${ago(feed.last_fetched_at)}` : `Waiting for ${siteName(l.channel)} to read it. Sites check every few hours.`}</div>` : `<button class="btn sm" data-act="makefeed" data-space="${s.id}" data-channel="${l.channel}">Create link</button>`}</div>
+      </div>
+      <div class="row" style="margin-top:10px"><button class="btn sm ghost danger" data-act="delsite" data-id="${l.id}">Remove ${siteName(l.channel)} from “${esc(s.title)}”</button></div>
+    </details>
+  </div>`;
+}
+
+function earningsView() {
+  const months = new Map();
+  for (const r of S.ledger) { const m = months.get(r.period) ?? { gross: 0, attributed: 0, fee: 0, rows: [] }; m.gross += r.gross_cents; if (r.attributed) m.attributed += r.gross_cents; m.fee += r.fee_cents; m.rows.push(r); months.set(r.period, m); }
+  const fmtMonth = (p) => new Date(`${p}T12:00:00Z`).toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+  return `<div class="section-title"><div><h1>Earnings</h1><p class="muted small" style="margin:4px 0 0">Finished stays are added once a day.</p></div></div>
+    <div class="callout"><div class="big">How Everyspace gets paid</div>
+      <div class="small">Only on money Everyspace brings you: spaces or sites it added for you, and bookings through Everyspace. Never on Airbnb bookings you already had. Each month it's 10% until the fee reaches $30, then 3% on the rest. For example, $1,000 of extra bookings in a month comes to $51. No monthly fee.</div></div>
+    ${months.size ? [...months].map(([p, m]) => `<div class="section-title"><h2>${fmtMonth(p)}</h2><span class="small muted">Everyspace fee ${money(m.fee)}</span></div>
+      <div class="grid2"><div class="card flat"><div class="small muted">Total from finished stays</div><div class="kpi">${money(m.gross)}</div></div>
+        <div class="card flat"><div class="small muted">Extra, brought in by Everyspace</div><div class="kpi">${money(m.attributed)}</div></div>
+        <div class="card flat"><div class="small muted">You keep</div><div class="kpi">${money(m.gross - m.fee)}</div></div></div>
+      <div class="list" style="margin-top:12px">${m.rows.map((r) => `<div class="item"><span class="site" style="${siteVar(r.reservation?.channel)}">${siteName(r.reservation?.channel)}</span><div class="grow small">${esc(spaceTitle(r.reservation?.space_id))} · ${esc(r.reservation ? when(r.reservation.starts_at, r.reservation.ends_at, true, tzOf(r.reservation.space_id)) : '')}</div><span class="small">${money(r.gross_cents)}</span>${r.attributed ? `<span class="chip accent">fee ${money(r.fee_cents)}</span>` : '<span class="chip">no fee</span>'}</div>`).join('')}</div>`).join('')
+      : '<div class="card flat empty" style="margin-top:14px">No finished stays yet.</div>'}`;
+}
+
+// ------------------------------------------------------------------ forms & dialogs
+function placeForm() {
+  return `<form data-form="place" class="stack" style="margin-top:14px"><div class="fields">
+    <label class="f">Name<input type="text" name="title" placeholder="Maple St house" required maxlength="120"></label>
+    <label class="f">Street address<input type="text" name="address" autocomplete="street-address"></label>
+    <label class="f">City<input type="text" name="city" value="Los Angeles"></label></div>
+    <div class="row"><button class="btn primary" type="submit">Add place</button></div></form>`;
+}
+const dlg = () => $('#dlg');
+function openDialog(html) { const d = dlg(); d.innerHTML = html; d.showModal(); d.querySelector('input, select, button')?.focus(); }
+function closeDialog() { dlg().close(); }
+
+function newRequestDialog() {
+  const spaces = S.spaces.filter((s) => S.listings.some((l) => l.space_id === s.id));
+  if (!spaces.length) { toast('First add a space and the sites it\'s listed on (Places & sites).', true); S.tab = 'places'; render(); return; }
+  const first = spaces[0].id;
+  const siteOpts = (sid) => S.listings.filter((l) => l.space_id === sid && liveListing(l) && l.booking_mode !== 'instant').map((l) => `<option value="${l.channel}">${siteName(l.channel)}</option>`).join('') + '<option value="direct">Direct (text, email, a friend)</option>';
+  const today = localDay(Date.now(), tzOf(first));
+  openDialog(`<form method="dialog" data-form="hold">
+    <div class="dh"><h2>New request</h2><p class="small muted" style="margin:4px 0 0">Add it here before you accept it on the site.</p></div>
+    <div class="db stack">
+      <label class="f">Space<select name="space_id" data-act="reqspace">${spaces.map((s) => `<option value="${s.id}">${esc(s.title)}</option>`).join('')}</select></label>
+      <label class="f">Request came from<select name="channel">${siteOpts(first)}</select></label>
+      <div class="row"><span class="small" style="font-weight:600;color:var(--ink-2)">Type</span><div class="seg"><button type="button" data-act="reqtype" data-v="nights" aria-pressed="true">Nights</button><button type="button" data-act="reqtype" data-v="hours" aria-pressed="false">Hours</button></div></div>
+      <div class="fields" data-kind="nights"><label class="f">Check-in<input type="date" name="start" value="${today}" min="${today}" required></label><label class="f">Check-out<input type="date" name="end" value="${addDays(today, 2)}" min="${addDays(today, 1)}" required></label></div>
+      <div class="fields" data-kind="hours" hidden><label class="f">Date<input type="date" name="day" value="${today}" min="${today}"></label><label class="f">From<input type="time" name="from" value="13:00" step="900"></label><label class="f">To<input type="time" name="to" value="16:00" step="900"></label></div>
+      <label class="f">Guest name (optional)<input type="text" name="guest" maxlength="80"></label>
+      <p class="small" id="holdMsg" role="alert" style="margin:0;color:var(--bad)"></p>
+    </div>
+    <div class="df"><button class="btn" type="button" data-act="close">Cancel</button><button class="btn primary" type="submit">Hold dates & check</button></div></form>`);
+  dlg().dataset.kind = 'nights';
+  dlg()._siteOpts = siteOpts;
+}
+function addSpaceDialog(propertyId) {
+  const others = S.spaces.filter((s) => s.property_id === propertyId);
+  openDialog(`<form method="dialog" data-form="space" data-property="${propertyId}">
+    <div class="dh"><h2>Add a space</h2><p class="small muted" style="margin:4px 0 0">Anything you rent out at this place.</p></div>
+    <div class="db stack"><div class="fields">
+      <label class="f">Name<input type="text" name="title" placeholder="Whole house" required maxlength="120"></label>
+      <label class="f">Type<select name="category">${Object.entries(SPACE_TYPES).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></label></div>
+      ${others.length ? `<label class="f">Is it inside another space? <span class="muted" style="font-weight:400">(a room inside the whole home)</span><select name="parent"><option value="">No</option>${others.map((s) => `<option value="${s.id}">Inside “${esc(s.title)}”</option>`).join('')}</select></label>
+      <p class="tiny muted" style="margin:0">If it's inside, a booking of the whole home blocks it, and a booking of it blocks the whole home.</p>` : ''}
+      <label class="f">How many are there? <span class="muted" style="font-weight:400">(1 for a home; more for identical kayaks or parking spots)</span><input type="number" name="quantity" min="1" max="500" value="1"></label>
+    </div>
+    <div class="df"><button class="btn" type="button" data-act="close">Cancel</button><button class="btn primary" type="submit">Add space</button></div></form>`);
+}
+function addSiteDialog(spaceId) {
+  const have = new Set(S.listings.filter((l) => l.space_id === spaceId).map((l) => l.channel));
+  const doors = doorsFor(spaceId);
+  openDialog(`<form method="dialog" data-form="site" data-space="${spaceId}">
+    <div class="dh"><h2>Add a site for “${esc(spaceTitle(spaceId))}”</h2></div>
+    <div class="db stack">
+      <label class="f">Site<select name="channel" required>${SITE_GROUPS.map(([g, cs]) => `<optgroup label="${g}">${cs.filter((c) => !have.has(c)).map((c) => `<option value="${c}">${SITES[c]}</option>`).join('')}</optgroup>`).join('')}</select></label>
+      <fieldset style="border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin:0"><legend class="small" style="font-weight:600;padding:0 6px">Does this site confirm guests instantly?</legend>
+        <label class="row small" style="margin-bottom:8px"><input type="radio" name="mode" value="request" checked> Request to book (you approve each one)</label>
+        <label class="row small"><input type="radio" name="mode" value="instant" ${doors.length ? 'disabled' : ''}> Instant Book ${doors.length ? `<span class="muted">(already ${esc(siteName(doors[0].channel))}; only one site can)</span>` : ''}</label></fieldset>
+      <p class="tiny muted" style="margin:0">Only one site per space can book instantly. Turn Instant Book off on the others in their settings, so Everyspace can check every request first.</p>
+      <p class="small" id="siteMsg" role="alert" style="margin:0;color:var(--bad)"></p>
+    </div>
+    <div class="df"><button class="btn" type="button" data-act="close">Cancel</button><button class="btn primary" type="submit">Add site</button></div></form>`);
+}
+
+// ------------------------------------------------------------------ actions
+async function busy(btn, fn) { if (btn) btn.disabled = true; try { return await fn(); } catch (e) { toast(prettyError(e.message), true); } finally { if (btn) btn.disabled = false; } }
+async function syncSpace(spaceId) {
+  const r = await callFn('calendar-sync', spaceId ? { space_id: spaceId } : {});
+  if (r.error) throw new Error(r.error);
+  const bad = (r.results ?? []).filter((x) => !x.ok);
+  await loadAll(); render();
+  if (bad.length) toast(`Couldn't read ${bad.length} calendar${bad.length > 1 ? 's' : ''}: ${bad[0].error}`, true);
+  else toast(r.synced ? `Synced ${r.synced} calendar${r.synced > 1 ? 's' : ''}.` : 'No calendar links to sync yet.');
+}
+async function check(holdId) {
+  const v = await callFn('booking-guard', { action: 'check', hold_id: holdId });
+  const h = S.holds.find((x) => x.id === holdId);
+  S.verdict = { ...v, channel: h?.channel }; S.tab = 'requests';
+  await loadAll(); render(); $('#verdict')?.focus();
+}
+
+document.addEventListener('click', async (e) => {
+  const t = e.target.closest('[data-tab], [data-act]');
+  if (!t) return;
+  if (t.dataset.tab && !t.dataset.act) {
+    e.preventDefault(); S.tab = t.dataset.tab; if (t.dataset.space) S.openSpace = t.dataset.space; render();
+    if (t.dataset.space) $(`#space-${t.dataset.space}`)?.scrollIntoView({ block: 'start' }); else window.scrollTo(0, 0);
+    return;
+  }
+  const a = t.dataset.act;
+  if (a === 'authmode') { e.preventDefault(); S.authMode = S.authMode === 'signup' ? 'signin' : 'signup'; render(); }
+  else if (a === 'signout') { await sb.auth.signOut(); }
+  else if (a === 'close') { closeDialog(); }
+  else if (a === 'newreq') { newRequestDialog(); }
+  else if (a === 'reqtype') {
+    const d = dlg(); d.dataset.kind = t.dataset.v;
+    d.querySelectorAll('[data-act="reqtype"]').forEach((b) => b.setAttribute('aria-pressed', String(b === t)));
+    d.querySelectorAll('[data-kind]').forEach((f) => { f.hidden = f.dataset.kind !== t.dataset.v; f.querySelectorAll('input').forEach((i) => { i.required = !f.hidden; }); });
+  }
+  else if (a === 'dismiss') { await busy(t, async () => { must(await sb.rpc('dismiss_alert', { p_alert: t.dataset.id })); await loadAll(); render(); }); }
+  else if (a === 'syncall') { await busy(t, () => syncSpace(null)); }
+  else if (a === 'check') { await busy(t, () => check(t.dataset.id)); }
+  else if (a === 'release') {
+    if (!confirm('Mark this request as declined? The held dates are freed for other requests.')) return;
+    await busy(t, async () => { const r = await callFn('booking-guard', { action: 'release', hold_id: t.dataset.id }); if (r.error) throw new Error(r.error); S.verdict = null; await loadAll(); render(); toast('Request released.'); });
+  }
+  else if (a === 'addplace') { openDialog(`<div class="dh"><h2>Add a place</h2></div><div class="db">${placeForm()}</div><div class="df"><button class="btn" data-act="close">Cancel</button></div>`); }
+  else if (a === 'addspace') { addSpaceDialog(t.dataset.id); }
+  else if (a === 'addsite') { addSiteDialog(t.dataset.id); }
+  else if (a === 'mode') {
+    await busy(t, async () => { must(await sb.from('channel_listings').update({ booking_mode: t.dataset.mode }).eq('id', t.dataset.id)); await loadAll(); render();
+      toast(t.dataset.mode === 'instant' ? 'Saved. Make sure Instant Book is on for this site, and off on the others.' : 'Saved. Make sure Instant Book is off on this site.'); });
+  }
+  else if (a === 'copy') { try { await navigator.clipboard.writeText(t.dataset.text); toast('Link copied.'); } catch { t.previousElementSibling?.select(); toast('Select the link and copy it.'); } }
+  else if (a === 'makefeed') { await busy(t, async () => { must(await sb.from('calendar_feeds').insert({ space_id: t.dataset.space, for_channel: t.dataset.channel })); await loadAll(); render(); }); }
+  else if (a === 'delsite' || a === 'delspace' || a === 'delplace') {
+    const what = { delsite: 'this site from the space', delspace: 'this space, its sites and its bookings', delplace: 'this place and everything in it' }[a];
+    if (!confirm(`Remove ${what}? This can't be undone.`)) return;
+    const table = { delsite: 'channel_listings', delspace: 'spaces', delplace: 'properties' }[a];
+    await busy(t, async () => {
+      if (a === 'delsite') { const l = S.listings.find((x) => x.id === t.dataset.id); if (l) { await sb.from('calendar_imports').delete().eq('space_id', l.space_id).eq('channel', l.channel); await sb.from('calendar_feeds').delete().eq('space_id', l.space_id).eq('for_channel', l.channel); } }
+      must(await sb.from(table).delete().eq('id', t.dataset.id)); await loadAll(); render(); toast('Removed.');
+    });
+  }
+});
+
+document.addEventListener('change', (e) => {
+  if (e.target.matches('[data-act="reqspace"]')) { const sel = dlg().querySelector('select[name="channel"]'); sel.innerHTML = dlg()._siteOpts(e.target.value); }
+});
+
+document.addEventListener('submit', async (e) => {
+  const f = e.target; const kind = f.dataset.form;
+  if (f.id === 'authForm') {
+    e.preventDefault(); const fd = new FormData(f); const msg = $('#authMsg'); const btn = f.querySelector('button[type=submit]'); btn.disabled = true; msg.textContent = '';
+    try {
+      if (S.authMode === 'signup') {
+        const { data, error } = await sb.auth.signUp({ email: fd.get('email'), password: fd.get('password'), options: { data: { full_name: fd.get('name') }, emailRedirectTo: location.href.split('#')[0] } });
+        if (error) throw error;
+        if (!data.session) { msg.style.color = 'var(--ok)'; msg.textContent = 'Check your email to confirm your account, then sign in here.'; S.authMode = 'signin'; }
+      } else {
+        const { error } = await sb.auth.signInWithPassword({ email: fd.get('email'), password: fd.get('password') });
+        if (error) throw error;
+      }
+    } catch (err) { msg.style.color = 'var(--bad)'; msg.textContent = /confirm/i.test(err.message) ? 'Please confirm your email first (check your inbox), then sign in.' : err.message; }
+    finally { btn.disabled = false; }
+    return;
+  }
+  if (!kind) return;
+  e.preventDefault();
+  const fd = new FormData(f); const btn = f.querySelector('button[type=submit]');
+  await busy(btn, async () => {
+    if (kind === 'place') {
+      must(await sb.from('properties').insert({ host_id: S.user.id, title: fd.get('title').trim(), address: fd.get('address')?.trim() || null, city: fd.get('city')?.trim() || null }));
+      closeDialog(); await loadAll(); render(); toast('Place added. Now add what you rent there.');
+    } else if (kind === 'space') {
+      const row = must(await sb.from('spaces').insert({ property_id: f.dataset.property, title: fd.get('title').trim(), category: fd.get('category'), parent_space_id: fd.get('parent') || null, quantity: Number(fd.get('quantity') || 1) }).select('id').single());
+      closeDialog(); S.openSpace = row.id; await loadAll(); render(); toast('Space added. Now add the sites it\'s listed on.');
+    } else if (kind === 'site') {
+      const channel = fd.get('channel'); const space_id = f.dataset.space;
+      const { error } = await sb.from('channel_listings').insert({ space_id, channel, status: 'live', booking_mode: fd.get('mode') });
+      if (error) { $('#siteMsg').textContent = prettyError(error.message); return; }
+      await sb.from('calendar_feeds').insert({ space_id, for_channel: channel });
+      closeDialog(); S.openSpace = space_id; await loadAll(); render(); toast(`${siteName(channel)} added. Connect its calendar below.`);
+    } else if (kind === 'import') {
+      const url = String(fd.get('url')).trim();
+      if (!/^https:\/\//i.test(url)) throw new Error('Calendar links start with https://');
+      must(await sb.from('calendar_imports').upsert({ space_id: f.dataset.space, channel: f.dataset.channel, url }, { onConflict: 'space_id,channel' }));
+      await syncSpace(f.dataset.space);
+    } else if (kind === 'hold') {
+      const space_id = fd.get('space_id'); const tz = tzOf(space_id); const nights = dlg().dataset.kind !== 'hours';
+      const body = nights
+        ? { action: 'hold', space_id, channel: fd.get('channel'), start: fd.get('start'), end: fd.get('end'), all_day: true, guest: fd.get('guest') || undefined }
+        : { action: 'hold', space_id, channel: fd.get('channel'), start: new Date(zoned(fd.get('day'), fd.get('from'), tz)).toISOString(), end: new Date(zoned(fd.get('day'), fd.get('to'), tz)).toISOString(), all_day: false, guest: fd.get('guest') || undefined };
+      if (nights && body.end <= body.start) { $('#holdMsg').textContent = 'Check-out has to be after check-in.'; return; }
+      if (!nights && body.end <= body.start) { $('#holdMsg').textContent = 'The end time has to be after the start.'; return; }
+      const v = await callFn('booking-guard', body);
+      if (v.error && !v.step) { $('#holdMsg').textContent = prettyError(v.error); return; }
+      S.verdict = { ...v, channel: body.channel }; closeDialog(); S.tab = 'requests'; await loadAll(); render(); $('#verdict')?.focus();
+    }
+  });
+});
+
+// ------------------------------------------------------------------ start
+sb.auth.onAuthStateChange((_event, session) => {
+  const was = S.user?.id; S.user = session?.user ?? null;
+  if (!S.user) { render(); return; }
+  if (S.user.id !== was) refresh(false);
+});
+setInterval(() => { if (S.user && !document.hidden && !dlg().open) refresh(); }, 60000);
+// onAuthStateChange fires INITIAL_SESSION on load, which renders the sign-in screen or loads the host's data.
+</script>
+</body>
+</html>

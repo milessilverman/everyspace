@@ -80,7 +80,7 @@ We never store passwords for other sites. API tokens will go in Supabase Vault.
    - Double-booking detection across sites, including whole-house vs room.
    - Revenue-share ledger.
    - No-double-booking rules: one instant site, holds, live verification and the guard.
-   - 31 automated tests.
+   - 34 automated tests.
 2. **Go live on the free tier. Done (Nov 16, 2026).**
    - Supabase project `everyspace` (ref `hnzcwfvxpfsyjpbebevp`, West US, free plan, $0).
    - Database, the three functions, calendar sync every 15 minutes, and the daily revenue-share run are all live.
@@ -89,7 +89,14 @@ We never store passwords for other sites. API tokens will go in Supabase Vault.
      - competing request refused;
      - dates closed → "safe to accept";
      - guard flagged a stay accepted without the check.
-   - Next: connect the demo app's sign-in, calendar and requests screens to it.
+   - **Host Console** (`host/` in the GitHub repo) connects to it:
+     - sign-in;
+     - places, spaces and sites;
+     - two-way calendar links;
+     - choosing the one instant site;
+     - requests with "Safe to accept";
+     - calendar, alerts and earnings.
+     Tested in a real browser against the live system on desktop and phone, in light and dark mode.
 3. **First 10 LA hosts, by hand.**
    - Silver Lake, Venice, Echo Park, Highland Park, Culver City.
    - Add calendar links for them.
