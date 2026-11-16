@@ -288,6 +288,21 @@ function render() {
 }
 
 function authView() {
+  if (S.authMode === 'reset' || S.authMode === 'newpw') {
+    const reset = S.authMode === 'reset';
+    return `<div class="wrap"><div class="auth">
+    <div class="logo" style="justify-content:center;margin-bottom:18px"><i aria-hidden="true"></i>Everyspace <span>Host</span></div>
+    <div class="card">
+      <h1 style="font-size:22px">${reset ? 'Reset your password' : 'Set a new password'}</h1>
+      <p class="muted small" style="margin:6px 0 18px">${reset ? "Enter your email and we'll send you a link to set a new password." : 'Choose a new password for your account.'}</p>
+      <form id="${reset ? 'resetForm' : 'newPwForm'}" class="stack">
+        ${reset ? '<label class="f">Email<input type="email" name="email" autocomplete="email" required></label>' : '<label class="f">New password<input type="password" name="password" autocomplete="new-password" minlength="8" required></label>'}
+        <button class="btn primary" style="width:100%" type="submit">${reset ? 'Send reset link' : 'Save new password'}</button>
+        <p class="small muted" id="authMsg" role="alert" style="margin:0"></p>
+      </form>
+      ${reset ? '<p class="small" style="margin:16px 0 0;text-align:center"><a href="#" data-act="authmode" data-mode="signin">Back to sign in</a></p>' : ''}
+    </div></div></div>`;
+  }
   const up = S.authMode === 'signup';
   return `<div class="wrap"><div class="auth">
     <div class="logo" style="justify-content:center;margin-bottom:18px"><i aria-hidden="true"></i>Everyspace <span>Host</span></div>
@@ -301,7 +316,8 @@ function authView() {
         <button class="btn primary" style="width:100%" type="submit">${up ? 'Create account' : 'Sign in'}</button>
         <p class="small muted" id="authMsg" role="alert" style="margin:0"></p>
       </form>
-      <p class="small" style="margin:16px 0 0;text-align:center">${up ? 'Already have an account?' : 'New to Everyspace?'} <a href="#" data-act="authmode">${up ? 'Sign in' : 'Create an account'}</a></p>
+      ${up ? '' : '<p class="small" style="margin:12px 0 0;text-align:center"><a href="#" data-act="authmode" data-mode="reset">Forgot your password?</a></p>'}
+      <p class="small" style="margin:${up ? 16 : 6}px 0 0;text-align:center">${up ? 'Already have an account?' : 'New to Everyspace?'} <a href="#" data-act="authmode">${up ? 'Sign in' : 'Create an account'}</a></p>
     </div>
     <ul class="hero-note">
       <li>Keep using Airbnb exactly as you do today. Everyspace works alongside it.</li>
@@ -596,7 +612,7 @@ document.addEventListener('click', async (e) => {
     return;
   }
   const a = t.dataset.act;
-  if (a === 'authmode') { e.preventDefault(); S.authMode = S.authMode === 'signup' ? 'signin' : 'signup'; render(); }
+  if (a === 'authmode') { e.preventDefault(); S.authMode = t.dataset.mode || (S.authMode === 'signup' ? 'signin' : 'signup'); render(); }
   else if (a === 'signout') { await sb.auth.signOut(); }
   else if (a === 'close') { closeDialog(); }
   else if (a === 'newreq') { newRequestDialog(); }
@@ -653,6 +669,22 @@ document.addEventListener('submit', async (e) => {
     finally { btn.disabled = false; }
     return;
   }
+  if (f.id === 'resetForm' || f.id === 'newPwForm') {
+    e.preventDefault(); const fd = new FormData(f); const msg = $('#authMsg'); const btn = f.querySelector('button[type=submit]'); btn.disabled = true; msg.textContent = '';
+    try {
+      if (f.id === 'resetForm') {
+        const { error } = await sb.auth.resetPasswordForEmail(fd.get('email'), { redirectTo: location.href.split('#')[0] });
+        if (error) throw error;
+        msg.style.color = 'var(--ok)'; msg.textContent = 'If that email has an account, a reset link is on its way. Open it on this device.';
+      } else {
+        const { error } = await sb.auth.updateUser({ password: fd.get('password') });
+        if (error) throw error;
+        S.authMode = 'signin'; S.recovering = false; toast('Password saved.'); await refresh(false);
+      }
+    } catch (err) { msg.style.color = 'var(--bad)'; msg.textContent = err.message; }
+    finally { btn.disabled = false; }
+    return;
+  }
   if (!kind) return;
   e.preventDefault();
   const fd = new FormData(f); const btn = f.querySelector('button[type=submit]');
@@ -689,9 +721,10 @@ document.addEventListener('submit', async (e) => {
 });
 
 // ------------------------------------------------------------------ start
-sb.auth.onAuthStateChange((_event, session) => {
+sb.auth.onAuthStateChange((event, session) => {
   const was = S.user?.id; S.user = session?.user ?? null;
-  if (!S.user) { render(); return; }
+  if (event === 'PASSWORD_RECOVERY') { S.recovering = true; S.authMode = 'newpw'; }
+  if (!S.user || S.recovering) { if (S.recovering) $('#app').innerHTML = authView(); else render(); return; }
   if (S.user.id !== was) refresh(false);
 });
 setInterval(() => { if (S.user && !document.hidden && !dlg().open) refresh(); }, 60000);
