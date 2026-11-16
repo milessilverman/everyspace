@@ -10,8 +10,8 @@ const d = (s) => `${s} 08:00Z`; // LA midnight in winter
 const hold = (space, channel, s, e) => one(`select public.place_hold($1, $2, $3, $4) as id`, [space, channel, d(s), d(e)]).then((r) => r.id);
 const status = async (id) => (await one('select status from public.booking_holds where id = $1', [id])).status;
 const reserve = (space, channel, uid, s, e, extra = {}) => one(
-  `insert into public.reservations (space_id, channel, external_uid, source, starts_at, ends_at, kind, created_at)
-   values ($1, $2, $3, 'ical', $4, $5, $6, coalesce($7::timestamptz, now())) returning id`,
+  `insert into public.reservations (space_id, channel, external_uid, source, starts_at, ends_at, all_day, kind, created_at)
+   values ($1, $2, $3, 'ical', $4, $5, true, $6, coalesce($7::timestamptz, now())) returning id`,
   [space, channel, uid, d(s), d(e), extra.kind ?? 'booking', extra.created_at ?? null]).then((r) => r.id);
 
 before(async () => {
@@ -95,9 +95,19 @@ test('rule 3: guard alerts when the instant site reopens dates, and clears once 
   assert.deepEqual(reqs.filter((r) => r.kind === 'reservation').map((r) => r.id).sort(), [...vrbo].sort());
   assert.equal((await one(`select public.record_door_gaps($1, 'airbnb', $2::uuid[], '{}') as n`, [house, [vrbo[1]]])).n, 1);
   const msg = (await one(`select message from public.booking_alerts where kind = 'door_open' and resolved_at is null`)).message;
-  assert.equal(msg, 'Close Mar 01 – Mar 03 on Airbnb now. They are booked on Vrbo, but still open there.');
+  assert.equal(msg, 'Close the nights of Mar 1 – Mar 2 on Airbnb now. They\'re booked on Vrbo, but still open there.');
   await one(`select public.record_door_gaps($1, 'airbnb', '{}', '{}')`, [house]);
   assert.equal((await one(`select count(*)::int as n from public.booking_alerts where kind = 'door_open' and resolved_at is null`)).n, 0);
+});
+
+test('hosts can acknowledge an accepted-without-check alert, but not someone else\'s, and not a dates-still-open alert', async () => {
+  const unchecked = (await one(`select id from public.booking_alerts where kind = 'unchecked_accept' and resolved_at is null`)).id;
+  await db.exec(`set role authenticated; select set_config('request.jwt.claim.sub', '${SAM}', false);`);
+  assert.equal((await one('select public.dismiss_alert($1) as ok', [unchecked])).ok, false);
+  await db.exec(`select set_config('request.jwt.claim.sub', '${MAYA}', false);`);
+  assert.equal((await one('select public.dismiss_alert($1) as ok', [unchecked])).ok, true);
+  await db.exec('reset role');
+  assert.ok((await one('select resolved_at from public.booking_alerts where id = $1', [unchecked])).resolved_at);
 });
 
 test('double-booking check now covers the whole house vs a room inside it', async () => {

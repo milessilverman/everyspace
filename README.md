@@ -12,6 +12,16 @@ Free rental management for everything you rent out: homes, rooms, backyards, poo
 
 `index.html` and `everyspace.html` are the same single-file app. It runs entirely in the browser with demo data (saved in your browser's local storage); connections to other sites are simulated until partner integrations and a backend are in place.
 
+## Host Console (`host/`)
+
+[`host/index.html`](host/index.html) is the real, signed-in app for hosts, connected to the live backend. Once it's on `main` it will be at `https://milessilverman.github.io/everyspace/host/`. Hosts can:
+
+- add places, spaces (a room can sit inside the whole home) and the sites each is listed on;
+- connect each site's calendar both ways, with copy-paste links and steps for each site;
+- choose the one site that takes instant bookings;
+- add a request before accepting it, and get "Close these nights on Airbnb", then "Safe to accept", or "Decline";
+- see alerts, a calendar across every site, and earnings.
+
 ## Backend (`platform/`)
 
 The real backend now lives in [`platform/`](platform/). It runs on Supabase's free plan in West US, launching in Los Angeles. It has:
