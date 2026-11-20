@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Everyspace Host Console</title>
-<meta name="description" content="Run every rental site from one place, with no double bookings.">
+<meta name="description" content="Manage rental channels, calendar sync and booking alerts in one place.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -240,7 +240,7 @@ async function callFn(name, body) {
 const must = ({ data, error }) => { if (error) throw new Error(prettyError(error.message)); return data; };
 
 // ------------------------------------------------------------------ state
-const S = { user: null, profile: null, tab: 'today', properties: [], spaces: [], listings: [], imports: [], feeds: [], reservations: [], holds: [], alerts: [], conflicts: [], ledger: [], verdict: null, openSpace: null, authMode: 'signin' };
+const S = { user: null, profile: null, tab: 'today', properties: [], spaces: [], listings: [], imports: [], feeds: [], reservations: [], holds: [], alerts: [], conflicts: [], ledger: [], apiListings: [], apiRequests: [], apiError: false, verdict: null, openSpace: null, authMode: 'signin' };
 const tzOf = (spaceId) => S.properties.find((p) => p.id === S.spaces.find((s) => s.id === spaceId)?.property_id)?.timezone ?? 'America/Los_Angeles';
 const spaceTitle = (id) => S.spaces.find((s) => s.id === id)?.title ?? 'Space';
 function descendants(spaceId) { const out = new Set(); let grew = true; while (grew) { grew = false; for (const s of S.spaces) if ((s.parent_space_id === spaceId || out.has(s.parent_space_id)) && !out.has(s.id)) { out.add(s.id); grew = true; } } return out; }
@@ -249,9 +249,10 @@ const liveListing = (l) => ['pending', 'live'].includes(l.status);
 const doorsFor = (spaceId) => S.listings.filter((l) => l.booking_mode === 'instant' && liveListing(l) && related(spaceId).has(l.space_id));
 
 async function loadAll() {
+  const hostId = S.user.id;
   const since = new Date(Date.now() - 86400000).toISOString();
-  const [profile, properties, spaces, listings, imports, feeds, reservations, holds, alerts, conflicts, ledger] = await Promise.all([
-    sb.from('profiles').select('id, full_name').eq('id', S.user.id).maybeSingle(),
+  const [profile, properties, spaces, listings, imports, feeds, reservations, holds, alerts, conflicts, ledger, apiListings, apiRequests] = await Promise.all([
+    sb.from('profiles').select('id, full_name').eq('id', hostId).maybeSingle(),
     sb.from('properties').select('id, title, address, city, timezone, created_at').order('created_at'),
     sb.from('spaces').select('id, property_id, parent_space_id, category, title, quantity, created_at').order('created_at'),
     sb.from('channel_listings').select('id, space_id, channel, status, booking_mode, url, created_at').order('created_at'),
@@ -262,21 +263,25 @@ async function loadAll() {
     sb.from('booking_alerts').select('id, space_id, kind, channel, message, created_at, reservation:reservations(channel, starts_at, ends_at, all_day, guest_name)').is('resolved_at', null).order('created_at', { ascending: false }),
     sb.from('conflicts').select('id, space_id, detected_at, a:reservations!conflicts_a_reservation_id_fkey(channel, starts_at, ends_at, all_day), b:reservations!conflicts_b_reservation_id_fkey(channel, starts_at, ends_at, all_day)').is('resolved_at', null),
     sb.from('earnings_ledger').select('id, period, gross_cents, attributed, share_pct, fee_cents, reservation:reservations(channel, space_id, starts_at, ends_at)').order('period', { ascending: false }),
+    sb.from('channel_api_listings').select('id, space_id, channel, authorized, approval_supported, auto_approve'),
+    sb.from('channel_reservation_requests').select('id, listing_id, status, reason, starts_at, ends_at, updated_at').order('updated_at', { ascending: false }).limit(150),
   ]);
+  if (S.user?.id !== hostId) return;
   for (const r of [properties, spaces, listings, imports, feeds, reservations, holds, alerts, conflicts, ledger]) if (r.error) throw new Error(r.error.message);
   Object.assign(S, { profile: profile.data, properties: properties.data, spaces: spaces.data, listings: listings.data, imports: imports.data, feeds: feeds.data,
-    reservations: reservations.data, holds: holds.data, alerts: alerts.data, conflicts: conflicts.data, ledger: ledger.data });
+    reservations: reservations.data, holds: holds.data, alerts: alerts.data, conflicts: conflicts.data, ledger: ledger.data,
+    apiListings: apiListings.data ?? [], apiRequests: apiRequests.data ?? [], apiError: Boolean(apiListings.error || apiRequests.error) });
 }
 async function refresh(quiet = true) {
   try { await loadAll(); render(); } catch (e) { if (!quiet) toast(e.message, true); console.error(e); }
 }
 
 // ------------------------------------------------------------------ rendering
-const TABS = [['today', 'Today'], ['requests', 'Requests'], ['calendar', 'Calendar'], ['places', 'Places & sites'], ['earnings', 'Earnings']];
+const TABS = [['today', 'Today'], ['requests', 'Requests'], ['calendar', 'Calendar'], ['places', 'Places & sites'], ['channels', 'Channels'], ['earnings', 'Earnings']];
 function render() {
   const app = $('#app');
   if (!S.user) { app.innerHTML = authView(); return; }
-  const alertCount = S.alerts.length + S.conflicts.length;
+  const alertCount = S.alerts.length + S.conflicts.length + S.apiRequests.filter(providerNeedsAttention).length;
   const waiting = S.holds.filter((h) => h.status === 'holding' && Date.parse(h.expires_at) > Date.now()).length;
   app.innerHTML = `
     <header class="top"><div class="wrap">
@@ -284,7 +289,7 @@ function render() {
       <nav class="tabs" aria-label="Sections">${TABS.map(([k, label]) => `<button data-tab="${k}" ${S.tab === k ? 'aria-current="page"' : ''}>${label}${(k === 'today' && alertCount) || (k === 'requests' && waiting) ? '<span class="dot" aria-label="needs attention"></span>' : ''}</button>`).join('')}</nav>
       <div class="who"><span class="name small muted">${esc(S.profile?.full_name || S.user.email)}</span><button class="btn sm" data-act="signout">Sign out</button></div>
     </div></header>
-    <main><div class="wrap">${({ today: todayView, requests: requestsView, calendar: calendarView, places: placesView, earnings: earningsView })[S.tab]()}</div></main>`;
+    <main><div class="wrap">${({ today: todayView, requests: requestsView, calendar: calendarView, places: placesView, channels: channelsView, earnings: earningsView })[S.tab]()}</div></main>`;
 }
 
 function authView() {
@@ -308,7 +313,7 @@ function authView() {
     <div class="logo" style="justify-content:center;margin-bottom:18px"><i aria-hidden="true"></i>Everyspace <span>Host</span></div>
     <div class="card">
       <h1 style="font-size:22px">${up ? 'Create your host account' : 'Sign in'}</h1>
-      <p class="muted small" style="margin:6px 0 18px">Run Airbnb, Vrbo and every other site from one place, with no double bookings.</p>
+      <p class="muted small" style="margin:6px 0 18px">Manage Airbnb, Vrbo and your other sites from one place.</p>
       <form id="authForm" class="stack">
         ${up ? '<label class="f">Your name<input type="text" name="name" autocomplete="name" required></label>' : ''}
         <label class="f">Email<input type="email" name="email" autocomplete="email" required></label>
@@ -351,14 +356,18 @@ function todayView() {
   const upcoming = S.reservations.filter((r) => r.kind === 'booking' && Date.parse(r.ends_at) > now).slice(0, 6);
   const gaps = setupGaps();
   const hello = (S.profile?.full_name || '').split(' ')[0];
+  const apiAttention = S.apiRequests.filter(providerNeedsAttention);
   return `
     <div class="section-title"><h1>${hello ? `Hi ${esc(hello)}` : 'Today'}</h1><div class="row"><button class="btn" data-act="syncall">Sync calendars now</button><button class="btn primary" data-act="newreq">New request</button></div></div>
     ${S.alerts.length || S.conflicts.length ? `<div class="stack">${S.conflicts.map((c) => `
       <div class="callout bad"><div class="big">Double booking on “${esc(spaceTitle(c.space_id))}”</div>
         <div>${siteName(c.a?.channel)} ${esc(when(c.a?.starts_at, c.a?.ends_at, c.a?.all_day, tzOf(c.space_id)))} overlaps ${siteName(c.b?.channel)} ${esc(when(c.b?.starts_at, c.b?.ends_at, c.b?.all_day, tzOf(c.space_id)))}. Contact one guest now and help them rebook.</div></div>`).join('')}
       ${S.alerts.map(alertCard).join('')}</div>`
-      : `<div class="callout ok"><div class="big">No double bookings</div><div class="small">Everyspace checks every connected calendar every 15 minutes.</div></div>`}
+      : `<div class="callout ok"><div class="big">No booking conflicts detected</div><div class="small">Calendar checks run every 15 minutes. Booking changes can take longer to appear.</div></div>`}
 
+    ${apiAttention.length ? `<div class="callout warn" style="margin-top:14px"><div class="row between">
+      <div><div class="big">Provider reservations need attention</div><div class="small">${apiAttention.length} to review in Requests.</div></div>
+      <button class="btn sm" data-tab="requests">Review requests</button></div></div>` : ''}
     <div class="grid2" style="margin-top:14px">
       <div class="card"><div class="row between"><h2>Requests waiting</h2><a href="#" data-tab="requests" class="small">See all</a></div>
         ${open.length ? `<div class="list" style="margin-top:12px">${open.slice(0, 4).map(holdRow).join('')}</div>` : `<p class="muted small" style="margin:10px 0 0">None right now. When a request comes in on a request-to-book site, tap “New request” before you accept it.</p>`}</div>
@@ -398,9 +407,9 @@ function holdRow(h) {
 
 function verdictCard(v) {
   if (!v) return '';
-  const tone = { accept: 'ok', close_dates: 'warn', connect_calendar: 'warn', retry: 'warn', decline: 'bad' }[v.step] ?? 'warn';
-  const head = { accept: 'Safe to accept', close_dates: 'Close the dates first', connect_calendar: 'One more step before you accept', retry: "Couldn't check just now", decline: 'Decline this request' }[v.step] ?? 'Check';
-  const what = { accept: `Go to ${siteName(v.channel)} and accept the request. Everyspace has the dates locked and will block them everywhere.`, decline: 'Turn the request down on the site. Those dates are no longer free.' }[v.step];
+  const tone = { accept: 'ok', booked: 'ok', close_dates: 'warn', connect_calendar: 'warn', retry: 'warn', decline: 'bad' }[v.step] ?? 'warn';
+  const head = { accept: 'Safe to accept', booked: 'Confirmed booking', expired: 'Hold expired', close_dates: 'Close the dates first', connect_calendar: 'One more step before you accept', retry: "Couldn't check just now", decline: 'Decline this request' }[v.step] ?? 'Check';
+  const what = { accept: `Go to ${siteName(v.channel)} and accept the request. Everyspace is holding the dates. Calendar updates follow each site’s sync schedule.`, decline: 'Turn the request down on the site. Those dates are no longer free.' }[v.step];
   return `<div class="callout ${tone}" id="verdict" tabindex="-1"><div class="big">${head}</div><div>${esc(v.message)}</div>${what ? `<div class="small" style="margin-top:6px">${esc(what)}</div>` : ''}
     ${v.hold_id && ['close_dates', 'connect_calendar', 'retry'].includes(v.step) ? `<div class="row" style="margin-top:12px"><button class="btn primary sm" data-act="check" data-id="${v.hold_id}">I closed them. Check again</button><button class="btn sm ghost danger" data-act="release" data-id="${v.hold_id}">Declined it</button></div>` : ''}</div>`;
 }
@@ -411,16 +420,86 @@ function requestsView() {
   return `
     <div class="section-title"><div><h1>Requests</h1><p class="muted small" style="margin:4px 0 0">Got a request on a request-to-book site? Add it here before accepting. Everyspace holds the dates and tells you when it's safe.</p></div><button class="btn primary" data-act="newreq">New request</button></div>
     ${verdictCard(S.verdict)}
-    <div class="section-title"><h2>Open</h2></div>
+    <div class="section-title"><h2>Manual requests</h2></div>
     ${open.length ? `<div class="list">${open.map(holdRow).join('')}</div>` : '<div class="card flat empty">No open requests.</div>'}
     ${past.length ? `<div class="section-title"><h2>Earlier</h2></div><div class="list">${past.slice(0, 20).map(holdRow).join('')}</div>` : ''}
-    <details class="more" style="margin-top:22px"><summary>How this keeps double bookings from happening</summary>
+    <div class="section-title"><h2>Recent provider reservations</h2><a href="#" data-tab="channels" class="small">Connections</a></div>
+    ${S.apiRequests.length ? `<div class="list">${S.apiRequests.map(providerRequestRow).join('')}</div>`
+      : `<div class="card flat empty">${S.apiError ? 'Provider reservation status is unavailable.' : 'No provider reservations received.'}</div>`}
+    <details class="more" style="margin-top:22px"><summary>How manual booking checks work</summary>
       <div class="steps" style="margin-top:12px">
         <div class="step"><h4>One site books instantly</h4><div class="small muted">For each space, only one site (usually Airbnb) has Instant Book on. Every other site is set to request-to-book.</div></div>
-        <div class="step"><h4>Requests get held here first</h4><div class="small muted">When a request arrives elsewhere, add it here. Everyspace locks those dates so nothing else can take them.</div></div>
+        <div class="step"><h4>Requests get held here first</h4><div class="small muted">When a request arrives elsewhere, add it here. Everyspace holds those dates against other requests it manages.</div></div>
         <div class="step"><h4>Close the dates on the instant site</h4><div class="small muted">Everyspace reads that site's calendar live and only says “Safe to accept” once the dates are closed there.</div></div>
         <div class="step"><h4>Everyspace keeps watching</h4><div class="small muted">Every 15 minutes it checks that the dates are still closed, and alerts you if anything slips.</div></div>
       </div></details>`;
+}
+
+const PROVIDER_ATTENTION = {
+  provider_read_failed: 'Everyspace could not read the request. Check its status with the provider.',
+  approval_unavailable: 'The provider approval operation is unavailable.',
+  availability_unverified: 'Direct availability could not be verified for every active channel.',
+  independent_instant_booking: 'An external listing can confirm bookings independently.',
+  request_mode_required: 'The listing must be live and set to request to book.',
+  capacity_requires_review: 'Review this request manually because the space has multi-unit inventory.',
+  request_unverified: 'Everyspace needs a fresh provider check before it can proceed.',
+  competing_request_unverified: 'A competing request is waiting for provider details.',
+  competing_quotes_unverified: 'The expected payouts are missing or use different currencies.',
+  dates_taken: 'The dates are blocked or held. Check overlaps before responding on the provider.',
+  provider_deadline_passed: 'The recorded response deadline has passed. Check the current provider status.',
+  confirmation_unverified: 'The dates are still held. Verify the outcome with the provider before accepting another request.',
+  provider_state_conflict: 'The provider returned inconsistent statuses. Check the booking on the provider.',
+  provider_identity_conflict: 'The confirmation matches another calendar record. Verify the booking identity with the provider.',
+  provider_dates_invalid: 'Everyspace could not verify the dates supplied by the provider.',
+  provider_dates_changed: 'The provider confirmed different dates. Review the calendar for conflicts.',
+};
+const providerNeedsAttention = (r) => r.status === 'uncertain' || Object.hasOwn(PROVIDER_ATTENTION, r.reason);
+
+function providerRequestRow(r) {
+  const listing = S.apiListings.find((l) => l.id === r.listing_id);
+  if (!listing) return '';
+  const labels = { pending: 'Pending', approving: 'Awaiting confirmation', uncertain: 'Confirmation uncertain',
+    confirmed: 'Confirmed', declined: 'Declined', expired: 'Expired', cancelled: 'Cancelled' };
+  const detail = PROVIDER_ATTENTION[r.reason] ?? ({
+    automation_off: 'Automatic approval is off for this listing.',
+    competing_request_preferred: 'An overlapping request ranked higher by expected host payout.',
+    provider_confirmed_independently: 'Confirmed by the provider.',
+  }[r.reason] ?? '');
+  const dates = r.starts_at && r.ends_at ? when(r.starts_at, r.ends_at, true, tzOf(listing.space_id)) : 'Dates unavailable';
+  return `<div class="item"><span class="site" style="${siteVar(listing.channel)}">${siteName(listing.channel)}</span>
+    <div class="grow"><strong>${esc(dates)}</strong><div class="small muted">${esc(spaceTitle(listing.space_id))} · Updated ${ago(r.updated_at)}</div>
+    ${detail ? `<div class="small">${esc(detail)}</div>` : ''}</div>
+    <span class="chip ${providerNeedsAttention(r) ? 'warn' : r.status === 'confirmed' ? 'ok' : ''}">${esc(labels[r.status] ?? r.status)}</span></div>`;
+}
+
+function channelsView() {
+  const cards = ['airbnb', 'vrbo'].map((channel) => {
+    const spaceIds = [...new Set([...S.listings, ...S.imports, ...S.apiListings]
+      .filter((l) => l.channel === channel).map((l) => l.space_id))];
+    const rows = spaceIds.map((id) => {
+      const api = S.apiListings.find((l) => l.space_id === id && l.channel === channel);
+      const calendar = S.imports.find((i) => i.space_id === id && i.channel === channel);
+      const feed = S.feeds.find((f) => f.space_id === id && f.for_channel === channel);
+      const syncState = !calendar ? 'iCal link needed' : calendar.last_status === 'error' ? 'iCal sync failed'
+        : !calendar.last_synced_at ? 'iCal sync pending'
+        : Date.now() - Date.parse(calendar.last_synced_at) > 30 * 60000 ? `iCal last synced ${ago(calendar.last_synced_at)}`
+        : `iCal synced ${ago(calendar.last_synced_at)}`;
+      const authState = S.apiError && !api ? 'Direct API status unavailable' : api?.authorized ? 'Direct API authorized' : 'Direct API authorization needed';
+      const approval = !api?.authorized ? 'Automatic approval unavailable'
+        : !api.approval_supported ? 'Automatic approval unsupported' : api.auto_approve ? 'Automatic approval enabled' : 'Automatic approval off';
+      return `<div class="item"><div class="grow"><strong>${esc(spaceTitle(id))}</strong>
+        <div class="small muted">${esc(authState)} · ${esc(approval)}</div>
+        <div class="small">${esc(syncState)} · ${feed?.last_fetched_at ? `Export read ${ago(feed.last_fetched_at)}` : 'Export read unverified'}</div></div>
+        <button class="btn sm" data-tab="places" data-space="${esc(id)}">Manage calendars</button></div>`;
+    });
+    return `<section class="card"><h2><span class="site" style="${siteVar(channel)}">${siteName(channel)}</span></h2>
+      ${rows.length ? `<div class="list" style="margin-top:12px">${rows.join('')}</div>`
+        : '<p class="small muted">No listings connected. Automatic approval requires an authorized API connection.</p>'}</section>`;
+  });
+  return `<div class="section-title"><div><h1>Channels</h1><p class="small muted" style="margin:4px 0 0">Direct API access and calendar sync by space.</p></div>
+    <button class="btn" data-act="syncall">Sync calendars now</button></div>
+    ${S.apiError ? '<div class="callout warn" style="margin-bottom:14px">Direct integration status could not be loaded. Calendar setup is available in Places &amp; sites.</div>' : ''}
+    <div class="grid2">${cards.join('')}</div>`;
 }
 
 function calendarView() {
@@ -434,11 +513,15 @@ function calendarView() {
     const hdr = days.map((d, i) => { const n = new Date(`${d}T12:00:00Z`).getUTCDate(); return `<div class="hdr">${i === 0 || n === 1 ? `<b>${mon(d)}</b><br>` : '<br>'}${n}</div>`; }).join('');
     const rows = S.spaces.filter((s) => s.property_id === p.id).map((s) => {
       const fam = related(s.id);
+      const apiHolds = S.apiRequests.filter((r) => ['approving', 'uncertain'].includes(r.status)
+        && fam.has(S.apiListings.find((l) => l.id === r.listing_id)?.space_id));
       const cells = days.map((d) => {
         const a = zoned(d, '00:00', tz), b = zoned(addDays(d, 1), '00:00', tz);
         const hits = S.reservations.filter((r) => fam.has(r.space_id) && Date.parse(r.starts_at) < b && Date.parse(r.ends_at) > a);
         const book = hits.filter((r) => r.kind === 'booking'); const block = hits.find((r) => r.kind !== 'booking');
-        const held = S.holds.some((h) => fam.has(h.space_id) && ['holding', 'safe'].includes(h.status) && Date.parse(h.expires_at) > now && Date.parse(h.starts_at) < b && Date.parse(h.ends_at) > a);
+        const overlaps = (r) => Date.parse(r.starts_at) < b && Date.parse(r.ends_at) > a;
+        const held = apiHolds.some(overlaps) || S.holds.some((h) => fam.has(h.space_id)
+          && ['holding', 'safe'].includes(h.status) && Date.parse(h.expires_at) > now && overlaps(h));
         const cls = ['d', book.length ? 'b' : block ? 'k' : '', held ? 'h' : '', book.length > 1 ? 'x' : '', d === today ? 't' : ''].join(' ');
         const label = `${d}: ${book.length ? book.map((r) => siteName(r.channel)).join(' + ') : block ? 'closed' : 'open'}${held ? ', request held' : ''}`;
         return `<div class="${cls}" style="${book[0] ? siteVar(book[0].channel) : ''}" title="${esc(label)}" aria-label="${esc(label)}"></div>`;
@@ -725,7 +808,10 @@ sb.auth.onAuthStateChange((event, session) => {
   const was = S.user?.id; S.user = session?.user ?? null;
   if (event === 'PASSWORD_RECOVERY') { S.recovering = true; S.authMode = 'newpw'; }
   if (!S.user || S.recovering) { if (S.recovering) $('#app').innerHTML = authView(); else render(); return; }
-  if (S.user.id !== was) refresh(false);
+  if (S.user.id !== was) {
+    Object.assign(S, { apiListings: [], apiRequests: [], apiError: false });
+    refresh(false);
+  }
 });
 setInterval(() => { if (S.user && !document.hidden && !dlg().open) refresh(); }, 60000);
 // onAuthStateChange fires INITIAL_SESSION on load, which renders the sign-in screen or loads the host's data.

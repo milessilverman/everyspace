@@ -17,7 +17,10 @@ The real backend behind the Everyspace demo (`../everyspace__1-1.html`). It runs
 | `supabase/functions/_shared/cors.ts` | Lets the Host Console call the functions from the browser. Access still depends on the login token. |
 | `supabase/functions/booking-guard` | "Is it safe to accept this request?" Holds the dates, reads the instant site's calendar live, and answers accept, close the dates first, or decline. |
 | `supabase/cron/calendar_sync.sql` | Schedules the sync and the daily revenue-share accrual. Run it once after deploying. Already done on the live project. |
-| `tests/` | 34 tests, including the full schema run in an in-memory Postgres with row-level security checks. |
+| `supabase/functions/channel-reservations` | Provider webhook and worker entry points, with disabled Airbnb and Vrbo transports pending partner access. |
+| `tests/` | Platform tests, including the full schema in Postgres, row-level security, and separate-session concurrency. |
+
+See [Airbnb and Vrbo reservation connectivity](docs/CHANNEL_RESERVATIONS.md) for verified provider capabilities, onboarding and local testing.
 
 ## Run the tests
 

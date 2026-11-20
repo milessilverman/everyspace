@@ -16,22 +16,28 @@ const ANON = Deno.env.get('SUPABASE_ANON_KEY')!;
 const admin = createClient(URL_, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!, { auth: { persistSession: false } });
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...CORS, 'content-type': 'application/json' } });
 
-type Verdict = { safe: boolean; step: 'accept' | 'close_dates' | 'connect_calendar' | 'decline' | 'retry'; message: string; hold_id?: string };
+type Verdict = { safe: boolean; step: 'accept' | 'booked' | 'expired' | 'close_dates' | 'connect_calendar' | 'decline' | 'retry'; message: string; hold_id?: string };
 
 async function check(holdId: string): Promise<Verdict> {
   const { data: h } = await admin.from('booking_holds')
-    .select('id, space_id, channel, starts_at, ends_at, all_day, status, released_reason, spaces!inner(title, properties!inner(timezone))')
+    .select('id, space_id, channel, starts_at, ends_at, all_day, status, released_reason, expires_at, spaces!inner(title, properties!inner(timezone))')
     .eq('id', holdId).single();
   if (!h) return { safe: false, step: 'decline', message: 'That request is no longer held.' };
   // deno-lint-ignore no-explicit-any
   const sp = (h as any).spaces; const timeZone: string = sp.properties.timezone;
   const dates = describeDates(h.starts_at, h.ends_at, h.all_day, timeZone);
-  if (h.status === 'safe' || h.status === 'confirmed') return { safe: true, step: 'accept', hold_id: h.id, message: `Safe to accept ${dates}.` };
+  if (h.status === 'confirmed') return { safe: false, step: 'booked', hold_id: h.id, message: `Already booked for ${dates}.` };
   if (h.status === 'released') {
     return { safe: false, step: 'decline', hold_id: h.id, message: h.released_reason === 'taken' ? `Another booking took ${dates}. Decline this request.` : 'This hold was released. Start again if the request is still open.' };
   }
+  if (Date.parse(h.expires_at) <= Date.now()) {
+    return { safe: false, step: 'expired', hold_id: h.id, message: 'This hold has expired. Start a new request if it is still open.' };
+  }
 
-  const { data: doors } = await admin.rpc('door_listings', { p_space: h.space_id });
+  const { data: doors, error: doorsError } = await admin.rpc('door_listings', { p_space: h.space_id });
+  if (doorsError) {
+    return { safe: false, step: 'retry', hold_id: h.id, message: 'Booking settings could not be checked. Try again before accepting.' };
+  }
   for (const door of (doors ?? []) as { space_id: string; channel: string }[]) {
     if (door.channel === 'everyspace') continue; // Everyspace bookings live in this database and were checked under the lock.
     const site = siteName(door.channel);

@@ -10,3 +10,7 @@ verify_jwt = true
 
 [functions.booking-guard]
 verify_jwt = true
+
+# The function verifies provider signatures or its dedicated worker secret before doing any work.
+[functions.channel-reservations]
+verify_jwt = false

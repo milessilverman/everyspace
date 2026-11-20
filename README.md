@@ -29,14 +29,15 @@ Data sources, all queried from the visitor's browser: LA County Assessor parcels
 - connect each site's calendar both ways, with copy-paste links and steps for each site;
 - choose the one site that takes instant bookings;
 - add a request before accepting it, and get "Close these nights on Airbnb", then "Safe to accept", or "Decline";
-- see alerts, a calendar across every site, and earnings.
+- see alerts, a calendar across every site, and earnings;
+- see Airbnb and Vrbo authorization, calendar sync and reservation status under Channels and Requests.
 
 ## Backend (`platform/`)
 
 The real backend now lives in [`platform/`](platform/). It runs on Supabase's free plan in West US, launching in Los Angeles. It has:
 
 - **Two-way calendar sync** with Airbnb, Vrbo and others, every 15 minutes.
-- **No-double-booking rules:** one instant-book site per space; requests on other sites hold the dates, and are marked safe to accept only after the dates are proven closed everywhere; plus a guard that flags anything that slips.
+- **Conflict prevention:** one instant-book site per space; requests on other sites hold the dates, and are marked safe to accept only after the dates are proven closed everywhere; plus a guard that flags anything that slips.
 - **Revenue-share billing:** 10% of the extra money Everyspace brings in, until the fee reaches $30 in a month, then 3%.
 
 See [`platform/README.md`](platform/README.md) and the game plan in [`platform/docs/PLAN.md`](platform/docs/PLAN.md).
@@ -65,7 +66,7 @@ node --test tests/*.test.mjs
 
 They load the app's domain code straight from `index.html`, so the site stays a single file.
 
-The backend has its own 31 tests. From `platform/`:
+The backend has its own test suite. From `platform/`:
 
 ```bash
 npm install
