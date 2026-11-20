@@ -45,7 +45,7 @@ async function syncOne(imp: Import) {
     }
     if (plan.cancelUids.length) {
       const { error } = await admin.from('reservations').update({ status: 'cancelled', updated_at: started })
-        .eq('space_id', imp.space_id).eq('channel', imp.channel).in('external_uid', plan.cancelUids);
+        .eq('space_id', imp.space_id).eq('channel', imp.channel).eq('source', 'ical').in('external_uid', plan.cancelUids);
       if (error) throw new Error(error.message);
     }
     const { data: conflicts } = await admin.rpc('detect_conflicts', { p_space: imp.space_id });

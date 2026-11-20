@@ -1,60 +1,65 @@
-/**
- * Channel API boundary. No provider API is enabled until credentials, partner
- * approval, and the exact reservation workflow have been verified.
- *
- * iCal feeds are NOT authoritative for instant booking.
- */
-export type Channel = "airbnb" | "vrbo";
-export type ReservationDecision = "approved" | "declined" | "pending";
+// Provider contracts are normalized inside each approved adapter. No calendar feed implements this interface.
+export const CHANNELS = ['airbnb', 'vrbo'] as const;
+export type Channel = typeof CHANNELS[number];
 
-export interface BookingRequest {
+export type ProviderListing = {
+  id: string;
   channel: Channel;
-  externalRequestId: string;
-  spaceId: string;
-  checkIn: string;  // YYYY-MM-DD inclusive
-  checkOut: string; // YYYY-MM-DD exclusive
-}
+  accountRef: string;
+  listingRef: string;
+};
 
-export interface ApprovalResult {
-  decision: ReservationDecision;
-  externalReservationId?: string;
-  reason?: string;
-}
+export type BookingRequest = Omit<ProviderListing, 'id'> & { externalRequestId: string };
+export type Stay = { checkIn: string; checkOut: string }; // Local dates, checkout exclusive.
+export type Quote = { netMinor: number; currency: string }; // Expected host proceeds after provider fees.
+
+export type ProviderState = BookingRequest & (
+  | ({ state: 'pending'; expiresAt: string | null; quote: Quote | null } & Stay)
+  | ({ state: 'confirmed'; reservationRef: string; calendarUid?: string } & Stay)
+  | { state: 'declined' | 'expired' }
+  | { state: 'cancelled'; reservationRef: string }
+);
+
+export type Availability = {
+  state: 'clear' | 'occupied' | 'unknown';
+  bookingMode: 'request' | 'closed' | 'instant' | 'unknown';
+  observedAt: string;
+};
+
+export type ProviderDelivery = BookingRequest & { deliveryId: string };
 
 export interface ChannelAdapter {
   readonly channel: Channel;
-  /** True only after the partner API has been approved and verified. */
+  readonly supportsWebhooks: boolean;
+  readonly supportsAvailability: boolean;
   readonly supportsProgrammaticApproval: boolean;
-  /** Fetch authoritative request state, not a cached iCal feed. */
-  getPendingRequest(externalRequestId: string): Promise<BookingRequest | null>;
-  /** Confirm with the provider, returning the provider's actual outcome. */
-  approve(externalRequestId: string): Promise<ApprovalResult>;
-  decline(externalRequestId: string): Promise<ApprovalResult>;
+  readonly supportsProgrammaticDecline: boolean;
+  // Verify provider-specific authentication and replay requirements against the original bytes.
+  // Normalize a stable listing-scoped delivery ID and the account, listing and request it applies to.
+  verifyWebhook(headers: Headers, body: Uint8Array, signal: AbortSignal): Promise<ProviderDelivery | null>;
+  // A missing or inconclusive read is null. Terminal states must be authoritative for this exact request.
+  getReservation(request: BookingRequest, signal: AbortSignal): Promise<ProviderState | null>;
+  // Read real inventory for the specified dates. 'clear' rules out conflicting bookings. Only the
+  // target's own pending request may be ignored when evaluating inventory for that listing.
+  getAvailability(listing: ProviderListing, stay: Stay, externalRequestId: string | null, signal: AbortSignal): Promise<Availability>;
+  // Send the stable operation ID when the approved provider contract supports idempotency.
+  // A successful HTTP response still requires a separate authoritative read.
+  approve(request: BookingRequest, operationId: string, signal: AbortSignal): Promise<void>;
+  decline(request: BookingRequest, operationId: string, signal: AbortSignal): Promise<void>;
 }
 
-/** Fail closed rather than silently claiming that a calendar sync is an approval. */
-export async function approveThroughChannel(
-  adapter: ChannelAdapter,
-  request: BookingRequest,
-): Promise<ApprovalResult> {
-  if (adapter.channel !== request.channel) {
-    return { decision: "pending", reason: "Channel mismatch" };
-  }
-  if (!adapter.supportsProgrammaticApproval) {
-    return { decision: "pending", reason: "Provider approval API unavailable; do not auto-confirm" };
-  }
-  const current = await adapter.getPendingRequest(request.externalRequestId);
-  if (!current || current.spaceId !== request.spaceId ||
-      current.checkIn !== request.checkIn || current.checkOut !== request.checkOut) {
-    return { decision: "pending", reason: "Request could not be verified with provider" };
-  }
-  try {
-    const result = await adapter.approve(request.externalRequestId);
-    if (result.decision === "approved" && !result.externalReservationId) {
-      return { decision: "pending", reason: "Provider did not return a confirmed reservation ID" };
-    }
-    return result;
-  } catch {
-    return { decision: "pending", reason: "Provider approval failed; reconcile before retry" };
-  }
+export function unavailableAdapter(channel: Channel): ChannelAdapter {
+  const unavailable = () => Promise.reject(new Error('Provider API access unavailable'));
+  return Object.freeze({
+    channel,
+    supportsWebhooks: false,
+    supportsAvailability: false,
+    supportsProgrammaticApproval: false,
+    supportsProgrammaticDecline: false,
+    verifyWebhook: unavailable,
+    getReservation: unavailable,
+    getAvailability: unavailable,
+    approve: unavailable,
+    decline: unavailable,
+  });
 }
