@@ -1,4 +1,5 @@
 import {
+  isProviderReference,
   type Availability, type BookingRequest, type Channel, type ChannelAdapter,
   type ProviderDelivery, type ProviderListing, type ProviderState,
 } from './channel-adapters.ts';
@@ -50,8 +51,6 @@ function sameRequest(expected: BookingRequest, actual: BookingRequest): boolean 
 
 const validTimestamp = (value: string) =>
   typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T.*(?:Z|[+-]\d\d:\d\d)$/.test(value) && Number.isFinite(Date.parse(value));
-const validRef = (value: string, maxLength: number) =>
-  typeof value === 'string' && value.trim() === value && value.length > 0 && value.length <= maxLength && !/[\x00-\x1f\x7f]/.test(value);
 
 function validDate(value: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || value < '0001-01-01' || !Number.isFinite(Date.parse(value))) return false;
@@ -64,14 +63,14 @@ function validSnapshot(snapshot: ProviderState): boolean {
     case 'confirmed': {
       if (!validDate(snapshot.checkIn) || !validDate(snapshot.checkOut) || snapshot.checkIn >= snapshot.checkOut) return false;
       if (snapshot.state === 'confirmed') {
-        return validRef(snapshot.reservationRef, 240) && (snapshot.calendarUid === undefined || validRef(snapshot.calendarUid, 512));
+        return isProviderReference(snapshot.reservationRef) && (snapshot.calendarUid === undefined || isProviderReference(snapshot.calendarUid, 512));
       }
       const quote = snapshot.quote;
       return (snapshot.expiresAt === null || validTimestamp(snapshot.expiresAt))
         && (quote === null || (Number.isSafeInteger(quote.netMinor) && quote.netMinor >= 0 && /^[A-Z]{3}$/.test(quote.currency)));
     }
     case 'cancelled':
-      return validRef(snapshot.reservationRef, 240);
+      return isProviderReference(snapshot.reservationRef);
     case 'declined':
     case 'expired':
       return true;

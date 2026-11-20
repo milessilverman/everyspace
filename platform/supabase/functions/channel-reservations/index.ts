@@ -1,3 +1,5 @@
+// Use the same pinned SDK import as the other Edge Functions.
+// deno-lint-ignore no-import-prefix
 import { createClient } from 'npm:@supabase/supabase-js@2.45.4';
 import { airbnbAdapter } from '../_shared/airbnb-adapter.ts';
 import { vrboAdapter } from '../_shared/vrbo-adapter.ts';

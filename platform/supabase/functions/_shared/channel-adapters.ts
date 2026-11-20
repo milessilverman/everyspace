@@ -28,6 +28,14 @@ export type Availability = {
 
 export type ProviderDelivery = BookingRequest & { deliveryId: string };
 
+export function isProviderReference(value: unknown, maxLength = 240): value is string {
+  // Provider identifiers are also stored in Postgres text columns and decision logs.
+  // deno-lint-ignore no-control-regex
+  const controlCharacter = /[\x00-\x1f\x7f]/;
+  return typeof value === 'string' && value.trim() === value && value.length > 0
+    && value.length <= maxLength && !controlCharacter.test(value);
+}
+
 export interface ChannelAdapter {
   readonly channel: Channel;
   readonly supportsWebhooks: boolean;

@@ -1,4 +1,4 @@
-import { CHANNELS, type Channel, type ProviderDelivery } from './channel-adapters.ts';
+import { CHANNELS, isProviderReference, type Channel, type ProviderDelivery } from './channel-adapters.ts';
 import { type Adapters, type ReservationStore, withProviderDeadline } from './channel-reservation-engine.ts';
 
 const MAX_WEBHOOK_BYTES = 64 * 1024;
@@ -25,7 +25,7 @@ async function webhookBody(request: Request): Promise<Uint8Array | null> {
 
 function validDelivery(value: ProviderDelivery | null, channel: Channel): value is ProviderDelivery {
   return value?.channel === channel && [value.deliveryId, value.accountRef, value.listingRef, value.externalRequestId]
-    .every((ref) => typeof ref === 'string' && ref.trim() === ref && ref.length > 0 && ref.length <= 240 && !/[\x00-\x1f\x7f]/.test(ref));
+    .every((ref) => isProviderReference(ref));
 }
 
 async function validWorker(request: Request, secret: string | undefined): Promise<boolean> {
