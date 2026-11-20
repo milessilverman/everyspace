@@ -4,6 +4,8 @@ November 20, 2026 UTC. The review covers the adapter boundary in draft PR #6, th
 
 **Pilot decision — staging only for now.** A small, supervised observation pilot is appropriate after the staging checks below pass and the founder approves the scope with opted-in hosts. Everyspace can record external bookings, hold local inventory, and show conflicts. Hosts must verify provider availability and make booking decisions on the provider. The public provider audit covers all 22 catalog entries and the Swimply rollout. [Provider audit and founder actions](PROVIDER_AUDIT.md)
 
+The follow-up staging runbook records the operational rehearsal, monitoring, rollback procedure, approvals and the latest pilot decision. [Staging and pilot runbook](STAGING_PILOT.md)
+
 ## What changed
 
 - Calendar sync now claims each feed with an expiring lease and applies a bounded snapshot in one database transaction under the property lock. It records failed attempts separately from successful observations. Missing bookings and older explicit revisions remain occupied until verified. Feed edits invalidate in-flight snapshots. The downloader restricts requests and redirects to approved HTTPS hosts. The parser rejects incomplete feeds and ambiguous ranges. Export uses a bounded single-value database snapshot and marks only a GET as a fetch request.

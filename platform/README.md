@@ -25,6 +25,8 @@ See [universal rental management](docs/UNIVERSAL_CHANNELS.md) for the catalog, e
 
 The [technical audit](docs/TECHNICAL_AUDIT.md) records the verified tests and staging requirements. The [provider audit](docs/PROVIDER_AUDIT.md) covers all 22 channels, access requirements and the Swimply strategy.
 
+The [staging and pilot runbook](docs/STAGING_PILOT.md) covers the isolated rehearsal, operational warnings, rollback and approvals. The [Swimply read-only calendar plan](docs/SWIMPLY_READ_ONLY.md) documents the host calendar connection, authorization, latency measurements and costs.
+
 ## Run the tests
 
 ```bash
@@ -33,6 +35,13 @@ npm install
 
 ```bash
 npm test
+```
+
+Run the isolated staging rehearsal from the repository root as described in the runbook.
+
+```bash
+npm ci --prefix platform
+npm run test:staging --prefix platform
 ```
 
 ## Deploy after approval

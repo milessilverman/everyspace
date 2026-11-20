@@ -1,5 +1,7 @@
 // Scheduled and interactive calendar reads share an operator-controlled HTTPS allowlist.
 // Extend it with exact feed hosts verified during provider setup.
+import { IncompleteCalendarObservation } from './calendar-observation.ts';
+
 const DEFAULT_HOSTS = [
   'www.airbnb.com', 'www.vrbo.com', 'www.homeaway.com', 'ical.booking.com',
   'www.booking.com', 'calendar.google.com', 'swimply.com', 'www.swimply.com',
@@ -28,7 +30,7 @@ function approvedUrl(value: string, hosts: Set<string>): URL {
 
 async function readLimited(res: Response): Promise<string> {
   const reader = res.body?.getReader();
-  if (!reader) throw new CalendarFetchError('The provider returned an empty calendar response.');
+  if (!reader) throw new IncompleteCalendarObservation('The provider returned an empty calendar response.');
   const decoder = new TextDecoder('utf-8', { fatal: true });
   let result = '';
   let size = 0;
@@ -38,7 +40,7 @@ async function readLimited(res: Response): Promise<string> {
     size += value.byteLength;
     if (size > MAX_BYTES) {
       await reader.cancel();
-      throw new CalendarFetchError('The provider calendar is over the 3 MB limit.');
+      throw new IncompleteCalendarObservation('The provider calendar is over the 3 MB limit.');
     }
     result += decoder.decode(value, { stream: true });
   }
@@ -64,6 +66,7 @@ export function createCalendarFetcher(additionalHosts = '', fetcher: typeof fetc
         }
         if (!response.ok || response.status !== 200) {
           await response.body?.cancel();
+          if (response.status === 206) throw new IncompleteCalendarObservation('The provider returned part of the calendar.');
           throw new CalendarFetchError(response.status === 404
             ? 'The provider could not find this calendar. Copy a fresh link from the listing.'
             : 'The provider did not return a complete calendar.');
@@ -71,7 +74,7 @@ export function createCalendarFetcher(additionalHosts = '', fetcher: typeof fetc
         return await readLimited(response);
       }
     } catch (error) {
-      if (error instanceof CalendarFetchError) throw error;
+      if (error instanceof CalendarFetchError || error instanceof IncompleteCalendarObservation) throw error;
       throw new CalendarFetchError('The provider calendar could not be read. Everyspace kept the previous bookings.');
     }
     throw new CalendarFetchError('The calendar redirect could not be verified.');

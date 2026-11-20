@@ -277,7 +277,8 @@ function emptyDashboard() {
   return {
     profile: null, properties: [], spaces: [], listings: [], imports: [], feeds: [], reservations: [], holds: [],
     alerts: [], conflicts: [], ledger: [], apiListings: [], apiRequests: [], apiError: false,
-    emailReviews: [], emailError: false, verdict: null, openSpace: null, calendarQuery: '', loadedAt: null, viewError: false, limited: false,
+    emailReviews: [], emailError: false, operations: null, operationsError: false,
+    verdict: null, openSpace: null, calendarQuery: '', loadedAt: null, viewError: false, limited: false,
   };
 }
 const S = { ...emptyDashboard(), user: null, tab: 'today', authMode: 'signin' };
@@ -307,7 +308,7 @@ async function loadAll() {
   const sequence = ++loadSequence;
   const now = new Date().toISOString();
   const since = new Date(Date.now() - 86400000).toISOString();
-  const [profile, properties, spaces, listings, imports, feeds, reservations, holds, pastHolds, alerts, conflicts, ledger, apiListings, apiRequests, emailReviews] = await Promise.all([
+  const [profile, properties, spaces, listings, imports, feeds, reservations, holds, pastHolds, alerts, conflicts, ledger, apiListings, apiRequests, emailReviews, operations] = await Promise.all([
     sb.from('profiles').select('id, full_name').eq('id', hostId).maybeSingle(),
     sb.from('properties').select('id, title, address, city, timezone, created_at').order('created_at'),
     sb.from('spaces').select('*').order('created_at'),
@@ -326,6 +327,7 @@ async function loadAll() {
     sb.from('channel_reservation_requests').select('id, listing_id, status, reason, starts_at, ends_at, updated_at').order('updated_at', { ascending: false }).limit(150),
     sb.from('booking_email_reviews').select('id, space_id, channel, reference, reported_status, starts_at, ends_at, all_day, units, issues, status, created_at')
       .eq('status', 'needs_review').order('created_at', { ascending: true }).limit(100),
+    sb.rpc('host_operational_warnings'),
   ]);
   if (S.user?.id !== hostId || loadSequence !== sequence) return false;
   if ([properties, spaces, listings, imports, feeds, reservations, holds, pastHolds, alerts, conflicts, ledger].some((r) => r.error)) {
@@ -336,7 +338,8 @@ async function loadAll() {
   Object.assign(S, { profile: profile.data, properties: properties.data, spaces: spaces.data, listings: listings.data, imports: imports.data, feeds: feeds.data,
     reservations: reservations.data, holds: allHolds, alerts: alerts.data, conflicts: conflicts.data, ledger: ledger.data,
     apiListings: apiListings.data ?? [], apiRequests: apiRequests.data ?? [], apiError: Boolean(apiListings.error || apiRequests.error),
-    emailReviews: emailReviews.data ?? [], emailError: Boolean(emailReviews.error), loadedAt: Date.now(), viewError: false,
+    emailReviews: emailReviews.data ?? [], emailError: Boolean(emailReviews.error),
+    operations: operations.data, operationsError: Boolean(operations.error), loadedAt: Date.now(), viewError: false,
     limited: [reservations, holds].some((r) => r.count > r.data.length) || (emailReviews.data?.length ?? 0) >= 100 });
   return true;
 }
@@ -349,7 +352,8 @@ const TABS = [['today', 'Today'], ['requests', 'Requests'], ['calendar', 'Calend
 function render() {
   const app = $('#app');
   if (!S.user) { app.innerHTML = authView(); return; }
-  const alertCount = S.alerts.length + S.conflicts.length + S.apiRequests.filter(providerNeedsAttention).length + S.emailReviews.length;
+  const alertCount = S.alerts.length + S.conflicts.length + S.apiRequests.filter(providerNeedsAttention).length
+    + S.emailReviews.length + (S.operations?.total ?? 0) + Number(S.operationsError);
   const waiting = S.holds.filter((h) => h.status === 'holding' && Date.parse(h.expires_at) > Date.now()).length + S.emailReviews.length;
   app.innerHTML = `
     <header class="top"><div class="wrap">
@@ -412,12 +416,37 @@ function setupGaps() {
       const imp = S.imports.find((i) => i.space_id === sp.id && i.channel === l.channel);
       const feed = S.feeds.find((f) => f.space_id === sp.id && f.for_channel === l.channel);
       if (!imp && hasCalendar(INTEGRATIONS[l.channel]?.calendarExport)) gaps.push({ msg: `“${sp.title}” on ${siteName(l.channel)}: add ${siteName(l.channel)}'s calendar link (step 1).`, go: 'places', space: sp.id });
-      else if (imp?.last_status === 'error') gaps.push({ msg: `“${sp.title}” on ${siteName(l.channel)}: calendar needs attention. ${imp.last_error ?? ''}`, go: 'places', space: sp.id, bad: true });
+      else if (imp?.last_status === 'error' && S.operationsError) gaps.push({ msg: `“${sp.title}” on ${siteName(l.channel)}: calendar needs attention. ${imp.last_error ?? ''}`, go: 'places', space: sp.id, bad: true });
       if (feed && !feed.last_fetched_at && hasCalendar(INTEGRATIONS[l.channel]?.calendarImport)) gaps.push({ msg: `“${sp.title}” on ${siteName(l.channel)}: paste the Everyspace link into the provider’s calendar settings. The feed has yet to be fetched.`, go: 'places', space: sp.id });
       if (l.booking_mode === 'instant' && !VERIFIABLE.has(l.channel)) gaps.push({ msg: `“${sp.title}”: ${siteName(l.channel)} takes instant bookings. Verify closures on the provider or switch it to request-to-book there.`, go: 'places', space: sp.id, bad: true });
     }
   }
   return gaps;
+}
+
+const OPERATION_WARNINGS = {
+  stale_calendar: ['Calendar read overdue', 'Everyspace has no recent calendar read. Check the provider for new or changed bookings.', 'places', 'Review connection'],
+  failed_sync: ['Calendar sync failed', 'Everyspace kept the last recorded bookings. Check the calendar link and retry.', 'places', 'Review connection'],
+  incomplete_import: ['Calendar import incomplete', 'Some events could not be verified. Compare the recorded dates with the provider before freeing any time.', 'calendar', 'Review calendar'],
+  possible_duplicate: ['Possible duplicate booking', 'An import and another record cover the same time. Compare the provider references before changing either record.', 'calendar', 'Compare bookings'],
+  unresolved_hold: ['Booking hold needs review', 'A hold has been waiting or will expire soon. Check the request on the provider and update the hold here.', 'requests', 'Review holds'],
+  pending_reconciliation: ['Provider result needs review', 'Everyspace is waiting to verify a provider result. Check the original request on the provider.', 'requests', 'Review requests'],
+  email_update_review: ['Booking email update to review', 'Verify the latest change, cancellation, or refund on the provider.', 'requests', 'Review emails'],
+};
+
+function operationalWarnings() {
+  if (S.operationsError) return '<div class="callout warn" role="status" style="margin-top:12px">Booking monitoring is temporarily unavailable. Check your providers before accepting. <button class="btn sm" data-act="refresh">Retry refresh</button></div>';
+  const warnings = S.operations?.warnings ?? [];
+  if (!warnings.length) return '';
+  return `<section class="card" style="margin-top:14px" aria-labelledby="ops-title"><h2 id="ops-title">Needs attention</h2>
+    <div class="list" style="margin-top:12px">${warnings.map((item) => {
+      const [title, description, tab, action] = OPERATION_WARNINGS[item.kind];
+      const space = esc(spaceTitle(item.space_id));
+      const target = tab === 'places' ? ` data-space="${esc(item.space_id)}"` : tab === 'calendar' ? ` data-calendar-filter="${space}"` : '';
+      return `<div class="item"><div class="grow"><strong>${title}</strong><div class="small muted">${space} · ${esc(siteName(item.channel))}${item.affected > 1 ? ` · ${item.affected} to review` : ''}</div>
+        <div class="small">${description}</div></div><button class="btn sm" data-tab="${tab}"${target}>${action}</button></div>`;
+    }).join('')}</div>
+    ${S.operations.total > warnings.length ? `<p class="small muted">Showing the first ${warnings.length} warnings. Check Calendar, Requests and Channels for more.</p>` : ''}</section>`;
 }
 
 function todayView() {
@@ -428,7 +457,6 @@ function todayView() {
   const hello = (S.profile?.full_name || '').split(' ')[0];
   const apiAttention = S.apiRequests.filter(providerNeedsAttention);
   const degraded = S.viewError || S.imports.some((i) => i.last_status !== 'ok' || Date.now() - Date.parse(i.last_synced_at ?? 0) > 30 * 60_000);
-  const missing = S.reservations.filter((r) => r.calendar_missing_since).length;
   return `
     <div class="section-title"><h1>${hello ? `Hi ${esc(hello)}` : 'Today'}</h1><div class="row"><button class="btn" data-act="syncall">Sync calendars now</button><button class="btn primary" data-act="newreq">New request</button></div></div>
     ${S.alerts.length || S.conflicts.length ? `<div class="stack">${S.conflicts.map((c) => `
@@ -437,7 +465,7 @@ function todayView() {
       ${S.alerts.map(alertCard).join('')}</div>`
       : `<div class="callout ${degraded ? 'warn' : ''}"><div class="big">${degraded ? 'Calendar data needs attention' : 'No recorded conflicts'}</div>
         <div class="small">Provider calendars can lag. Verify availability before accepting a request.</div></div>`}
-    ${missing ? `<div class="callout warn" style="margin-top:12px"><div class="row between"><span>${missing} imported booking${missing === 1 ? ' is' : 's are'} missing from the latest feeds. Their time is still occupied.</span><button class="btn sm" data-tab="calendar">Review calendar</button></div></div>` : ''}
+    ${operationalWarnings()}
 
     ${S.emailReviews.length ? `<div class="callout warn" style="margin-top:14px"><div class="row between">
       <div><div class="big">Forwarded booking emails</div><div class="small">${S.emailReviews.length} to review.</div></div>
@@ -961,7 +989,10 @@ document.addEventListener('click', async (e) => {
   const t = e.target.closest('[data-tab], [data-act]');
   if (!t) return;
   if (t.dataset.tab && !t.dataset.act) {
-    e.preventDefault(); S.tab = t.dataset.tab; if (t.dataset.space) S.openSpace = t.dataset.space; render();
+    e.preventDefault(); S.tab = t.dataset.tab;
+    if (t.dataset.space) S.openSpace = t.dataset.space;
+    if (t.dataset.calendarFilter) S.calendarQuery = t.dataset.calendarFilter;
+    render();
     if (t.dataset.space) $(`#space-${t.dataset.space}`)?.scrollIntoView({ block: 'start' }); else window.scrollTo(0, 0);
     return;
   }

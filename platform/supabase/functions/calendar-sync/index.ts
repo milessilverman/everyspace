@@ -1,10 +1,11 @@
 // Scheduled reads and interactive refreshes use the same leases and atomic snapshot writer.
 // deno-lint-ignore no-import-prefix
 import { createClient } from 'npm:@supabase/supabase-js@2.45.4';
+import { collectCalendarObservation, IncompleteCalendarObservation } from '../_shared/calendar-observation.ts';
 import { CORS, preflight } from '../_shared/cors.ts';
 import { parseProviderCalendar, type CalendarEvent } from '../_shared/ical.ts';
 import { calendarRows } from '../_shared/sync.ts';
-import { createCalendarFetcher } from '../_shared/fetch.ts';
+import { CalendarFetchError, createCalendarFetcher } from '../_shared/fetch.ts';
 import { readBoundedBody } from '../_shared/request-body.ts';
 import { doorGaps, VERIFIABLE_BY_CALENDAR } from '../_shared/guard.ts';
 
@@ -57,24 +58,30 @@ async function syncOne(imp: Import, scheduled: boolean) {
   let events: CalendarEvent[] = [];
   let timeZone: string | null = null;
   let readError: string | null = null;
+  let issue: 'incomplete_import' | 'fetch_failed' | null = null;
   try {
-    const { data, error } = await admin.from('spaces').select('properties!inner(timezone)').eq('id', imp.space_id).single();
-    if (error || !data) throw new Error('The calendar listing could not be found.');
-    timeZone = (data as unknown as { properties: { timezone: string } }).properties.timezone;
-    events = parseProviderCalendar(await fetchCalendar(imp.url), timeZone, imp.channel);
+    const scope = await admin.from('spaces').select('properties!inner(timezone)').eq('id', imp.space_id).single();
+    if (scope.error || !scope.data) throw new CalendarFetchError('The calendar listing could not be found.');
+    const zone = (scope.data as unknown as { properties: { timezone: string } }).properties.timezone;
+    timeZone = zone;
+    events = await collectCalendarObservation(async () => ({
+      events: parseProviderCalendar(await fetchCalendar(imp.url), zone, imp.channel),
+      nextPage: null,
+    }));
   } catch (error) {
-    // Only user-safe parser and fetcher messages enter host-visible sync health.
-    readError = error instanceof Error ? error.message : 'The provider calendar could not be verified.';
+    issue = error instanceof IncompleteCalendarObservation ? 'incomplete_import' : 'fetch_failed';
+    readError = error instanceof CalendarFetchError || error instanceof IncompleteCalendarObservation
+      ? error.message : 'The provider calendar could not be verified.';
   }
 
   const params = { p_import: imp.id, p_lease: lease, p_time_zone: timeZone };
-  const { data, error } = await admin.rpc('apply_calendar_sync', {
-    ...params, p_events: timeZone && !readError ? calendarRows(events, timeZone) : [], p_error: readError,
+  const { data, error } = await admin.rpc('apply_calendar_observation', {
+    ...params, p_events: timeZone && !readError ? calendarRows(events, timeZone) : [], p_error: readError, p_issue: issue,
   });
   if (error) {
     console.error('calendar_sync_snapshot_failed');
-    await admin.rpc('apply_calendar_sync', {
-      ...params, p_events: [], p_error: 'The calendar update did not finish. Everyspace kept the previous bookings.',
+    await admin.rpc('apply_calendar_observation', {
+      ...params, p_events: [], p_error: 'The calendar update did not finish. Everyspace kept the previous bookings.', p_issue: 'write_failed',
     });
     return { id: imp.id, status: 'error', error: 'Could not save the calendar. The previous bookings were kept.' };
   }
@@ -90,7 +97,8 @@ async function syncOne(imp: Import, scheduled: boolean) {
   }
   return {
     id: imp.id, ...result, datesStillOpen,
-    error: readError ?? (result.status === 'needs_review' ? 'Some events need review. Everyspace kept the previous bookings.' : undefined),
+    error: readError ?? (result.status === 'needs_review' ? 'Some events need review. Everyspace kept the previous bookings.'
+      : result.status === 'error' ? 'Calendar settings changed during the read. Try again.' : undefined),
   };
 }
 
@@ -128,13 +136,25 @@ Deno.serve(async (req) => {
   const all = (data ?? []) as Import[];
   const queue = all.slice(0, BATCH);
   const results: Awaited<ReturnType<typeof syncOne>>[] = [];
-  const stopAt = Date.now() + START_BUDGET_MS;
+  const startedAt = Date.now();
+  const stopAt = startedAt + START_BUDGET_MS;
   await Promise.all(Array.from({ length: CONCURRENCY }, async () => {
     while (queue.length && Date.now() < stopAt) {
-      results.push(await syncOne(queue.shift()!, scheduled));
+      const calendar = queue.shift()!;
+      try { results.push(await syncOne(calendar, scheduled)); }
+      catch {
+        console.error('calendar_sync_connection_failed');
+        results.push({ id: calendar.id, status: 'error', error: 'Calendar sync did not finish. Try again.' });
+      }
     }
   }));
   const skipped = queue.length + Math.max(0, all.length - BATCH)
     + results.filter((r) => r.status === 'deferred' || r.status === 'superseded').length;
-  return json({ synced: results.filter((r) => r.status === 'ok').length, skipped, results });
+  const synced = results.filter((r) => r.status === 'ok').length;
+  const errors = results.filter((r) => r.status === 'error').length;
+  const needsReview = results.filter((r) => r.status === 'needs_review').length;
+  if (scheduled) console.info(JSON.stringify({
+    event: 'calendar_sync_run', synced, errors, needs_review: needsReview, deferred: skipped, elapsed_ms: Date.now() - startedAt,
+  }));
+  return json({ synced, skipped, results });
 });

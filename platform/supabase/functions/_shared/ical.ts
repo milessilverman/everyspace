@@ -7,6 +7,7 @@
 //
 // Pure functions with no Deno or Node APIs, so the same file runs in Supabase Edge Functions and in tests.
 
+import { IncompleteCalendarObservation } from './calendar-observation.ts';
 import { reservationInstant } from './reservation-time.ts';
 
 export type CalendarEvent = {
@@ -167,12 +168,12 @@ export function parseProviderCalendar(text: string, timeZone: string, channel: s
   if (!/^BEGIN:VCALENDAR\n/i.test(source) || !/\nEND:VCALENDAR$/i.test(source)
       || (source.match(/^BEGIN:VCALENDAR\s*$/gim)?.length ?? 0) !== 1
       || (source.match(/^END:VCALENDAR\s*$/gim)?.length ?? 0) !== 1) {
-    throw new Error('The provider calendar is incomplete or invalid.');
+    throw new IncompleteCalendarObservation('The provider calendar is incomplete or invalid.');
   }
   const begins = source.match(/^BEGIN:VEVENT\s*$/gim)?.length ?? 0;
   const ends = source.match(/^END:VEVENT\s*$/gim)?.length ?? 0;
   if (begins !== ends || begins > 3000) {
-    throw new Error('The provider calendar contains unsupported or incomplete events.');
+    throw new IncompleteCalendarObservation('The provider calendar contains unsupported or incomplete events.');
   }
 
   const blocks = [...source.matchAll(/^BEGIN:VEVENT[ \t]*\n([\s\S]*?)^END:VEVENT[ \t]*$/gim)];
@@ -192,10 +193,10 @@ export function parseProviderCalendar(text: string, timeZone: string, channel: s
   }
 
   const seen = new Set<string>();
-  if (blocks.length !== begins) throw new Error('The provider calendar is incomplete or invalid.');
+  if (blocks.length !== begins) throw new IncompleteCalendarObservation('The provider calendar is incomplete or invalid.');
   return blocks.flatMap(([, body]): CalendarEvent[] => {
     if (/^(?:RRULE|RDATE|EXDATE|RECURRENCE-ID|DURATION)[;:]/im.test(body)) {
-      throw new Error('The provider calendar contains unsupported recurring or duration-based events.');
+      throw new IncompleteCalendarObservation('The provider calendar contains unsupported recurring or duration-based events.');
     }
     const uids = [...body.matchAll(/^UID(?:;[^:\n]*)?:(.+)$/gim)];
     const starts = [...body.matchAll(/^DTSTART[;:].+$/gim)];
@@ -209,13 +210,13 @@ export function parseProviderCalendar(text: string, timeZone: string, channel: s
     }
     if (uids.length !== 1 || !uid || uid.length > 512 || seen.has(uid) || !start || !end
         || start.allDay !== end.allDay || end.instant <= start.instant) {
-      throw new Error('The provider calendar contains an event that could not be verified.');
+      throw new IncompleteCalendarObservation('The provider calendar contains an event that could not be verified.');
     }
     seen.add(uid);
     const versions = [...body.matchAll(/^SEQUENCE:(.+)$/gim)];
     const version = versions[0]?.[1]?.trim();
     if (versions.length > 1 || (version !== undefined && (!/^\d+$/.test(version) || Number(version) > 2147483647))) {
-      throw new Error('The provider calendar contains an invalid event revision.');
+      throw new IncompleteCalendarObservation('The provider calendar contains an invalid event revision.');
     }
     const summary = unescapeText(/^SUMMARY(?:;[^:\n]*)?:(.+)$/im.exec(body)?.[1] ?? '');
     // A provider can republish an imported Everyspace event. Its unchanged ID identifies a copy.
