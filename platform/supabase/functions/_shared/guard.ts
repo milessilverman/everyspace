@@ -1,9 +1,8 @@
 // A calendar check reads the latest snapshot the provider serves. Providers may refresh
 // that snapshot or confirm outside bookings on their own schedule. Everyspace enforces:
 //   1. One open door: for any physical space, at most one site takes Instant Book (enforced in the database).
-//   2. Every other booking starts as a request. Everyspace holds the dates (a database lock, so no second request can
-//      take them), the dates get closed on the instant site, Everyspace reads that site's calendar live to prove it,
-//      and only then says "safe to accept".
+//   2. Everyspace holds local inventory. When an instant site's calendar can be checked, the host closes those dates
+//      there and Everyspace reads the provider's available snapshot. The host verifies current provider availability.
 //   3. A guard re-checks every 15 minutes that the instant site still shows every other booking as closed.
 // Pure functions (no network, no database) so they are tested directly.
 import { type CalendarEvent, localDayToUtc } from './ical.ts';
@@ -48,7 +47,7 @@ export type DoorCheck =
 
 /**
  * Is a held stretch of time safely closed on the instant site? Reads that site's live calendar:
- * - a guest booking overlapping it there means the instant site sold it first: decline the request;
+ * - an overlapping booking in the feed requires verification on the provider;
  * - otherwise the whole stretch must be covered by dates the host closed there.
  */
 export function checkDoor({ hold, doorEvents, timeZone }:

@@ -20,19 +20,22 @@ Deno.serve(async (req) => {
   if (!/^[0-9a-f]{64}$/.test(token)) return notFound();
 
   const { data: feed, error } = await admin.from('calendar_feeds')
-    .select('id, for_channel, space_id, spaces!inner(id, title, parent_space_id, properties!inner(timezone))')
+    .select('id, for_channel, space_id, spaces!inner(properties!inner(timezone))')
     .eq('token', token).maybeSingle();
-  if (error) { console.error('feed lookup failed', error.message); return new Response('Try again shortly', { status: 503 }); }
+  if (error) { console.error('calendar_feed_lookup_failed'); return new Response('Try again shortly', { status: 503 }); }
   if (!feed) return notFound();
   // deno-lint-ignore no-explicit-any
   const space = (feed as any).spaces; const timeZone: string = space.properties.timezone;
 
-  const { data: rows, error: rErr } = await admin.rpc('calendar_feed_reservations', { p_space: feed.space_id });
-  if (rErr) { console.error('reservations lookup failed', rErr.message); return new Response('Try again shortly', { status: 503 }); }
+  const { data: rows, error: rErr } = await admin.rpc('calendar_feed_snapshot', { p_space: feed.space_id, p_channel: feed.for_channel });
+  if (rErr) { console.error('calendar_feed_snapshot_unavailable'); return new Response('Try again shortly', { status: 503 }); }
 
-  const ics = buildIcs({ name: `${space.title} · Everyspace`, events: feedEvents({ rows: (rows ?? []) as BusyRow[], forChannel: feed.for_channel, spaceId: feed.space_id, timeZone }) });
-  admin.from('calendar_feeds').update({ last_fetched_at: new Date().toISOString() }).eq('id', feed.id).then(() => {});
+  const ics = buildIcs({ name: 'Everyspace availability', events: feedEvents({ rows: (rows ?? []) as BusyRow[], forChannel: feed.for_channel, spaceId: feed.space_id, timeZone }) });
+  if (req.method === 'GET') {
+    const { error: healthError } = await admin.from('calendar_feeds').update({ last_fetched_at: new Date().toISOString() }).eq('id', feed.id);
+    if (healthError) console.error('calendar_feed_health_update_failed');
+  }
   return new Response(req.method === 'HEAD' ? null : ics, {
-    headers: { ...CORS, 'content-type': 'text/calendar; charset=utf-8', 'cache-control': 'no-cache, max-age=0', 'content-disposition': 'inline; filename="everyspace.ics"' },
+    headers: { ...CORS, 'content-type': 'text/calendar; charset=utf-8', 'cache-control': 'private, no-store', 'content-disposition': 'inline; filename="everyspace.ics"' },
   });
 });

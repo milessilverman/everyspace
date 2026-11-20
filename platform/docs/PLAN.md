@@ -4,11 +4,13 @@
 
 **Launch market:** Los Angeles. Revenue share applies to attributed host revenue. Paid services and production rollout need founder approval.
 
+**Current pilot status:** staging verification only. PR #8 contains the reliability audit and provider research across all 22 channels. The audit identifies the checks needed before a supervised pilot and the provider permissions needed before any automation. [Technical audit](TECHNICAL_AUDIT.md) · [Provider audit](PROVIDER_AUDIT.md)
+
 ## Catalog and reservation audit
 
 - The two demo pages have the same 22-entry `PLATFORMS` catalog. The Host Console and Postgres lacked Giggster, EVmatch, The Kitchen Door, LiquidSpace, SpareRoom, and Zillow Rentals.
 - The live foundation syncs iCal every 15 minutes, stores manual request holds, and flags recorded overlaps. Provider refresh timing varies. The existing overlap count can reject sequential reservations against the same multi-unit request even when there is spare capacity. Booking occupancy also needs a turnover buffer and explicit handling of daylight saving at hourly boundaries.
-- Draft PR #6 defined an adapter boundary. Draft PR #7 added durable intake, audit logs, property locking, and confirmation recovery for Airbnb and Vrbo. Live adapters are disabled. The new development branch uses PR #7 as its base. [PR #6](https://github.com/milessilverman/everyspace/pull/6) · [PR #7](https://github.com/milessilverman/everyspace/pull/7)
+- Draft PR #6 defined an adapter boundary. Draft PR #7 added durable intake, audit logs, property locking, and confirmation recovery for Airbnb and Vrbo. PR #8 expands the catalog and hardens the local reservation workflow. Live adapters are disabled. [PR #6](https://github.com/milessilverman/everyspace/pull/6) · [PR #7](https://github.com/milessilverman/everyspace/pull/7) · [PR #8](https://github.com/milessilverman/everyspace/pull/8)
 
 ## Implementation order
 

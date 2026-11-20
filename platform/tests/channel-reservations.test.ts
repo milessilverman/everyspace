@@ -48,6 +48,8 @@ function pending(request: BookingRequest, netMinor = 10_000, currency = 'USD'): 
   return { ...request, state: 'pending', ...stay, expiresAt: null, quote: { netMinor, currency } };
 }
 
+const enabled = <T>(run: T) => ({ run, authorized: true, tested: true, enabled: true });
+
 function providers() {
   const current = new Map<string, ProviderState>();
   const approved: { request: BookingRequest; operationId: string }[] = [];
@@ -56,14 +58,14 @@ function providers() {
     state: 'clear', bookingMode: 'request', observedAt: new Date().toISOString(),
   });
   const adapter = (channel: Channel): ChannelAdapter => ({
-    ...(channel === 'airbnb' ? airbnbAdapter : vrboAdapter),
-    supportsProgrammaticApproval: true,
-    supportsAvailability: true,
-    getReservation: async (request) => current.get(request.externalRequestId) ?? null,
-    getAvailability: async () => availability(channel),
-    approve: async (request, operationId) => {
-      approved.push({ request, operationId });
-      approve(request);
+    channel,
+    operations: {
+      getReservation: enabled(async (request: BookingRequest) => current.get(request.externalRequestId) ?? null),
+      getAvailability: enabled(async () => availability(channel)),
+      approve: enabled(async (request: BookingRequest, operationId: string) => {
+        approved.push({ request, operationId });
+        approve(request);
+      }),
     },
   });
   return {
@@ -315,7 +317,7 @@ test('host RLS and grants prevent cross-host reads, event writes, and fabricated
     await assert.rejects(one("update public.channel_api_listings set auto_approve = true"), /permission denied/);
     await assert.rejects(one("select public.enqueue_channel_reservation_event('airbnb', $1, $2, 'forged', 'forged')", [host, space]), /permission denied/);
     await assert.rejects(one(`insert into public.reservations(space_id, channel, external_uid, source, starts_at, ends_at)
-      values ($1, 'airbnb', 'fabricated', 'api', '2037-07-10T00:00Z', '2037-07-11T00:00Z')`, [space]), /row-level security/);
+      values ($1, 'airbnb', 'fabricated', 'api', '2037-07-10T00:00Z', '2037-07-11T00:00Z')`, [space]), /permission denied for table reservations/);
   } finally {
     await db.exec('reset role; reset request.jwt.claim.sub');
   }
@@ -336,13 +338,12 @@ test('webhooks verify raw bytes and replay windows, and workers require their ow
   const delivery: ProviderDelivery = { ...await listing('airbnb'), externalRequestId: 'webhook', deliveryId: 'signed' };
   const airbnb: ChannelAdapter = {
     ...airbnbAdapter,
-    supportsWebhooks: true,
-    async verifyWebhook(headers, body) {
+    operations: { verifyWebhook: enabled(async (headers: Headers, body: Uint8Array) => {
       const timestamp = headers.get('x-test-timestamp') ?? '';
       if (!timestamp || Math.abs(Date.now() - Number(timestamp)) > 60_000) return null;
       if (headers.get('x-test-signature') !== await sign(timestamp, body)) return null;
       return JSON.parse(new TextDecoder().decode(body));
-    },
+    }) },
   };
   let wakes = 0;
   let processes = 0;

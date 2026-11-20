@@ -1,7 +1,7 @@
 import { reservationRange, validISODate } from './reservation-time.ts';
 
 export const MAX_EMAIL_BYTES = 128 * 1024;
-export type ReportedStatus = 'request' | 'confirmed' | 'cancelled' | 'unknown';
+export type ReportedStatus = 'request' | 'confirmed' | 'cancelled' | 'modified' | 'refund' | 'unknown';
 
 const MONTH = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
 
@@ -36,6 +36,21 @@ function reportedStatus(text: string): ReportedStatus {
     case 'cancelled':
     case 'canceled':
     case 'cancellation': return 'cancelled';
+    case 'modified':
+    case 'changed':
+    case 'change request':
+    case 'edit request':
+    case 'rescheduled':
+    case 'updated':
+    case 'extended':
+    case 'extension':
+    case 'extension accepted':
+    case 'extension approved':
+    case 'extension request':
+    case 'extension requested': return 'modified';
+    case 'refund':
+    case 'refunded':
+    case 'refund issued': return 'refund';
     default: return 'unknown';
   }
 }

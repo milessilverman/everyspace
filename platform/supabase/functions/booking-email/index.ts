@@ -4,6 +4,7 @@ import { createClient } from 'npm:@supabase/supabase-js@2.45.4';
 import PostalMime from 'npm:postal-mime@4.2.1';
 import { CORS, preflight } from '../_shared/cors.ts';
 import { emailFingerprint, MAX_EMAIL_BYTES, parseBookingEmail } from '../_shared/booking-email.ts';
+import { BodyLimitError, readBoundedBody } from '../_shared/request-body.ts';
 import { reservationRange } from '../_shared/reservation-time.ts';
 
 const baseUrl = Deno.env.get('SUPABASE_URL')!;
@@ -14,25 +15,6 @@ const response = (value: object, status = 200) => new Response(JSON.stringify(va
 });
 const isUuid = (value: unknown) =>
   typeof value === 'string' && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(value);
-
-async function readPayload(req: Request): Promise<unknown> {
-  const reader = req.body?.getReader();
-  if (!reader) return null;
-  const maxBytes = MAX_EMAIL_BYTES * 3;
-  let bytes = 0;
-  let text = '';
-  const decoder = new TextDecoder();
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) return JSON.parse(text + decoder.decode());
-    bytes += value.length;
-    if (bytes > maxBytes) {
-      await reader.cancel();
-      throw new RangeError('Message is too large.');
-    }
-    text += decoder.decode(value, { stream: true });
-  }
-}
 
 function record(value: unknown) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
@@ -52,9 +34,9 @@ Deno.serve(async (req) => {
 
   let body: Record<string, unknown> | null;
   try {
-    body = record(await readPayload(req));
+    body = record(JSON.parse(new TextDecoder().decode(await readBoundedBody(req, MAX_EMAIL_BYTES * 3))));
   } catch (error) {
-    return response({ error: error instanceof RangeError ? 'Message is too large.' : 'Invalid message input.' }, error instanceof RangeError ? 413 : 400);
+    return response({ error: error instanceof BodyLimitError ? 'Message is too large.' : 'Invalid message input.' }, error instanceof BodyLimitError ? 413 : 400);
   }
   if (!body) return response({ error: 'Invalid message input.' }, 400);
 

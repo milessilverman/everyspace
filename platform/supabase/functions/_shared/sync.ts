@@ -2,35 +2,28 @@
 // Pure functions (no database, no network) so they can be tested directly.
 import { type CalendarEvent, localDayToUtc, utcToLocalDay, type FeedEvent } from './ical.ts';
 
-export type ExistingReservation = { external_uid: string; status: 'confirmed' | 'cancelled'; ends_at: string };
 export type ReservationRow = {
   external_uid: string; kind: 'booking' | 'block'; status: 'confirmed' | 'cancelled';
-  starts_at: string; ends_at: string; all_day: boolean; summary: string;
+  starts_at: string; ends_at: string; all_day: boolean; calendar_sequence?: number;
 };
 
 const ms = (v: string) => Date.parse(v);
 const KEEP_PAST_DAYS = 30;
 
-/**
- * Turns a freshly read calendar into database changes for one space and one site.
- * - Every event becomes an upsert keyed by its UID (all-day dates are anchored to the property's local midnight).
- * - A future reservation we had before that is missing from the feed now was cancelled on that site.
- *   Past ones simply age out of feeds, so they are left alone.
- */
-export function planImport({ events, existing, timeZone, now = new Date().toISOString() }:
-  { events: CalendarEvent[]; existing: ExistingReservation[]; timeZone: string; now?: string }): { upserts: ReservationRow[]; cancelUids: string[] } {
+/** Normalize the events in one validated snapshot. The database reconciles missing event IDs. */
+export function calendarRows(events: CalendarEvent[], timeZone: string, now = new Date().toISOString()): ReservationRow[] {
   const cutoff = ms(now) - KEEP_PAST_DAYS * 86_400_000;
-  const upserts: ReservationRow[] = [];
-  const seen = new Set<string>();
+  const rows: ReservationRow[] = [];
   for (const e of events) {
     const starts_at = e.allDay ? localDayToUtc(e.start, timeZone) : e.start;
     const ends_at = e.allDay ? localDayToUtc(e.end, timeZone) : e.end;
-    seen.add(e.uid);
     if (ms(ends_at) < cutoff) continue;
-    upserts.push({ external_uid: e.uid, kind: e.kind, status: e.cancelled ? 'cancelled' : 'confirmed', starts_at, ends_at, all_day: e.allDay, summary: e.summary });
+    rows.push({
+      external_uid: e.uid, kind: e.kind, status: e.cancelled ? 'cancelled' : 'confirmed',
+      starts_at, ends_at, all_day: e.allDay, calendar_sequence: e.sequence,
+    });
   }
-  const cancelUids = (events.length ? existing : []).filter((r) => r.status === 'confirmed' && !seen.has(r.external_uid) && ms(r.ends_at) > ms(now)).map((r) => r.external_uid);
-  return { upserts, cancelUids };
+  return rows;
 }
 
 /** First local date outside a half-open range, including the day of a partial cleanup period. */

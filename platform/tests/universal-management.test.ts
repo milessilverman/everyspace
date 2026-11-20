@@ -5,7 +5,7 @@ import PostalMime from 'postal-mime';
 import { CATEGORY_NAMES, CHANNEL_GROUPS, INTEGRATIONS } from '../../host/integration-catalog.mjs';
 import { emailFingerprint, parseBookingEmail } from '../supabase/functions/_shared/booking-email.ts';
 import { reservationInstant, reservationRange } from '../supabase/functions/_shared/reservation-time.ts';
-import { feedEvents, planImport } from '../supabase/functions/_shared/sync.ts';
+import { feedEvents } from '../supabase/functions/_shared/sync.ts';
 import { freshDb } from './helpers/db.mjs';
 
 const LA = 'America/Los_Angeles';
@@ -145,10 +145,7 @@ test('date-only booking spans use the property zone and honor DST length', () =>
   assert.equal(reservationInstant('2027-11-07T01:30-08:00', false, LA), '2027-11-07T09:30:00.000Z');
 });
 
-test('an empty iCal snapshot preserves bookings and all-day exports cover partial cleanup', () => {
-  assert.deepEqual(planImport({ events: [], existing: [
-    { external_uid: 'keep', status: 'confirmed', ends_at: '2037-07-20T07:00:00Z' },
-  ], timeZone: LA, now: '2037-07-01T07:00:00Z' }).cancelUids, []);
+test('all-day calendar exports cover partial cleanup', () => {
   assert.deepEqual(feedEvents({ forChannel: 'vrbo', timeZone: LA, now: '2037-07-01T07:00:00Z', rows: [{
     id: 'stay', channel: 'airbnb', status: 'confirmed', all_day: true,
     starts_at: '2037-07-14T07:00:00Z', ends_at: '2037-07-15T07:30:00Z',

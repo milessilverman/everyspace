@@ -65,6 +65,7 @@ export const INTEGRATIONS = {
   swimply: listing('Swimply', 'hourly_events', {
     priority: true, calendarImport: verified(swimplyCalendar), calendarExport: verified(swimplyCalendar),
     bookingEmail: verified('https://swimply.zendesk.com/hc/en-us/articles/31126279131923-Understanding-Pending-Charges-and-Booking-Requests', 'Confirmation notifications exist. Provider-specific templates need validation.'),
+    other: [{ name: 'Cronofy calendar sync', ...verified(swimplyCalendar, 'Swimply documents a host-side calendar connection. Everyspace’s Cronofy connection is unavailable.') }],
   }),
   peerspace: listing('Peerspace', 'hourly_events', {
     priority: true, calendarImport: verified(peerspaceCalendar),
@@ -74,15 +75,20 @@ export const INTEGRATIONS = {
     calendarImport: verified('https://help.giggster.com/en/articles/5410105-calendar-sync'),
   }),
   kitchen_door: listing('The Kitchen Door', 'hourly_events'),
-  liquidspace: listing('LiquidSpace', 'hourly_events'),
+  liquidspace: listing('LiquidSpace', 'hourly_events', {
+    api: verified('https://developer.liquidspace.com/', 'The developer portal describes reservation booking and Workplace Management. Host inventory write access needs confirmation.'),
+  }),
   sniffspot: listing('Sniffspot', 'outdoor', {
     priority: true,
+    bookingEmail: verified(sniffspotNotifications, 'Hosts receive new, modified and canceled reservation notices.'),
     other: [{ name: 'Add reservations to Google Calendar', ...verified(sniffspotNotifications, 'A provider-side Google Calendar option. Direct iCal support is unverified.') }],
   }),
   hipcamp: listing('Hipcamp', 'outdoor', {
     calendarImport: verified(hipcampCalendar), calendarExport: verified(hipcampCalendar),
   }),
-  getmyboat: listing('GetMyBoat', 'vehicles'),
+  getmyboat: listing('GetMyBoat', 'vehicles', {
+    other: [{ name: 'Google Calendar', ...verified('https://www.getmyboat.com/for-owners/', 'The owner product documents a booking schedule connection.') }],
+  }),
   outdoorsy: listing('Outdoorsy', 'vehicles', {
     calendarImport: verified(outdoorsyCalendar), calendarExport: verified(outdoorsyCalendar),
   }),
@@ -93,9 +99,15 @@ export const INTEGRATIONS = {
     other: [{ name: 'Airbnb and Vrbo account links', ...verified(furnishedCalendar) }],
   }),
   spareroom: listing('SpareRoom', 'long_term'),
-  zillow: listing('Zillow Rentals', 'long_term'),
-  craigslist: listing('Craigslist', 'long_term'),
-  facebook: listing('Facebook Marketplace', 'long_term'),
+  zillow: listing('Zillow Rentals', 'long_term', {
+    other: [{ name: 'Rental listing and lease connections', ...verified('https://www.zillow.com/rentals-network/lease-connect/', 'Listing, lead and lease integrations have separate access. These do not manage short-term bookings.') }],
+  }),
+  craigslist: listing('Craigslist', 'long_term', {
+    other: [{ name: 'Bulk posting', ...verified('https://www.craigslist.org/about/bulk_posting_interface', 'Limited to posting for eligible accounts and categories.') }],
+  }),
+  facebook: listing('Facebook Marketplace', 'long_term', {
+    other: [{ name: 'Marketplace partner inventory', ...verified('https://developers.facebook.com/docs/marketplace/partnerships', 'Eligible partners can feed listings. Rental eligibility and booking rights require confirmation.') }],
+  }),
 };
 
 // Existing user-defined channels stay available outside the 22-platform catalog.

@@ -192,3 +192,17 @@ test('the upgrade preserves an existing iCal reservation at default capacity and
     join public.spaces s on s.id = r.space_id where s.id = '${legacySpace}' and r.external_uid = 'legacy-ical';`);
   assert.equal(row, 'confirmed|1|0');
 });
+
+test('two trusted managed confirmations serialize and the losing write cannot confirm', async () => {
+  const { space } = await fixture([]);
+  const write = (ref) => `insert into public.reservations(space_id,channel,external_uid,source,starts_at,ends_at)
+    values ('${space}','everyspace','${ref}','everyspace','2037-08-10T18:00Z','2037-08-10T20:00Z');`;
+  const first = query(`begin; set role service_role; ${write('winner')} select 'confirmed'; select pg_sleep(2); commit;`);
+  assert.equal(await first.first, 'confirmed');
+  const second = query(`set role service_role; ${write('loser')}`, 'managed-confirmation-waiter');
+  const blocked = assert.rejects(second.done, /exceed confirmed capacity/);
+  const waited = await isWaiting('managed-confirmation-waiter');
+  await Promise.all([first.done, blocked]);
+  assert.equal(waited, true);
+  assert.equal(await execute(`select count(*) from public.reservations where space_id = '${space}' and status = 'confirmed';`), '1');
+});
