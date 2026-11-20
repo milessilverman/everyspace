@@ -35,6 +35,9 @@ async function syncOne(imp: Import) {
     const { data: existing, error: exErr } = await admin.from('reservations').select('external_uid, status, ends_at')
       .eq('space_id', imp.space_id).eq('channel', imp.channel).eq('source', 'ical');
     if (exErr) throw new Error(exErr.message);
+    if (!events.length && existing?.some((r) => r.status === 'confirmed' && Date.parse(r.ends_at) > Date.parse(started))) {
+      throw new Error('The feed returned no events. Existing bookings were kept. Check the provider calendar.');
+    }
     const plan = planImport({ events, existing: (existing ?? []) as never, timeZone, now: started });
 
     if (plan.upserts.length) {

@@ -1,7 +1,5 @@
-// No double bookings, ever: the checks behind "safe to accept".
-//
-// Why calendar links alone are not enough: each site re-reads other calendars on its own schedule (Airbnb: every few
-// hours). If two sites can both confirm a booking instantly, a guest can book in that gap. So Everyspace enforces:
+// A calendar check reads the latest snapshot the provider serves. Providers may refresh
+// that snapshot or confirm outside bookings on their own schedule. Everyspace enforces:
 //   1. One open door: for any physical space, at most one site takes Instant Book (enforced in the database).
 //   2. Every other booking starts as a request. Everyspace holds the dates (a database lock, so no second request can
 //      take them), the dates get closed on the instant site, Everyspace reads that site's calendar live to prove it,
@@ -14,6 +12,8 @@ export const SITE_NAMES: Record<string, string> = {
   everyspace: 'Everyspace', airbnb: 'Airbnb', vrbo: 'Vrbo', booking_com: 'Booking.com', expedia: 'Expedia',
   furnished_finder: 'Furnished Finder', swimply: 'Swimply', peerspace: 'Peerspace', neighbor: 'Neighbor', spothero: 'SpotHero',
   sniffspot: 'Sniffspot', hipcamp: 'Hipcamp', getmyboat: 'GetMyBoat', outdoorsy: 'Outdoorsy', rvshare: 'RVshare',
+  giggster: 'Giggster', evmatch: 'EVmatch', kitchen_door: 'The Kitchen Door', liquidspace: 'LiquidSpace',
+  spareroom: 'SpareRoom', zillow: 'Zillow Rentals',
   craigslist: 'Craigslist', facebook: 'Facebook', direct: 'Direct', other: 'the other site',
 };
 export const siteName = (c: string) => SITE_NAMES[c] ?? c;

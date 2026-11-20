@@ -1,20 +1,29 @@
 # Everyspace game plan
 
-**Goal:** one place that runs every rental site for a host: Airbnb, Vrbo, Booking.com, Swimply, Peerspace, Neighbor, Hipcamp and the rest. AI does the work. Hosts keep using Airbnb exactly as they do today, and Everyspace earns them more on top.
+**Launch goal:** manage rentals across the 22 existing channels. The Host Console is the launch product. Marketplace, checkout, and simulated provider connections are part of the labeled demo.
 
-**Launch market:** Los Angeles.
-**Pricing:** a share of the revenue Everyspace brings in. No monthly fee.
-**Rule:** nothing that costs money gets turned on without the founder approving it first.
+**Launch market:** Los Angeles. Revenue share applies to attributed host revenue. Paid services and production rollout need founder approval.
 
----
+## Catalog and reservation audit
+
+- The two demo pages have the same 22-entry `PLATFORMS` catalog. The Host Console and Postgres lacked Giggster, EVmatch, The Kitchen Door, LiquidSpace, SpareRoom, and Zillow Rentals.
+- The live foundation syncs iCal every 15 minutes, stores manual request holds, and flags recorded overlaps. Provider refresh timing varies. The existing overlap count can reject sequential reservations against the same multi-unit request even when there is spare capacity. Booking occupancy also needs a turnover buffer and explicit handling of daylight saving at hourly boundaries.
+- Draft PR #6 defined an adapter boundary. Draft PR #7 added durable intake, audit logs, property locking, and confirmation recovery for Airbnb and Vrbo. Live adapters are disabled. The new development branch uses PR #7 as its base. [PR #6](https://github.com/milessilverman/everyspace/pull/6) · [PR #7](https://github.com/milessilverman/everyspace/pull/7)
+
+## Implementation order
+
+1. Complete the channel catalog and Host Console capability registry. Prioritize Airbnb, Vrbo, Booking.com, Swimply, Peerspace, Neighbor, SpotHero, and Sniffspot for verified connection setup.
+2. Extend existing locks and guards with half-open hourly and overnight ranges, time-zone validation, cleanup buffers, and concurrent unit capacity. A configured parent space shares occupancy with its descendants. Independent spaces at the same property can book concurrently.
+3. Add signed-in intake of forwarded messages and a review queue. Deduplicate within a listing, require host review, and route reviewed requests through the existing hold workflow.
+4. Validate the migration and management-only entry point locally. Retest existing calendar workflows and the disabled provider decision engine.
+5. Pursue partner access or an approved inbound mail relay separately. Evaluate platform permission, operational reliability, and security before any browser-based integration.
 
 ## How we make money
 
 We take a share only of revenue Everyspace actually brought in. A booking counts if:
 
 - the space was added by Everyspace (a driveway, pool, garage or room the host wasn't renting before), or
-- Everyspace published the listing on that site, or
-- the booking came through the Everyspace marketplace.
+- Everyspace helped publish the listing on that site.
 
 We never charge on an Airbnb listing the host already ran themselves. "We only get paid when we make you more" is the pitch.
 
@@ -26,51 +35,11 @@ We never charge on an Airbnb listing the host already ran themselves. "We only g
   - It is idempotent, so re-running never double-charges.
   - Card collection (Stripe) comes later and **needs approval**: Stripe charges per transaction.
 
-## No double bookings, ever
+## Booking safety and connections
 
-Calendar links alone can't promise this. Each site re-reads the others on its own schedule; Airbnb's is every few hours, sometimes up to 12. If two sites can both confirm a guest instantly, someone can book in that gap. So the promise comes from rules about who can say yes, enforced in the database:
+Everyspace uses a property lock for holds and reservation changes. One external listing per related space family can be configured for Instant Book. Hosts verify closures and outside bookings directly with the relevant providers. iCal is a delayed fallback that publishes and reads busy slots. Each provider controls when it rereads a feed. Calendar links can lag behind external confirmations and cannot guarantee availability.
 
-1. **One open door.**
-   - For any space, only one site takes Instant Book. Usually that's the site the host already gets the most bookings from.
-   - Every other site is request-to-book.
-   - The database refuses a second instant site, including a room inside a whole house that's instant somewhere else.
-2. **Hold → close → verify → accept.**
-   - When a request arrives on another site, Everyspace holds the dates under a lock. No second request or booking can take them.
-   - The host then closes those dates on the instant site. Later, with a direct connection, Everyspace does this itself.
-   - Everyspace reads the instant site's calendar live to prove the dates are closed. Only then does it say **"Safe to accept."**
-   - If a guest grabbed the dates on the instant site first, it says **"Decline."**
-3. **Guard.** Every 15 minutes Everyspace checks two things:
-   - that the instant site still shows every other booking as closed;
-   - that no request was accepted without the check.
-   Either problem raises an alert.
-4. **Calendar sync as a backup layer.**
-   - Our feed also blocks the dates on every site within hours.
-   - Double-booking detection covers the whole house and the rooms inside it.
-
-**What it depends on until direct connections are approved:**
-- The host doesn't tap "accept" on a request before Everyspace says it's safe.
-- The host doesn't reopen dates that Everyspace closed.
-- The guard catches either within 15 minutes.
-- Direct connections (Phase 5) remove the host from the loop entirely: Everyspace closes the dates and accepts or declines by itself.
-
-**Booking.com:**
-- Its calendar export can't tell a closed date from a booking.
-- Request-to-book only exists for brand-new Booking.com listings.
-- So an existing Booking.com listing is either the one instant site, or waits for the direct connection.
-
-**Everyspace marketplace:** bookings must use the same lock (`place_hold`) when it launches.
-
-## How we connect to each site (without making hosts change anything)
-
-| Method | What it does | Works today? | Cost |
-|---|---|---|---|
-| **Calendar links (iCal)** | Reads each site's calendar and publishes one back per site, so a booking anywhere blocks the dates everywhere. | **Yes. Built and tested.** | $0 |
-| Booking email reading | The host forwards booking emails (or connects Gmail read-only). We pull guest, price and dates. | Next | $0 |
-| Channel manager API (e.g. Channex) | Real two-way sync for Airbnb, Vrbo and Booking.com: prices, messages, listings. | Needs partner approval | **Paid per listing. Ask first.** |
-| Official partner APIs | Airbnb, Booking.com and Vrbo connectivity programs. | Apply once we have traction | Free, but gated |
-| Browser extension | Acts on sites with no API (Swimply, Peerspace, Neighbor) while the host is logged in. | Later | $0 |
-
-We never store passwords for other sites. API tokens will go in Supabase Vault.
+The channel registry distinguishes implemented Everyspace workflows, capabilities verified in provider documentation, planned work, explicitly unsupported paths, and unverified capabilities. Manual management is available across the catalog. The provider approval requirements are maintained separately. [Reservation connectivity and approvals](CHANNEL_RESERVATIONS.md)
 
 ## Phases
 
@@ -79,7 +48,7 @@ We never store passwords for other sites. API tokens will go in Supabase Vault.
    - Two-way calendar sync.
    - Double-booking detection across sites, including whole-house vs room.
    - Revenue-share ledger.
-   - No-double-booking rules: one instant site, holds, live verification and the guard.
+   - One configured instant site per related inventory, holds, calendar checks and the booking guard.
    - 34 automated tests.
 2. **Go live on the free tier. Done (Nov 16, 2026).**
    - Supabase project `everyspace` (ref `hnzcwfvxpfsyjpbebevp`, West US, free plan, $0).
@@ -106,14 +75,14 @@ We never store passwords for other sites. API tokens will go in Supabase Vault.
      - Backyards and studios → Peerspace.
      - Garages → Neighbor.
    - Prove the attributed revenue.
-4. **AI operations.**
-   - Booking-email parsing.
+4. **Host operations.**
+   - Forwarded booking-email parsing and host review.
    - Guest-message drafting.
    - Price suggestions using LA demand: events at SoFi, Crypto.com Arena and the Hollywood Bowl, plus beach weekends.
    - Model API usage costs money, so **ask first**.
 5. **Deeper connections.**
    - Channel manager or partner APIs once the volume justifies it.
-   - Browser extension for sites with no API.
+   - Schedule browser integration work only after written permission and validation of the security and reliability requirements.
 6. **Payments.**
    - Stripe Connect to collect the revenue share automatically (**ask first**).
 

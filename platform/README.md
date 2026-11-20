@@ -1,6 +1,6 @@
 # Everyspace platform
 
-The real backend behind the Everyspace demo (`../everyspace__1-1.html`). It runs on Supabase's free plan: Postgres, Auth, Edge Functions and pg_cron. The game plan is in [docs/PLAN.md](docs/PLAN.md).
+The backend for the [Everyspace Host Console](../host/). It runs on Supabase's free plan: Postgres, Auth, Edge Functions and pg_cron. The game plan is in [docs/PLAN.md](docs/PLAN.md).
 
 **Live:** Supabase project `everyspace` (`hnzcwfvxpfsyjpbebevp`, West US, free plan). Functions are at `https://hnzcwfvxpfsyjpbebevp.supabase.co/functions/v1/<name>`.
 
@@ -15,12 +15,13 @@ The real backend behind the Everyspace demo (`../everyspace__1-1.html`). It runs
 | `supabase/functions/calendar-feed` | The link a host pastes into Airbnb, Vrbo and others, so a booking anywhere blocks the dates everywhere. It never shows guest names or prices. |
 | `supabase/migrations/20261116010000_no_double_booking.sql` | The no-double-booking rules: one instant site per space, date holds under a lock, the guard, and alerts. |
 | `supabase/functions/_shared/cors.ts` | Lets the Host Console call the functions from the browser. Access still depends on the login token. |
-| `supabase/functions/booking-guard` | "Is it safe to accept this request?" Holds the dates, reads the instant site's calendar live, and answers accept, close the dates first, or decline. |
+| `supabase/functions/booking-guard` | Places unit holds and checks known availability under the property lock. The host verifies provider availability before accepting. |
+| `supabase/functions/booking-email` | Parses host-submitted forwarded messages, queues review, and records host-verified external confirmations. |
 | `supabase/cron/calendar_sync.sql` | Schedules the sync and the daily revenue-share accrual. Run it once after deploying. Already done on the live project. |
 | `supabase/functions/channel-reservations` | Provider webhook and worker entry points, with disabled Airbnb and Vrbo transports pending partner access. |
 | `tests/` | Platform tests, including the full schema in Postgres, row-level security, and separate-session concurrency. |
 
-See [Airbnb and Vrbo reservation connectivity](docs/CHANNEL_RESERVATIONS.md) for verified provider capabilities, onboarding and local testing.
+See [universal rental management](docs/UNIVERSAL_CHANNELS.md) for the catalog, email workflow and rollout limits. See [Airbnb and Vrbo reservation connectivity](docs/CHANNEL_RESERVATIONS.md) for verified provider capabilities, onboarding and local testing.
 
 ## Run the tests
 
@@ -32,7 +33,7 @@ npm install
 npm test
 ```
 
-## Deploy (free plan, $0)
+## Deploy after approval
 
 1. Create a Supabase project on the free plan in the West US region.
 2. Apply the database migration:
@@ -45,10 +46,10 @@ npm test
    supabase db push
    ```
 
-3. Deploy the three functions:
+3. Deploy the calendar, booking guard and forwarded-email functions:
 
    ```bash
-   supabase functions deploy calendar-feed calendar-sync booking-guard
+   supabase functions deploy calendar-feed calendar-sync booking-guard booking-email
    ```
 
 4. Schedule the jobs:

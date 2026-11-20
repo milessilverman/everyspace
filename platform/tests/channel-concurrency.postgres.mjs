@@ -13,6 +13,7 @@ const docker = promisify(execFile);
 const container = `everyspace-reservation-test-${randomUUID().slice(0, 8)}`;
 const image = 'postgres:17.7-alpine';
 let started = false;
+let legacySpace;
 
 function query(sql, name = 'everyspace-test') {
   const child = spawn('docker', ['exec', '-i', '-e', `PGAPPNAME=${name}`, container,
@@ -52,6 +53,11 @@ before(async () => {
   const directory = new URL('../supabase/migrations/', import.meta.url);
   await execute(AUTH_STUB);
   for (const name of (await readdir(directory)).sort()) {
+    if (name.includes('_universal_channel_catalog')) {
+      ({ space: legacySpace } = await fixture([]));
+      await execute(`insert into public.reservations(space_id, channel, external_uid, source, starts_at, ends_at)
+        values ('${legacySpace}', 'vrbo', 'legacy-ical', 'ical', '2037-07-10T07:00Z','2037-07-11T07:00Z');`);
+    }
     await execute(await readFile(new URL(name, directory), 'utf8'));
   }
 });
@@ -165,4 +171,24 @@ test('parallel workers skip a claimed row rather than acquiring the same provide
   await first.done;
   assert.equal(lease.request.externalRequestId, 'airbnb');
   assert.equal(loss, null);
+});
+
+test('concurrent multi-unit holds cannot both consume the same remaining capacity', async () => {
+  const { space } = await fixture(['airbnb']);
+  await execute(`update public.spaces set quantity = 3 where id = '${space}';`);
+  const hold = `select public.place_inventory_hold('${space}', 'direct', '2037-07-10T18:00Z', '2037-07-10T20:00Z', false, null, null, 2);`;
+  const first = query(`begin; set role service_role; ${hold} select pg_sleep(2); commit;`);
+  assert.match(await first.first, /^[0-9a-f-]{36}$/);
+  const second = query(`set role service_role; ${hold}`, 'multi-unit-hold-waiter');
+  const blocked = assert.rejects(second.done, /already taken or above capacity/);
+  const waited = await isWaiting('multi-unit-hold-waiter');
+  await Promise.all([first.done, blocked]);
+  assert.equal(waited, true);
+  assert.equal(await execute(`select coalesce(sum(units), 0) from public.booking_holds where space_id = '${space}';`), '2');
+});
+
+test('the upgrade preserves an existing iCal reservation at default capacity and cleanup', async () => {
+  const row = await execute(`select r.status, r.units, s.turnover_minutes from public.reservations r
+    join public.spaces s on s.id = r.space_id where s.id = '${legacySpace}' and r.external_uid = 'legacy-ical';`);
+  assert.equal(row, 'confirmed|1|0');
 });

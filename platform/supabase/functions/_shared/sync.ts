@@ -29,8 +29,14 @@ export function planImport({ events, existing, timeZone, now = new Date().toISOS
     if (ms(ends_at) < cutoff) continue;
     upserts.push({ external_uid: e.uid, kind: e.kind, status: e.cancelled ? 'cancelled' : 'confirmed', starts_at, ends_at, all_day: e.allDay, summary: e.summary });
   }
-  const cancelUids = existing.filter((r) => r.status === 'confirmed' && !seen.has(r.external_uid) && ms(r.ends_at) > ms(now)).map((r) => r.external_uid);
+  const cancelUids = (events.length ? existing : []).filter((r) => r.status === 'confirmed' && !seen.has(r.external_uid) && ms(r.ends_at) > ms(now)).map((r) => r.external_uid);
   return { upserts, cancelUids };
+}
+
+/** First local date outside a half-open range, including the day of a partial cleanup period. */
+function exclusiveLocalEnd(end: string, timeZone: string): string {
+  const lastDay = utcToLocalDay(new Date(ms(end) - 1).toISOString(), timeZone);
+  return new Date(ms(lastDay) + 86_400_000).toISOString().slice(0, 10);
 }
 
 export type BusyRow = { id: string; space_id?: string; channel: string; status: string; starts_at: string; ends_at: string; all_day: boolean };
@@ -49,6 +55,6 @@ export function feedEvents({ rows, forChannel, spaceId, timeZone, now = new Date
     .filter((r) => r.status === 'confirmed' && !ownListing(r) && ms(r.ends_at) > ms(now) - 86_400_000)
     .sort((a, b) => ms(a.starts_at) - ms(b.starts_at))
     .map((r) => (r.all_day
-      ? { id: r.id, start: utcToLocalDay(r.starts_at, timeZone), end: utcToLocalDay(r.ends_at, timeZone) }
+      ? { id: r.id, start: utcToLocalDay(r.starts_at, timeZone), end: exclusiveLocalEnd(r.ends_at, timeZone) }
       : { id: r.id, start: r.starts_at, end: r.ends_at }));
 }

@@ -1,16 +1,12 @@
 # Everyspace
 
-Free rental management for everything you rent out: homes, rooms, backyards, pools, parking, storage, roofs and more.
+Everyspace is a rental management tool for hosts. Use the [Host Console](host/) to track listings, schedules and booking requests across 22 rental platforms.
 
-- One calendar and one inbox for Everyspace, Airbnb, Vrbo, Booking.com, Expedia, Swimply and other sites
-- Calendar sync, double-booking alerts and price sync ("list once, live everywhere")
-- Turnovers and tasks, expenses and profit, permits and insurance reminders
-- Earnings quiz, pricing help, private neighbor offers and cleaning-gap rentals
-- Also a marketplace with a 3% host fee and all-in prices for renters
+- Manage homes, hourly spaces, parking, storage, vehicles, EV charging and other rentals.
+- Sync any available calendars, review forwarded booking email, and hold dates under a property lock before accepting a request.
+- Track overlap alerts and earnings while fulfillment stays on each provider.
 
-**Live site:** https://milessilverman.github.io/everyspace/
-
-`index.html` and `everyspace.html` are the same single-file app. It runs entirely in the browser with demo data (saved in your browser's local storage); connections to other sites are simulated until partner integrations and a backend are in place.
+The [launch page](https://milessilverman.github.io/everyspace/) and `everyspace.html` share the same code. Earnings tools and the original local simulator are available in the labeled [demo](https://milessilverman.github.io/everyspace/?demo=1#/earn).
 
 ## Earnings map
 
@@ -28,19 +24,19 @@ Data sources, all queried from the visitor's browser: LA County Assessor parcels
 - add places, spaces (a room can sit inside the whole home) and the sites each is listed on;
 - connect each site's calendar both ways, with copy-paste links and steps for each site;
 - choose the one site that takes instant bookings;
-- add a request before accepting it, and get "Close these nights on Airbnb", then "Safe to accept", or "Decline";
+- add a request before accepting it, and get a calendar result and next steps before accepting on a provider;
 - see alerts, a calendar across every site, and earnings;
-- see Airbnb and Vrbo authorization, calendar sync and reservation status under Channels and Requests.
+- review all 22 providers, calendar sync health, booking requests and forwarded email under Channels and Requests.
 
 ## Backend (`platform/`)
 
 The real backend now lives in [`platform/`](platform/). It runs on Supabase's free plan in West US, launching in Los Angeles. It has:
 
 - **Two-way calendar sync** with Airbnb, Vrbo and others, every 15 minutes.
-- **Conflict prevention:** one instant-book site per space; requests on other sites hold the dates, and are marked safe to accept only after the dates are proven closed everywhere; plus a guard that flags anything that slips.
+- **Conflict prevention:** one configured instant-book site per related space, guarded holds, buffered occupancy and capacity checks. Calendar data can lag provider confirmations.
 - **Revenue-share billing:** 10% of the extra money Everyspace brings in, until the fee reaches $30 in a month, then 3%.
 
-See [`platform/README.md`](platform/README.md) and the game plan in [`platform/docs/PLAN.md`](platform/docs/PLAN.md).
+See the [platform guide](platform/README.md), [launch plan](platform/docs/PLAN.md) and [channel support](platform/docs/UNIVERSAL_CHANNELS.md).
 
 ## What's in the app (`index.html`)
 
@@ -76,9 +72,9 @@ npm install
 npm test
 ```
 
-## What's needed before launch
+## Future integrations
 
-The app is a complete, working front end with demo data. To take real bookings it still needs:
+The simulated marketplace is separate from the Host Console. Live provider connections require partner access. Later marketplace work would also require:
 
 1. **Accounts and a backend.** Real sign-in, a database, and server-side checks that the person making a request owns the listing or booking (the demo API trusts the user ID it's given).
 2. **Payments.** Stripe Connect (or similar) for renter charges, deposits held on card, and host payouts.

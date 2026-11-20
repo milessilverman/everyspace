@@ -1,7 +1,7 @@
 // Public calendar feed: GET /functions/v1/calendar-feed?token=<64 hex chars>
 //
 // The host pastes this link into a site's "import calendar" setting once (Airbnb: Calendar → Availability → Connect
-// another calendar). From then on, anything booked on any *other* site, or on Everyspace, blocks those dates there.
+// another calendar). From then on, busy time from other sites is published for the receiving platform to fetch.
 // The token is the only credential, so it is long and random, and the feed never includes guest names or prices.
 // This function must be deployed with JWT verification off (see supabase/config.toml), since sites fetch it anonymously.
 import { createClient } from 'npm:@supabase/supabase-js@2.45.4';
@@ -27,12 +27,7 @@ Deno.serve(async (req) => {
   // deno-lint-ignore no-explicit-any
   const space = (feed as any).spaces; const timeZone: string = space.properties.timezone;
 
-  // This space, the space it sits inside (whole house blocks the room) and spaces inside it (a booked room blocks the whole house).
-  const { data: kids } = await admin.from('spaces').select('id').eq('parent_space_id', feed.space_id);
-  const ids = [feed.space_id, space.parent_space_id, ...(kids ?? []).map((k) => k.id)].filter(Boolean);
-  const { data: rows, error: rErr } = await admin.from('reservations')
-    .select('id, space_id, channel, status, starts_at, ends_at, all_day')
-    .in('space_id', ids).eq('status', 'confirmed').gte('ends_at', new Date(Date.now() - 86_400_000).toISOString());
+  const { data: rows, error: rErr } = await admin.rpc('calendar_feed_reservations', { p_space: feed.space_id });
   if (rErr) { console.error('reservations lookup failed', rErr.message); return new Response('Try again shortly', { status: 503 }); }
 
   const ics = buildIcs({ name: `${space.title} · Everyspace`, events: feedEvents({ rows: (rows ?? []) as BusyRow[], forChannel: feed.for_channel, spaceId: feed.space_id, timeZone }) });
