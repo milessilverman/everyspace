@@ -54,9 +54,9 @@ export async function verifyPreviewAccess(
       await allowed.body?.cancel();
       throw new Error('The staging Access service token did not open ' + path);
     }
-    const cacheControl = allowed.headers.get('cache-control') ?? '';
+    const cacheControl = (allowed.headers.get('cache-control') ?? '').toLowerCase().split(',').map((directive) => directive.trim());
     const text = await allowed.text();
-    if (!/\bprivate\b/i.test(cacheControl) || !/\bno-store\b/i.test(cacheControl)
+    if (!cacheControl.includes('private') || !cacheControl.includes('no-store') || cacheControl.includes('public')
         || !text.includes(expected[index])) {
       throw new Error('The authenticated staging asset was unexpected or cacheable at ' + path);
     }

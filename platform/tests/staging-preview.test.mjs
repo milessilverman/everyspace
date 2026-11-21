@@ -106,7 +106,9 @@ test('the access verifier requires anonymous denial and a private matching asset
   await assert.rejects(verifyPreviewAccess(accessConfig, gateFetch({ anonymousStatus: 404 })), /did not deny/);
   await assert.rejects(verifyPreviewAccess(accessConfig, gateFetch({ location: 'https://wrong.example/login' })), /did not deny/);
   await assert.rejects(verifyPreviewAccess(accessConfig, gateFetch({ allowedStatus: 302 })), /did not open/);
-  await assert.rejects(verifyPreviewAccess(accessConfig, gateFetch({ cacheControl: 'public' })), /cacheable/);
+  for (const cacheControl of ['public', 'private, no-store, public', 'x-private, x-no-store']) {
+    await assert.rejects(verifyPreviewAccess(accessConfig, gateFetch({ cacheControl })), /cacheable/);
+  }
   await assert.rejects(verifyPreviewAccess(accessConfig, gateFetch({ content: 'another version' })), /unexpected/);
   await assert.rejects(verifyPreviewAccess({ ...accessConfig, previewUrl: 'https://everyspace-staging.synthetic.workers.dev' },
     () => assert.fail('Credentials must not be sent to a Worker default route')), /HTTPS staging/);
