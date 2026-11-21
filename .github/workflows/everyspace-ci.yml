@@ -1,0 +1,55 @@
+name: Everyspace CI
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: everyspace-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Required test suites
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out the proposed merge
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install Node 24
+        uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
+        with:
+          node-version: '24'
+
+      - name: Install locked dependencies
+        run: npm ci --prefix platform
+
+      - name: Audit dependencies
+        run: npm audit --prefix platform --audit-level=moderate
+
+      - name: Run platform and migration tests
+        run: npm test --prefix platform
+
+      - name: Run simulator regression tests
+        run: node --test tests/*.test.mjs
+
+      - name: Test concurrency on PostgreSQL
+        run: npm run test:concurrency --prefix platform
+
+      - name: Install Deno and Chromium
+        run: |
+          npm install --global deno@2.7.9
+          npm exec --prefix platform -- playwright-core install --with-deps chromium
+
+      - name: Check Edge Functions
+        run: deno check --no-lock --node-modules-dir=none platform/supabase/functions/*/index.ts platform/staging/{edge,calendar-fixture}.ts
+
+      - name: Verify auth, RLS, booking flows and rollback
+        run: npm run test:staging --prefix platform
