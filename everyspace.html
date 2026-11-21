@@ -4,12 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Everyspace — Manage Everything You Rent Out</title>
-  <!-- Everyspace __1-1 (2026-11-06): price-beat / price-match guarantee removed. New promise: host keeps most / renter pays least, and nothing else. $1.00 managed-booking fee per external booking. Unified calendar blocks double-bookings. Business = homeowner roof listings + company proposals, not a business shopping site. Based on everyspace-fee-fix.html; original everyspace.html untouched. -->
-  <meta name="description" content="Rental management for everything you rent out: Airbnb, Vrbo, Swimply, SpotHero and more in one calendar, with calendar sync, no double-bookings, all-site earnings and pricing help. Managing a booking from another site costs $1.00 per booking.">
+  <meta name="description" content="Manage reservations, calendars and booking requests across 22 rental platforms with Everyspace.">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="Everyspace">
   <meta property="og:title" content="Everyspace — Manage everything you rent out">
-  <meta property="og:description" content="Free 2-minute quiz: see what your roof, wall, driveway, backyard or spare room could earn. List once, live everywhere.">
+  <meta property="og:description" content="Manage rental channels, calendar sync and booking requests in one Host Console.">
   <meta property="og:url" content="https://milessilverman.github.io/everyspace/">
   <meta name="twitter:card" content="summary">
   <link rel="canonical" href="https://milessilverman.github.io/everyspace/">
@@ -15254,7 +15253,7 @@ async function renderHostCalendar(view, _params, query) {
           </div>
         </div>`).join('')}
       </div>` : `<div class="empty"><div class="empty-icon">${icon.calendar}</div>${t.rows.length ? 'No bookings in this window.' : 'No listings yet.'}<a class="btn" href="${t.rows.length ? nav(t.from, days, false) : '#/host/import'}">${t.rows.length ? 'Show all listings' : 'Import a listing'}</a></div>`}
-      <p class="muted small fine">Tap an empty day to record a booking from another site. Everything here blocks the same dates on Everyspace and in your calendar feeds, so nothing gets double-booked.</p>
+      <p class="muted small fine">Tap an empty day to record a booking from another site. This calendar publishes known busy times. Connected sites refresh their copies on their own schedules.</p>
     </div>`;
 
   const refresh = () => renderHostCalendar(view, _params, query);
@@ -17168,7 +17167,7 @@ async function renderProfile(view) {
         ${isBiz ? '' : '<a href="#/biz">' + icon.building + ' <span>Everyspace for Business</span>' + icon.chevron + '</a>'}
         <a href="#/plan">${icon.fileText} <span>Product Architecture & Mission Plan</span>${icon.chevron}</a>
         <a href="#/promise">${icon.briefcase} <span>Our host promise (list anywhere, manage here)</span>${icon.chevron}</a>
-          <a href="host/">${icon.shieldCheck} <span>Host Console: run your real listings, with no double bookings (beta)</span>${icon.chevron}</a>
+          <a href="host/">${icon.shieldCheck} <span>Host Console · Manage your listings and review conflicts</span>${icon.chevron}</a>
         <a href="#/catalog">${icon.explore} <span>Everything you can rent out, and what each one needs</span>${icon.chevron}</a>
         <button id="install" hidden>${icon.spark} <span>Install Web App</span>${icon.chevron}</button>
         <button id="reset">${icon.refresh} <span>Reset demo data to initial state</span>${icon.chevron}</button>
@@ -19267,7 +19266,7 @@ function renderPromise(view) {
         <li>Connect Airbnb, Vrbo and Booking.com — or link each listing to its page on the other site.</li>
         <li>Add that site's calendar (iCal) link, or upload its .ics file. Its bookings show up here and block the same dates on Everyspace, Vrbo, Airbnb and Booking.com.</li>
         <li>Paste your Everyspace calendar link into the other site, so our bookings and your blocked dates block it there.</li>
-        <li>One calendar, no double-booking: a booking on any connected site, an owner block, cleaning/prep time, or a parent/child conflict holds the space everywhere, so the same dates cannot be booked twice. Connected calendars block instantly; iCal-only feeds block the dates we know about when they sync, and we flag any overlap the moment we see it.</li>
+        <li>One calendar for recorded bookings, owner blocks and cleanup time. Provider feeds reflect recorded busy times when they refresh. The Host Console flags overlaps it detects.</li>
       </ol>
       <p class="muted small">Most sites don't share booking payouts through calendar feeds, so add payouts by hand if you want them in your earnings. Fee comparisons use our estimates of each site's published fees. Managing them here is free.</p>
 
@@ -19296,7 +19295,7 @@ function renderWelcome(view) {
       <div class="page narrow">
         <span class="eyebrow">Rental management · Free for owners</span>
         <h1>Run everything you rent out, from one place.</h1>
-        <p class="lead">Your home on Airbnb, your pool on Swimply, your driveway on SpotHero, and anything else: one calendar, every booking, every payout, and no double-bookings. Keep listing wherever you like. Managing is free: Everyspace only earns a share of the extra money it brings you.</p>
+        <p class="lead">Your home on Airbnb, your pool on Swimply, your driveway on SpotHero, and anything else: one place to track bookings, payouts and calendar conflicts. Keep listing wherever you like. Managing is free: Everyspace only earns a share of the extra money it brings you.</p>
         <div class="btn-row welcome-ctas">
           <a class="btn big" href="#/earn">Take the free 2-minute quiz →</a>
           <a class="btn ghost" href="#/map">🗺️ Find my home on the map</a>
@@ -19336,7 +19335,7 @@ function renderWelcome(view) {
         <ul class="check-list">
           <li>We list you on every site that fits, and create the accounts for you</li>
           <li>Our listing team posts to the sites that don't have a direct connection</li>
-          <li>Calendars synced every 15 minutes, so no double-bookings</li>
+          <li>Calendar imports checked every 15 minutes</li>
           <li>Prices kept in step everywhere, so you take home the same on every site</li>
           <li>One inbox for guest messages from every site</li>
           <li>Cleanings scheduled after every checkout, on every site</li>
@@ -19355,7 +19354,7 @@ function renderWelcome(view) {
       <h2 class="section-title">Everything in one place</h2>
       <div class="promise-grid">
         <a class="promise-card" href="#/host/calendar"><span>${icon.calendar}</span><strong>One calendar</strong><p>Every listing and every booking from every site, side by side.</p></a>
-        <a class="promise-card" href="#/host/calendar"><span>${icon.shieldCheck}</span><strong>No double-bookings</strong><p>A booking on Airbnb, Vrbo, Booking.com or here blocks the same dates everywhere — it cannot be booked twice.</p></a>
+        <a class="promise-card" href="#/host/calendar"><span>${icon.shieldCheck}</span><strong>Conflict alerts</strong><p>See recorded overlaps and verify availability on each provider.</p></a>
         <a class="promise-card" href="#/inbox"><span>${icon.inbox}</span><strong>One inbox</strong><p>Answer guests from every site in one place, with saved replies.</p></a>
         <a class="promise-card" href="#/host/earnings"><span>${icon.cash}</span><strong>All your earnings</strong><p>Payouts from every site in one chart, ready for taxes.</p></a>
         <a class="promise-card" href="#/earn"><span>${icon.spark}</span><strong>Pricing help</strong><p>Suggested prices from your features and what's nearby.</p></a>
@@ -20680,8 +20679,33 @@ function drawNav(active) {
   }).join('');
 }
 
+function showManagementLaunch() {
+  $('#view').innerHTML = `<section class="page narrow" style="max-width:640px;margin:clamp(24px,12vh,120px) auto">
+    <div class="brand" style="margin-bottom:20px">every<b>space</b></div>
+    <h1 class="page-title">Manage every space you rent</h1>
+    <p class="muted">See reservations, sync calendars and review requests across 22 rental platforms.</p>
+    <div class="btn-row" style="margin:24px 0 18px;flex-wrap:wrap">
+      <a class="btn" href="host/">Open Host Console</a>
+      <a class="btn ghost" href="?demo=1#/earn">Try the earnings tools</a>
+    </div>
+    <a class="link-text" href="?demo=1#/host">Explore the simulated host demo</a>
+  </section>`;
+  document.body.classList.add('ready');
+}
+
 async function boot() {
   applyTheme();
+  const demo = new URLSearchParams(location.search).get('demo') === '1'
+    || (location.hash.startsWith('#/') && location.hash.length > 2);
+  if (!demo) {
+    showManagementLaunch();
+    return;
+  }
+  const notice = document.createElement('aside');
+  notice.setAttribute('aria-label', 'Demo mode');
+  notice.style.cssText = 'text-align:center;padding:8px 16px;font-size:13px;background:#134e4a;color:#fff';
+  notice.innerHTML = 'Demo · Bookings and connections are simulated. <a style="color:inherit;text-decoration:underline" href="host/">Open the Host Console</a>';
+  $('#app').prepend(notice);
   try { __m['style'].initStyle(); } catch (e) { console.error(e); }
   [state.catalog, state.users, state.channels, state.fit] = await Promise.all([api('catalog'), api('users'), api('channels'), api('fit')]);
   window.everyspaceCatalog = state.catalog;

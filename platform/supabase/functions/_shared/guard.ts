@@ -1,11 +1,8 @@
-// No double bookings, ever: the checks behind "safe to accept".
-//
-// Why calendar links alone are not enough: each site re-reads other calendars on its own schedule (Airbnb: every few
-// hours). If two sites can both confirm a booking instantly, a guest can book in that gap. So Everyspace enforces:
+// A calendar check reads the latest snapshot the provider serves. Providers may refresh
+// that snapshot or confirm outside bookings on their own schedule. Everyspace enforces:
 //   1. One open door: for any physical space, at most one site takes Instant Book (enforced in the database).
-//   2. Every other booking starts as a request. Everyspace holds the dates (a database lock, so no second request can
-//      take them), the dates get closed on the instant site, Everyspace reads that site's calendar live to prove it,
-//      and only then says "safe to accept".
+//   2. Everyspace holds local inventory. When an instant site's calendar can be checked, the host closes those dates
+//      there and Everyspace reads the provider's available snapshot. The host verifies current provider availability.
 //   3. A guard re-checks every 15 minutes that the instant site still shows every other booking as closed.
 // Pure functions (no network, no database) so they are tested directly.
 import { type CalendarEvent, localDayToUtc } from './ical.ts';
@@ -14,6 +11,8 @@ export const SITE_NAMES: Record<string, string> = {
   everyspace: 'Everyspace', airbnb: 'Airbnb', vrbo: 'Vrbo', booking_com: 'Booking.com', expedia: 'Expedia',
   furnished_finder: 'Furnished Finder', swimply: 'Swimply', peerspace: 'Peerspace', neighbor: 'Neighbor', spothero: 'SpotHero',
   sniffspot: 'Sniffspot', hipcamp: 'Hipcamp', getmyboat: 'GetMyBoat', outdoorsy: 'Outdoorsy', rvshare: 'RVshare',
+  giggster: 'Giggster', evmatch: 'EVmatch', kitchen_door: 'The Kitchen Door', liquidspace: 'LiquidSpace',
+  spareroom: 'SpareRoom', zillow: 'Zillow Rentals',
   craigslist: 'Craigslist', facebook: 'Facebook', direct: 'Direct', other: 'the other site',
 };
 export const siteName = (c: string) => SITE_NAMES[c] ?? c;
@@ -48,16 +47,22 @@ export type DoorCheck =
 
 /**
  * Is a held stretch of time safely closed on the instant site? Reads that site's live calendar:
- * - a guest booking overlapping it there means the instant site sold it first: decline the request;
+ * - a booking or its cleanup overlapping the request requires verification on the provider;
  * - otherwise the whole stretch must be covered by dates the host closed there.
  */
-export function checkDoor({ hold, doorEvents, timeZone }:
-  { hold: { starts_at: string; ends_at: string }; doorEvents: CalendarEvent[]; timeZone: string }): DoorCheck {
+export function checkDoor({ hold, doorEvents, timeZone, bookingTurnoverMinutes = 0 }: {
+  hold: { starts_at: string; ends_at: string };
+  doorEvents: CalendarEvent[];
+  timeZone: string;
+  bookingTurnoverMinutes?: number;
+}): DoorCheck {
   const s = Date.parse(hold.starts_at); const e = Date.parse(hold.ends_at);
   const live = doorEvents.filter((ev) => !ev.cancelled);
   for (const ev of live) {
     const [a, b] = range(ev, timeZone);
-    if (ev.kind === 'booking' && a < e && b > s) return { ok: false, reason: 'taken', uid: ev.uid };
+    if (ev.kind === 'booking' && a < e && b + bookingTurnoverMinutes * 60_000 > s) {
+      return { ok: false, reason: 'taken', uid: ev.uid };
+    }
   }
   const gap = firstGap(s, e, live.filter((ev) => ev.kind === 'block').map((ev) => range(ev, timeZone)));
   return gap ? { ok: false, reason: 'not_closed', gapStart: new Date(gap[0]).toISOString(), gapEnd: new Date(gap[1]).toISOString() } : { ok: true };

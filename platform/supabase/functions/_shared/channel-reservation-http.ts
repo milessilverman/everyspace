@@ -1,27 +1,10 @@
-import { CHANNELS, isProviderReference, type Channel, type ProviderDelivery } from './channel-adapters.ts';
+import { CHANNELS, enabledOperation, isProviderReference, type Channel, type ProviderDelivery } from './channel-adapters.ts';
 import { type Adapters, type ReservationStore, withProviderDeadline } from './channel-reservation-engine.ts';
+import { readBoundedBody, BodyLimitError } from './request-body.ts';
 
 const MAX_WEBHOOK_BYTES = 64 * 1024;
 const json = (status: number, body: object) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
-
-async function webhookBody(request: Request): Promise<Uint8Array | null> {
-  if (Number(request.headers.get('content-length')) > MAX_WEBHOOK_BYTES) return null;
-  const reader = request.body?.getReader();
-  if (!reader) return new Uint8Array();
-  const buffer = new Uint8Array(MAX_WEBHOOK_BYTES);
-  let length = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) return buffer.subarray(0, length);
-    if (length + value.length > buffer.length) {
-      await reader.cancel();
-      return null;
-    }
-    buffer.set(value, length);
-    length += value.length;
-  }
-}
 
 function validDelivery(value: ProviderDelivery | null, channel: Channel): value is ProviderDelivery {
   return value?.channel === channel && [value.deliveryId, value.accountRef, value.listingRef, value.externalRequestId]
@@ -59,15 +42,15 @@ export function reservationHandler({ adapters, store, workerSecret, process, wak
     }
     const channel = path.match(/^\/webhook\/(airbnb|vrbo)$/)?.[1] as Channel | undefined;
     if (!channel || !CHANNELS.includes(channel)) return json(404, { error: 'Unknown route' });
-    const adapter = adapters[channel];
-    if (!adapter.supportsWebhooks) return json(503, { error: 'Provider webhooks unavailable' });
+    const verifyWebhook = enabledOperation(adapters[channel], 'verifyWebhook');
+    if (!verifyWebhook) return json(503, { error: 'Provider webhooks unavailable' });
 
     let delivery: ProviderDelivery | null;
     try {
-      const body = await webhookBody(request);
-      if (!body) return json(413, { error: 'Webhook too large' });
-      delivery = await withProviderDeadline((signal) => adapter.verifyWebhook(request.headers, body, signal));
-    } catch {
+      const body = await readBoundedBody(request, MAX_WEBHOOK_BYTES);
+      delivery = await withProviderDeadline((signal) => verifyWebhook(request.headers, body, signal));
+    } catch (error) {
+      if (error instanceof BodyLimitError) return json(413, { error: 'Webhook too large' });
       return json(503, { error: 'Webhook verification unavailable' });
     }
     if (!validDelivery(delivery, channel)) return json(401, { error: 'Invalid webhook' });

@@ -36,6 +36,18 @@ test('an hourly pool booking is covered by a closed day on Airbnb', () => {
   assert.equal(checkDoor({ hold: h, timeZone: LA, doorEvents: cal(day('b', '20261206', '20261207', 'Airbnb (Not available)')) }).ok, false);
 });
 
+test('a live calendar check accounts for cleanup after the instant listing’s booking', () => {
+  const doorEvents = cal(
+    day('house-stay', '20261204', '20261205', 'Reserved'),
+    day('closed', '20261205', '20261206', 'Airbnb (Not available)'),
+  );
+  const check = (starts_at: string) => checkDoor({
+    hold: { starts_at, ends_at: '2026-12-05T10:00:00.000Z' }, timeZone: LA, doorEvents, bookingTurnoverMinutes: 30,
+  });
+  assert.deepEqual(check('2026-12-05T08:15:00.000Z'), { ok: false, reason: 'taken', uid: 'house-stay' });
+  assert.deepEqual(check('2026-12-05T08:30:00.000Z'), { ok: true });
+});
+
 test('guard lists every booking the instant site no longer shows as busy', () => {
   const gaps = doorGaps({ timeZone: LA, doorEvents: cal(day('x', '20261210', '20261213', 'Airbnb (Not available)')), required: [
     { id: 'vrbo-stay', ...hold('2026-12-10', '2026-12-13') },

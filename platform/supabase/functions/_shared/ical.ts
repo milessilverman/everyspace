@@ -1,13 +1,14 @@
 // iCalendar (.ics) reading and writing for calendar sync.
 //
-// Every major rental site can export a calendar link (Airbnb, Vrbo, Booking.com, Hipcamp, Peerspace…) and most can
-// import one. That is the one sync method that works today with no partner approval, so it is the first real
-// connection Everyspace ships:
+// Providers with compatible calendar links can publish recorded availability on their own schedule:
 //   - import: we fetch each site's calendar link for a space and store the busy dates;
 //   - export: we publish one feed per space and site with everything busy *elsewhere*, which the host pastes
-//     into that site once, so a booking anywhere blocks the dates everywhere.
+//     into a compatible listing.
 //
 // Pure functions with no Deno or Node APIs, so the same file runs in Supabase Edge Functions and in tests.
+
+import { IncompleteCalendarObservation } from './calendar-observation.ts';
+import { reservationInstant } from './reservation-time.ts';
 
 export type CalendarEvent = {
   uid: string;
@@ -17,9 +18,11 @@ export type CalendarEvent = {
   summary: string;
   cancelled: boolean;
   kind: 'booking' | 'block';
+  sequence?: number;
 };
 
 const DAY_MS = 86_400_000;
+const EXPORTED_UID = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}@everyspace\.app$/i;
 
 /** Joins folded lines (RFC 5545 §3.1) and normalises line endings. */
 export function unfold(text: string): string {
@@ -154,4 +157,78 @@ export function utcToLocalDay(iso: string, timeZone: string): string {
   const parts = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date(iso));
   const get = (t: string) => parts.find((p) => p.type === t)?.value;
   return `${get('year')}-${get('month')}-${get('day')}`;
+}
+
+/**
+ * Validate the snapshot before fetching availability or altering recorded occupancy.
+ * A recurring or partially parsed feed cannot establish the state of the affected dates.
+ */
+export function parseProviderCalendar(text: string, timeZone: string, channel: string): CalendarEvent[] {
+  const source = unfold(text).trim();
+  if (!/^BEGIN:VCALENDAR\n/i.test(source) || !/\nEND:VCALENDAR$/i.test(source)
+      || (source.match(/^BEGIN:VCALENDAR\s*$/gim)?.length ?? 0) !== 1
+      || (source.match(/^END:VCALENDAR\s*$/gim)?.length ?? 0) !== 1) {
+    throw new IncompleteCalendarObservation('The provider calendar is incomplete or invalid.');
+  }
+  const begins = source.match(/^BEGIN:VEVENT\s*$/gim)?.length ?? 0;
+  const ends = source.match(/^END:VEVENT\s*$/gim)?.length ?? 0;
+  if (begins !== ends || begins > 3000) {
+    throw new IncompleteCalendarObservation('The provider calendar contains unsupported or incomplete events.');
+  }
+
+  const blocks = [...source.matchAll(/^BEGIN:VEVENT[ \t]*\n([\s\S]*?)^END:VEVENT[ \t]*$/gim)];
+  function validateDate(line: string) {
+    const match = /^(DTSTART|DTEND)((?:;[^:\n]+)*):(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})(\d{2})(Z)?)?$/i.exec(line);
+    if (!match) return null;
+    const [, , params, year, month, day, hour, minute, second, utc] = match;
+    const date = `${year}-${month}-${day}`;
+    const tz = params.match(/(?:^|;)TZID="?([^;:"]+)"?/i)?.[1] ?? timeZone;
+    const allDay = !hour;
+    try {
+      const instant = reservationInstant(allDay ? date : `${date}T${hour}:${minute}:${second}${utc ?? ''}`, allDay, tz);
+      return { instant, value: allDay ? date : instant, allDay };
+    } catch {
+      return null;
+    }
+  }
+
+  const seen = new Set<string>();
+  if (blocks.length !== begins) throw new IncompleteCalendarObservation('The provider calendar is incomplete or invalid.');
+  return blocks.flatMap(([, body]): CalendarEvent[] => {
+    if (/^(?:RRULE|RDATE|EXDATE|RECURRENCE-ID|DURATION)[;:]/im.test(body)) {
+      throw new IncompleteCalendarObservation('The provider calendar contains unsupported recurring or duration-based events.');
+    }
+    const uids = [...body.matchAll(/^UID(?:;[^:\n]*)?:(.+)$/gim)];
+    const starts = [...body.matchAll(/^DTSTART[;:].+$/gim)];
+    const finishes = [...body.matchAll(/^DTEND[;:].+$/gim)];
+    const uid = unescapeText(uids[0]?.[1] ?? '');
+    const start = starts.length === 1 && validateDate(starts[0][0]);
+    let end = finishes.length === 1 ? validateDate(finishes[0][0]) : null;
+    if (!finishes.length && start && start.allDay) {
+      const nextDay = new Date(toMs(start.value) + DAY_MS).toISOString().slice(0, 10);
+      end = validateDate(`DTEND;VALUE=DATE:${nextDay.replace(/-/g, '')}`);
+    }
+    if (uids.length !== 1 || !uid || uid.length > 512 || seen.has(uid) || !start || !end
+        || start.allDay !== end.allDay || end.instant <= start.instant) {
+      throw new IncompleteCalendarObservation('The provider calendar contains an event that could not be verified.');
+    }
+    seen.add(uid);
+    const versions = [...body.matchAll(/^SEQUENCE:(.+)$/gim)];
+    const version = versions[0]?.[1]?.trim();
+    if (versions.length > 1 || (version !== undefined && (!/^\d+$/.test(version) || Number(version) > 2147483647))) {
+      throw new IncompleteCalendarObservation('The provider calendar contains an invalid event revision.');
+    }
+    const summary = unescapeText(/^SUMMARY(?:;[^:\n]*)?:(.+)$/im.exec(body)?.[1] ?? '');
+    // A provider can republish an imported Everyspace event. Its unchanged ID identifies a copy.
+    if (EXPORTED_UID.test(uid)) return [];
+    // Only these provider-specific markers can establish a closure for a manual guard check.
+    const block = (channel === 'airbnb' && /^Airbnb \(Not available\)$/i.test(summary))
+      || (channel === 'vrbo' && /^Blocked$/i.test(summary));
+    return [{
+      uid, start: start.value, end: end.value, allDay: start.allDay, sequence: version === undefined ? undefined : Number(version),
+      summary: block ? 'Unavailable' : 'Reserved',
+      kind: block ? 'block' : 'booking',
+      cancelled: /^STATUS:CANCELLED\s*$/im.test(body),
+    }];
+  });
 }

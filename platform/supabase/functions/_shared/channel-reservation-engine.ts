@@ -1,5 +1,5 @@
 import {
-  isProviderReference,
+  enabledOperation, isProviderReference,
   type Availability, type BookingRequest, type Channel, type ChannelAdapter,
   type ProviderDelivery, type ProviderListing, type ProviderState,
 } from './channel-adapters.ts';
@@ -80,8 +80,10 @@ function validSnapshot(snapshot: ProviderState): boolean {
 }
 
 async function read(adapter: ChannelAdapter, work: Work): Promise<ProviderState | null> {
+  const lookup = enabledOperation(adapter, 'getReservation');
+  if (!lookup) return null;
   try {
-    const current = await withProviderDeadline((signal) => adapter.getReservation(work.request, signal));
+    const current = await withProviderDeadline((signal) => lookup(work.request, signal));
     return current && sameRequest(work.request, current) && validSnapshot(current) ? current : null;
   } catch {
     return null;
@@ -97,24 +99,28 @@ async function process(work: Work, store: ReservationStore, adapters: Adapters):
   }
   const result = await store.record(work, snapshot.state, snapshot);
   if (snapshot.state !== 'pending' || result !== 'ready') return;
-  if (!adapter.supportsProgrammaticApproval) {
+  const approve = enabledOperation(adapter, 'approve');
+  if (!approve) {
     await store.record(work, 'retry', { reason: 'approval_unavailable' });
     return;
   }
 
   const scope = await store.scope(work);
-  if (!scope.some(({ listing }) => listing?.id === work.listingId)
-      || scope.some(({ listing }) => !listing || !adapters[listing.channel].supportsAvailability)) {
+  const checks = scope.map(({ listing }) => ({
+    listing, getAvailability: listing && enabledOperation(adapters[listing.channel], 'getAvailability'),
+  }));
+  if (!checks.some(({ listing }) => listing?.id === work.listingId)
+      || checks.some(({ listing, getAvailability }) => !listing || !getAvailability)) {
     await store.record(work, 'retry', { reason: 'availability_unverified' });
     return;
   }
   let proof: Proof[];
   try {
-    proof = await Promise.all(scope.map(async ({ listing }) => {
+    proof = await Promise.all(checks.map(async ({ listing, getAvailability }) => {
       const target = listing!;
       const ref = target.id === work.listingId ? work.request.externalRequestId : null;
       const availability = await withProviderDeadline((signal) =>
-        adapters[target.channel].getAvailability(target, snapshot, ref, signal));
+        getAvailability!(target, snapshot, ref, signal));
       if (!validTimestamp(availability.observedAt)) throw new Error('Invalid availability timestamp');
       return { ...availability, listingId: target.id };
     }));
@@ -126,7 +132,7 @@ async function process(work: Work, store: ReservationStore, adapters: Adapters):
 
   // The database has committed a durable hold. If the process dies here, the next worker only reads.
   try {
-    await withProviderDeadline((signal) => adapter.approve(work.request, work.id, signal));
+    await withProviderDeadline((signal) => approve(work.request, work.id, signal));
   } catch {
     // The provider may have applied the operation before the response failed.
   }
@@ -141,10 +147,15 @@ async function process(work: Work, store: ReservationStore, adapters: Adapters):
 export async function drainReservations(store: ReservationStore, adapters: Adapters, limit = 6): Promise<number> {
   const stopAt = Date.now() + 30_000;
   let processed = 0;
-  for (; processed < limit && Date.now() < stopAt; processed++) {
+  for (let attempted = 0; attempted < limit && Date.now() < stopAt; attempted++) {
     const work = await store.claim();
     if (!work) break;
-    await process(work, store, adapters);
+    try {
+      await process(work, store, adapters);
+      processed++;
+    } catch {
+      console.error('channel_reservation_job_failed');
+    }
   }
   return processed;
 }
