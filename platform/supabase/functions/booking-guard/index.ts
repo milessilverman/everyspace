@@ -5,7 +5,7 @@
 //   { "action": "check",   "hold_id" }                                                          → check again after closing dates
 //   { "action": "release", "hold_id", "reason"? }                                               → the request was declined
 //   { "action": "record", "space_id", "channel", "start", "end", "ref", "verified_on_provider", ... } → record an external confirmation
-import { createClient } from 'npm:@supabase/supabase-js@2.45.4';
+import { serviceClient, userClient } from '../_shared/supabase.ts';
 import { CORS, preflight } from '../_shared/cors.ts';
 import { parseProviderCalendar } from '../_shared/ical.ts';
 import { BodyLimitError, readBoundedBody } from '../_shared/request-body.ts';
@@ -14,9 +14,7 @@ import { createCalendarFetcher } from '../_shared/fetch.ts';
 import { checkDoor, describeDates, describeDays, describeNights, siteName, VERIFIABLE_BY_CALENDAR } from '../_shared/guard.ts';
 
 const fetchCalendar = createCalendarFetcher(Deno.env.get('CALENDAR_FEED_HOST_ALLOWLIST'));
-const URL_ = Deno.env.get('SUPABASE_URL')!;
-const ANON = Deno.env.get('SUPABASE_ANON_KEY')!;
-const admin = createClient(URL_, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!, { auth: { persistSession: false } });
+const admin = serviceClient();
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...CORS, 'content-type': 'application/json' } });
 
 type Verdict = {
@@ -85,7 +83,7 @@ async function check(holdId: string): Promise<Verdict> {
 Deno.serve(async (req) => {
   const pre = preflight(req); if (pre) return pre;
   if (req.method !== 'POST') return json({ error: 'Use POST' }, 405);
-  const user = createClient(URL_, ANON, { auth: { persistSession: false }, global: { headers: { Authorization: req.headers.get('Authorization') ?? '' } } });
+  const user = userClient(req.headers.get('Authorization') ?? '');
   if (!(await user.auth.getUser()).data.user) return json({ error: 'Sign in to manage a request.' }, 401);
   let body: Record<string, unknown>;
   try {

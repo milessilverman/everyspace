@@ -28,3 +28,18 @@ No Swimply latency measurement exists yet for Everyspace. A push-assisted calend
 ## What this draft implements
 
 Everyspace now collects bounded, complete calendar observations before applying them under the existing lease and property lock. The active iCal reader uses that path. Tests verify replayed pages, conflicting observations, interrupted pages, expired attempts and recovery with synthetic data. The console shows stale, failed, and incomplete reads, and distinguishes possible duplicates from confirmed conflicts. The draft contains no live Google, Cronofy or Swimply callback, credentials, calendar-writing client, or provider booking operation. [Staging verification and pilot runbook](STAGING_PILOT.md)
+
+## Dedicated Google Calendar test proposal
+
+Keep the test in a separate Google OAuth project in Testing with one approved synthetic or owner-controlled account. The proposed scope is `https://www.googleapis.com/auth/calendar.events.owned.readonly`. The test application would allow one explicitly configured dedicated calendar ID. An owned-calendar scope can cover other calendars the account owns, so use an account dedicated to the trial. Record the exact HTTPS redirect URI and consent text for approval once the protected preview exists. The proposed browser callback path is `/oauth/google/callback`. The Calendar watch route needs its own HTTPS endpoint and notification-channel validation. No OAuth client, redirect or watch is enabled by this draft. [Google Calendar scopes](https://developers.google.com/workspace/calendar/api/auth) · [Google Calendar push](https://developers.google.com/workspace/calendar/api/guides/push)
+
+Before connecting, get separate approval for that scope, the exact browser callback and notification URL, the dedicated account and the consent text. Describe the busy intervals collected, the one-calendar restriction, retention and revocation. Store tokens only in staging and stop the notification channel and revoke credentials at the end. Verify with Swimply that its documented calendar connector can be used for this downstream test. [Swimply calendar connection](https://swimply.zendesk.com/hc/en-us/articles/30133735282451-Syncing-Calendar)
+
+| Exercise | Expected outcome |
+| --- | --- |
+| Add, extend and cancel synthetic events | Record start, end, time zone, source ID and revision. Confirm the fixture's local cleanup and readback. Ignore event content outside the approved fields. |
+| Replay, reordered changes and interrupted pages | Apply a complete observation once. Keep known occupancy through partial or stale reads. |
+| Missed notification, expired cursor and revocation | Reconcile on the next successful fallback read. On `410 Gone`, rebuild from a full read before releasing any observed time. Surface a disconnected state on revocation. |
+| Timing | Compare provider-side appearance, Google visibility and committed Everyspace observation. Use the five-minute p95 target and record misses and recovery. |
+
+The current staging suite exercises the synthetic calendar behaviors only. Connecting a real Swimply or Google account and activating OAuth require separate approval. [Incremental synchronization](https://developers.google.com/workspace/calendar/api/guides/sync)

@@ -1,5 +1,4 @@
-// deno-lint-ignore no-import-prefix
-import { createClient } from 'npm:@supabase/supabase-js@2.45.4';
+import { serviceClient, userClient } from '../_shared/supabase.ts';
 // deno-lint-ignore no-import-prefix
 import PostalMime from 'npm:postal-mime@4.2.1';
 import { CORS, preflight } from '../_shared/cors.ts';
@@ -7,9 +6,7 @@ import { emailFingerprint, MAX_EMAIL_BYTES, parseBookingEmail } from '../_shared
 import { BodyLimitError, readBoundedBody } from '../_shared/request-body.ts';
 import { reservationRange } from '../_shared/reservation-time.ts';
 
-const baseUrl = Deno.env.get('SUPABASE_URL')!;
-const anonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
-const admin = createClient(baseUrl, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!, { auth: { persistSession: false } });
+const admin = serviceClient();
 const response = (value: object, status = 200) => new Response(JSON.stringify(value), {
   status, headers: { ...CORS, 'content-type': 'application/json', 'cache-control': 'no-store' },
 });
@@ -28,7 +25,7 @@ Deno.serve(async (req) => {
   if (req.method !== 'POST') return response({ error: 'Use POST.' }, 405);
   const auth = req.headers.get('authorization');
   if (!auth?.startsWith('Bearer ')) return response({ error: 'Sign in to manage booking email.' }, 401);
-  const user = createClient(baseUrl, anonKey, { auth: { persistSession: false }, global: { headers: { Authorization: auth } } });
+  const user = userClient(auth);
   const { data: authenticated } = await user.auth.getUser();
   if (!authenticated.user) return response({ error: 'Sign in to manage booking email.' }, 401);
 

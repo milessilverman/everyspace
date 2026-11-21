@@ -1,23 +1,12 @@
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { chromium } from 'playwright-core';
 import { createStaging, fixturesHost } from './stack.mjs';
 
-const NIGHT = '2037-07-14';
-const CHECKOUT = '2037-07-15';
-const POOL_DAY = '2037-07-16';
-const AIRBNB_WINDOW = ['20370714', '20370715'];
-const poolFixturePath = '/pool.ics';
+import { booked, calendar, CHECKOUT, currentPool, defaultPool, houseCalendar, NIGHT, POOL_DAY } from './calendar-fixtures.mjs';
 
-const calendar = (events = []) => ['BEGIN:VCALENDAR', 'VERSION:2.0', ...events.flat(), 'END:VCALENDAR'].join('\r\n') + '\r\n';
-const booked = (id, start, end, { allDay = false, revision = 1, cancelled = false } = {}) => [
-  'BEGIN:VEVENT', 'UID:' + id, 'SEQUENCE:' + revision,
-  (allDay ? 'DTSTART;VALUE=DATE:' : 'DTSTART:') + start,
-  (allDay ? 'DTEND;VALUE=DATE:' : 'DTEND:') + end,
-  'SUMMARY:Reserved', ...(cancelled ? ['STATUS:CANCELLED'] : []), 'END:VEVENT',
-];
-const defaultPool = calendar([booked('fixture-pool-1', '20370716T220000Z', '20370717T000000Z')]);
-const currentPool = calendar([booked('fixture-pool-1', '20370716T220000Z', '20370717T000000Z', { revision: 3 })]);
+const poolFixturePath = '/pool.ics';
 
 async function seed(stage) {
   const { api } = stage;
@@ -122,7 +111,7 @@ async function checkCalendars(stage, data) {
   };
   const ageAttempt = () => sql(`update public.calendar_imports set last_attempt_at = now()-interval '35 minutes' where space_id = '${pool}'`);
   const read = () => sync(host.jwt, pool);
-  setCalendar('/house.ics', calendar([booked('fixture-home-1', ...AIRBNB_WINDOW, { allDay: true })]));
+  setCalendar('/house.ics', houseCalendar);
   setCalendar(poolFixturePath, defaultPool);
   await sync(anon, null, 'synthetic-unauthorized-scheduler-value', 401);
   const batch = await sync(anon, null, cronSecret);
@@ -182,6 +171,9 @@ async function checkHostConsole(browser, stage, data) {
   const { host, outsider, pool, driveway, house } = data;
   const { api, sql } = stage;
   const page = await localPage(browser, stage, { width: 1280, height: 900 });
+  for (const name of ['booking-guard', 'booking-email']) {
+    await api('/functions/v1/' + name, 401, { method: 'POST', body: {} });
+  }
   const pageErrors = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
   await page.goto(stage.base + '/');
@@ -318,7 +310,8 @@ try {
   const data = await seed(stage);
   await stage.snapshot();
   await stage.deployCandidate();
-  browser = await chromium.launch({ executablePath: process.env.CHROMIUM_EXECUTABLE ?? '/usr/bin/chromium', headless: true,
+  const chromiumPath = existsSync('/usr/bin/chromium') ? '/usr/bin/chromium' : chromium.executablePath();
+  browser = await chromium.launch({ executablePath: process.env.CHROMIUM_EXECUTABLE ?? chromiumPath, headless: true,
     args: ['--no-sandbox', '--disable-dev-shm-usage'] });
   await checkCalendars(stage, data);
   await checkHostConsole(browser, stage, data);

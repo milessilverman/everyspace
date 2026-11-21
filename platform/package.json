@@ -5,13 +5,15 @@
   "scripts": {
     "test": "node --test tests/*.test.ts tests/*.test.mjs",
     "test:concurrency": "node --test tests/channel-concurrency.postgres.mjs",
-    "test:staging": "node staging/verify.mjs"
+    "test:staging": "node staging/verify.mjs",
+    "staging:package": "node staging/package-preview.mjs"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.2.17",
     "playwright-core": "1.57.0"
   },
   "dependencies": {
+    "@supabase/supabase-js": "2.119.2",
     "postal-mime": "4.2.1"
   }
 }

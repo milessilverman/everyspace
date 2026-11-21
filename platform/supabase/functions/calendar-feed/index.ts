@@ -4,12 +4,12 @@
 // another calendar). From then on, busy time from other sites is published for the receiving platform to fetch.
 // The token is the only credential, so it is long and random, and the feed never includes guest names or prices.
 // This function must be deployed with JWT verification off (see supabase/config.toml), since sites fetch it anonymously.
-import { createClient } from 'npm:@supabase/supabase-js@2.45.4';
+import { serviceClient } from '../_shared/supabase.ts';
 import { buildIcs } from '../_shared/ical.ts';
 import { CORS, preflight } from '../_shared/cors.ts';
 import { feedEvents, type BusyRow } from '../_shared/sync.ts';
 
-const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!, { auth: { persistSession: false } });
+const admin = serviceClient();
 const notFound = () => new Response('Calendar not found', { status: 404, headers: { ...CORS, 'content-type': 'text/plain' } });
 
 Deno.serve(async (req) => {

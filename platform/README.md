@@ -27,6 +27,8 @@ The [technical audit](docs/TECHNICAL_AUDIT.md) records the verified tests and st
 
 The [staging and pilot runbook](docs/STAGING_PILOT.md) covers the isolated rehearsal, operational warnings, rollback and approvals. The [Swimply read-only calendar plan](docs/SWIMPLY_READ_ONLY.md) documents the host calendar connection, authorization, latency measurements and costs.
 
+The [hosted staging runbook](docs/HOSTED_STAGING.md) covers the separate Free project, protected HTTPS preview, deployment package and owner approval steps. The `Everyspace CI` workflow runs the platform, Postgres concurrency and local staging suites on pull requests.
+
 ## Run the tests
 
 ```bash

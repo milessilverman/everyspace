@@ -1,6 +1,5 @@
 // Scheduled reads and interactive refreshes use the same leases and atomic snapshot writer.
-// deno-lint-ignore no-import-prefix
-import { createClient } from 'npm:@supabase/supabase-js@2.45.4';
+import { isServiceAuthorization, serviceClient, userClient } from '../_shared/supabase.ts';
 import { collectCalendarObservation, IncompleteCalendarObservation } from '../_shared/calendar-observation.ts';
 import { CORS, preflight } from '../_shared/cors.ts';
 import { parseProviderCalendar, type CalendarEvent } from '../_shared/ical.ts';
@@ -9,10 +8,7 @@ import { CalendarFetchError, createCalendarFetcher } from '../_shared/fetch.ts';
 import { readBoundedBody } from '../_shared/request-body.ts';
 import { doorGaps, VERIFIABLE_BY_CALENDAR } from '../_shared/guard.ts';
 
-const URL_ = Deno.env.get('SUPABASE_URL')!;
-const SERVICE = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-const ANON = Deno.env.get('SUPABASE_ANON_KEY')!;
-const admin = createClient(URL_, SERVICE, { auth: { persistSession: false } });
+const admin = serviceClient();
 const fetchCalendar = createCalendarFetcher(Deno.env.get('CALENDAR_FEED_HOST_ALLOWLIST'));
 const BATCH = 120;
 const CONCURRENCY = 8;
@@ -116,13 +112,11 @@ Deno.serve(async (req) => {
   }
 
   const cronSecret = req.headers.get('x-cron-secret');
-  let scheduled = auth === `Bearer ${SERVICE}`;
+  let scheduled = isServiceAuthorization(auth);
   if (!scheduled && cronSecret && cronSecret.length <= 128) {
     scheduled = (await admin.rpc('check_cron_secret', { p_secret: cronSecret })).data === true;
   }
-  const client = scheduled ? admin : createClient(URL_, ANON, {
-    auth: { persistSession: false }, global: { headers: { Authorization: auth } },
-  });
+  const client = scheduled ? admin : userClient(auth);
   if (!scheduled && !(await client.auth.getUser()).data.user) return json({ error: 'Sign in to sync calendars.' }, 401);
 
   let query = client.from('calendar_imports').select('id, space_id, channel, url')

@@ -15,6 +15,7 @@ const root = fileURLToPath(new URL('../../', import.meta.url));
 const migrations = join(root, 'platform/supabase/migrations');
 const baselineVersion = '20261120110456';
 const baselineCommit = '859af1c';
+const accessMigration = '20261121002832_explicit_data_api_access.sql';
 const primary = 'everyspace_staging';
 const restored = 'everyspace_rollback';
 
@@ -49,6 +50,8 @@ export async function createStaging() {
   const cronSecret = randomBytes(32).toString('hex');
   const anon = signedToken(secret, 'anon');
   const service = signedToken(secret, 'service_role');
+  const publishable = 'sb_publishable_' + randomBytes(24).toString('base64url');
+  const secretKey = 'sb_secret_' + randomBytes(24).toString('base64url');
   const containers = [];
   const calendars = new Map();
   const assets = new Map();
@@ -56,6 +59,7 @@ export async function createStaging() {
   const edgeLogs = [];
   let authPort, restPort, edgePort, edge, base, networkCreated;
   let activeDb = primary;
+  let modernKeys = false;
 
   const docker = (...args) => run('docker', args, { timeout: 120_000, maxBuffer: 1_000_000 });
   const sql = (text, db = activeDb) => new Promise((resolve, reject) => {
@@ -97,9 +101,16 @@ export async function createStaging() {
     const api = /^\/(auth|rest)\/v1(\/.*)?$/.exec(url.pathname);
     const port = api ? (api[1] === 'auth' ? authPort : restPort) : url.pathname.startsWith('/functions/v1/') ? edgePort : null;
     if (!port) { res.writeHead(404).end(); return; }
+    const headers = { ...req.headers, host: '127.0.0.1:' + port };
+    // The local API services expect JWTs. Emulate the hosted opaque-key gateway
+    // only for these two synthetic keys, preserving signed user JWTs unchanged.
+    const gatewayRole = api && (headers.apikey === publishable ? anon : headers.apikey === secretKey ? service : null);
+    if (gatewayRole && (!headers.authorization || headers.authorization === 'Bearer ' + headers.apikey)) {
+      headers.authorization = 'Bearer ' + gatewayRole;
+    }
     const outgoing = upstreamRequest({
       hostname: '127.0.0.1', port, path: api ? (api[2] ?? '/') + url.search : req.url, method: req.method,
-      headers: { ...req.headers, host: '127.0.0.1:' + port },
+      headers,
     }, (incoming) => {
       res.writeHead(incoming.statusCode, incoming.headers);
       incoming.pipe(res);
@@ -148,9 +159,11 @@ export async function createStaging() {
   }
 
   async function api(path, expected, { jwt = anon, body, ...options } = {}) {
+    const key = modernKeys ? (jwt === service ? secretKey : publishable) : (jwt === service ? service : anon);
+    const bearer = jwt === anon || jwt === service ? key : jwt;
     const result = await fetch(base + path, {
       ...options,
-      headers: { apikey: anon, authorization: 'Bearer ' + jwt, 'content-type': 'application/json', ...options.headers },
+      headers: { apikey: key, authorization: 'Bearer ' + bearer, 'content-type': 'application/json', ...options.headers },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
     const value = await result.json().catch(() => null);
@@ -161,20 +174,23 @@ export async function createStaging() {
 
   async function app(code = root) {
     if (edge) { edge.kill(); edgePort = undefined; }
+    modernKeys = code === root && process.env.STAGING_LEGACY_KEYS !== '1';
     const original = await readFile(join(code, 'host/index.html'), 'utf8');
-    const script = original.match(/(https:\/\/cdn\.jsdelivr\.net\/npm\/@supabase\/supabase-js@\d+\.\d+\.\d+\/dist\/umd\/supabase\.min\.js)" integrity="sha384-([\w+/=]+)"/);
+    const script = original.match(/(https:\/\/cdn\.jsdelivr\.net\/npm\/@supabase\/supabase-js@(\d+\.\d+\.\d+)\/dist\/umd\/supabase\.min\.js)" integrity="sha384-([\w+/=]+)"/);
     assert.ok(script, 'Staging requires a pinned browser SDK with integrity metadata.');
-    const [, sdkUrl, digest] = script;
+    const [, sdkUrl, version, digest] = script;
     let sdk = browserBundles.get(digest);
     if (!sdk) {
-      sdk = process.env.STAGING_BROWSER_SDK_FILE ? await readFile(process.env.STAGING_BROWSER_SDK_FILE)
+      const sdkDirectory = process.env.STAGING_BROWSER_SDK_DIR;
+      const sdkPath = sdkDirectory ? join(sdkDirectory, 'supabase-' + version + '.js') : (code === root ? process.env.STAGING_BROWSER_SDK_FILE : undefined);
+      sdk = sdkPath ? await readFile(sdkPath)
         : (await run('curl', ['-fsSL', '--proto', '=https', '--proto-redir', '=https', '--max-time', '20', sdkUrl], { encoding: 'buffer', maxBuffer: 1_000_000 })).stdout;
       assert.equal(createHash('sha384').update(sdk).digest('base64'), digest, 'Browser SDK integrity mismatch.');
       browserBundles.set(digest, sdk);
     }
     const host = original
       .replace(/const SUPABASE_URL = '[^']+'/, 'const SUPABASE_URL = ' + JSON.stringify(base))
-      .replace(/const ANON_KEY = '[^']+'/, 'const ANON_KEY = ' + JSON.stringify(anon))
+      .replace(/const ANON_KEY = '[^']+'/, 'const ANON_KEY = ' + JSON.stringify(modernKeys ? publishable : anon))
       .replace(sdkUrl, '/_staging/supabase.js');
     assert.ok(host.includes('const SUPABASE_URL = ' + JSON.stringify(base)), 'Staging could not configure the Host Console.');
     for (const [url, type, body] of [
@@ -183,12 +199,16 @@ export async function createStaging() {
       ['/host/integration-catalog.mjs', 'application/javascript', await readFile(join(code, 'host/integration-catalog.mjs'))],
       ['/_staging/supabase.js', 'application/javascript', sdk],
     ]) assets.set(url, { type, body });
-    const permitted = ['SUPABASE_URL', 'SUPABASE_ANON_KEY', 'SUPABASE_SERVICE_ROLE_KEY', 'CALENDAR_FEED_HOST_ALLOWLIST', 'EVERYSPACE_STAGING_CODE', 'CHANNEL_RESERVATION_WORKER_SECRET'];
+    const permitted = ['SUPABASE_URL', 'SUPABASE_ANON_KEY', 'SUPABASE_SERVICE_ROLE_KEY',
+      'SUPABASE_PUBLISHABLE_KEYS', 'SUPABASE_SECRET_KEYS', 'CALENDAR_FEED_HOST_ALLOWLIST',
+      'EVERYSPACE_STAGING_CODE', 'CHANNEL_RESERVATION_WORKER_SECRET'];
     edge = spawn(process.env.DENO_BIN ?? 'deno', [
       'run', '--no-prompt', '--no-lock', '--node-modules-dir=none', '--allow-net=127.0.0.1', '--allow-env=' + permitted.join(','),
       '--allow-read=' + code, fileURLToPath(new URL('./edge.ts', import.meta.url)),
     ], {
-      env: { ...process.env, SUPABASE_URL: base, SUPABASE_ANON_KEY: anon, SUPABASE_SERVICE_ROLE_KEY: service,
+      env: { ...process.env, SUPABASE_URL: base, SUPABASE_ANON_KEY: modernKeys ? '' : anon, SUPABASE_SERVICE_ROLE_KEY: modernKeys ? '' : service,
+        SUPABASE_PUBLISHABLE_KEYS: modernKeys ? JSON.stringify({ default: publishable }) : '',
+        SUPABASE_SECRET_KEYS: modernKeys ? JSON.stringify({ default: secretKey }) : '',
         CALENDAR_FEED_HOST_ALLOWLIST: fixturesHost, EVERYSPACE_STAGING_CODE: code, CHANNEL_RESERVATION_WORKER_SECRET: '' },
       stdio: ['ignore', 'pipe', 'inherit'],
     });
@@ -234,7 +254,6 @@ export async function createStaging() {
       alter role everyspace_auth set search_path = auth, public;
       grant usage on schema auth to anon, authenticated, service_role;
       grant usage on schema public to anon, authenticated, service_role;
-      alter default privileges in schema public grant select, insert, update, delete on tables to authenticated, service_role;
       -- A synthetic Vault row exercises the real scheduler authorization RPC without a hosted Vault.
       create schema vault;
       create table vault.decrypted_secrets(name text primary key, decrypted_secret text not null);
@@ -247,6 +266,9 @@ export async function createStaging() {
         nullif(current_setting('request.jwt.claims', true), '')::jsonb->>'sub')::uuid
     $$;`);
     await applyMigrations(false);
+    // Give the pre-upgrade fixture the intended baseline API grants without
+    // relying on older hosted projects' implicit default table privileges.
+    await sql(await readFile(join(migrations, accessMigration), 'utf8'));
     await rest('baseline');
     return {
       base, anon, service, cronSecret, edgeLogs, api, sql, stop,

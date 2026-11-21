@@ -10,7 +10,6 @@ export const AUTH_STUB = `
   grant usage on schema auth to anon, authenticated;
   grant execute on function auth.uid() to anon, authenticated;
   grant usage on schema public to anon, authenticated, service_role;
-  alter default privileges in schema public grant select, insert, update, delete on tables to authenticated, service_role;
 `;
 
 export async function freshDb() {
