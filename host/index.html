@@ -997,10 +997,18 @@ async function syncCalendars(importId = null) {
   else toast(r.synced ? `Fetched ${r.synced} calendar${r.synced > 1 ? 's' : ''}.` : 'No calendar links to sync yet.');
 }
 async function check(holdId) {
-  const v = await callFn('booking-guard', { action: 'check', hold_id: holdId });
+  const scope = hostActions.signal;
+  const v = await callFn('booking-guard', { action: 'check', hold_id: holdId }).catch(() => null);
+  scope.throwIfAborted();
   const h = S.holds.find((x) => x.id === holdId);
-  S.verdict = { ...v, channel: h?.channel }; S.tab = 'requests';
-  await loadAll(); render(); $('#verdict')?.focus();
+  S.verdict = v?.status === 200 && typeof v.step === 'string' && typeof v.message === 'string'
+    ? { ...v, channel: h?.channel }
+    : { safe: false, step: 'retry', hold_id: holdId, channel: h?.channel,
+      message: 'Everyspace could not recheck these dates. Verify the request and provider calendar before accepting.' };
+  S.tab = 'requests';
+  await refresh();
+  scope.throwIfAborted();
+  $('#verdict')?.focus();
 }
 
 document.addEventListener('click', async (e) => {

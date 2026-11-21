@@ -47,16 +47,22 @@ export type DoorCheck =
 
 /**
  * Is a held stretch of time safely closed on the instant site? Reads that site's live calendar:
- * - an overlapping booking in the feed requires verification on the provider;
+ * - a booking or its cleanup overlapping the request requires verification on the provider;
  * - otherwise the whole stretch must be covered by dates the host closed there.
  */
-export function checkDoor({ hold, doorEvents, timeZone }:
-  { hold: { starts_at: string; ends_at: string }; doorEvents: CalendarEvent[]; timeZone: string }): DoorCheck {
+export function checkDoor({ hold, doorEvents, timeZone, bookingTurnoverMinutes = 0 }: {
+  hold: { starts_at: string; ends_at: string };
+  doorEvents: CalendarEvent[];
+  timeZone: string;
+  bookingTurnoverMinutes?: number;
+}): DoorCheck {
   const s = Date.parse(hold.starts_at); const e = Date.parse(hold.ends_at);
   const live = doorEvents.filter((ev) => !ev.cancelled);
   for (const ev of live) {
     const [a, b] = range(ev, timeZone);
-    if (ev.kind === 'booking' && a < e && b > s) return { ok: false, reason: 'taken', uid: ev.uid };
+    if (ev.kind === 'booking' && a < e && b + bookingTurnoverMinutes * 60_000 > s) {
+      return { ok: false, reason: 'taken', uid: ev.uid };
+    }
   }
   const gap = firstGap(s, e, live.filter((ev) => ev.kind === 'block').map((ev) => range(ev, timeZone)));
   return gap ? { ok: false, reason: 'not_closed', gapStart: new Date(gap[0]).toISOString(), gapEnd: new Date(gap[1]).toISOString() } : { ok: true };

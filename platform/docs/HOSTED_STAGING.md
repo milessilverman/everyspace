@@ -46,11 +46,13 @@ Prefer an already enrolled Cloudflare Zero Trust Free account. Cloudflare asks f
 | Evidence to capture | Acceptance |
 | --- | --- |
 | Preview and Auth | Access denies unsigned and unauthorized viewers. The enrolled operator uses two synthetic accounts in turn and verifies no cross-account records or resident dialog state. Signup is disabled. Signed-out sessions cannot act. The service-only readiness RPC is denied to hosts. |
-| Calendar and inventory | A July 14, 2037 overnight house event and July 16 hourly pool event are imported. A pool hold overlapping the house fails, an independent driveway hold succeeds, and the pool's 30-minute buffer blocks a 17:15 request until 17:30 local time. Calendar exports exclude guest data. |
+| Calendar and inventory | A July 14, 2037 overnight house event and July 16 hourly pool event are imported. A pool hold overlapping the house fails, an independent driveway hold succeeds, and the pool's 30-minute buffer blocks a 17:15 request until 17:30 local time. A fresh instant-listing feed that arrives before scheduled import must also respect house cleanup when checking a related pool hold. Calendar exports exclude guest data. |
 | Native schedule and alerts | Record an actual 15-minute Cron run and matching Edge log. The job updates the fixture calendars and operating counts. Start with `pool`. Exercise `partial`, `unavailable`, `missing`, `pool-older` and `pool-ambiguous-cancel`, restoring `pool` after each failure. Earlier bookings remain occupied until a complete read resolves the warning. Then try `pool-changed` followed by `pool-cancelled`. Confirm that a newer cancellation frees the recorded time. Verify that saving an updated link refreshes only that connection. |
 | Rollback | Capture a logical backup and exact protected app version. Rehearse restoration with synthetic data while the job is stopped. Resume only after checking Auth, RLS, existing bookings, hold placement and fixture sync. Keep the patched SDK in the approved hosted rollback bundle. |
 
 Attach workflow and service evidence using timestamps and status codes. Keep real provider credentials, OAuth clients, billing and provider approval transports out of the project.
+
+Use the `house-checkout` fixture to rehearse a checkout that has yet to be imported. Stop the staging calendar job, set the synthetic house listing to Instant Book with 45 minutes of cleanup, and switch its import link using the staging Data API without triggering sync. On July 23, 2037 in Los Angeles, the 11:15 pool request should require a recheck, the driveway should remain available, and 11:45 is the first pool time outside the cleanup. Release the synthetic holds, restore the house configuration and resume the staging job.
 
 ## Next owner action
 

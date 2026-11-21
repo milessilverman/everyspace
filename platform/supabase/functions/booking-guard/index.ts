@@ -23,12 +23,17 @@ type Verdict = {
   message: string;
   hold_id?: string;
 };
-type GuardSnapshot = { time_zone: string; turnover: number; doors: { space_id: string; channel: string; url: string | null }[] };
+type GuardSnapshot = {
+  time_zone: string;
+  turnover: number;
+  doors: { space_id: string; channel: string; url: string | null; turnover_minutes: number }[];
+};
 
 async function check(holdId: string): Promise<Verdict> {
-  const { data: h } = await admin.from('booking_holds')
+  const { data: h, error: holdError } = await admin.from('booking_holds')
     .select('id, space_id, channel, starts_at, ends_at, all_day, status, released_reason, expires_at')
-    .eq('id', holdId).single();
+    .eq('id', holdId).maybeSingle();
+  if (holdError) return { safe: false, step: 'retry', hold_id: holdId, message: 'The hold could not be checked. Try again before accepting.' };
   if (!h) return { safe: false, step: 'decline', message: 'That request is no longer held.' };
   const { data, error } = await admin.rpc('manual_guard_snapshot', { p_space: h.space_id });
   if (error || !data) {
@@ -55,6 +60,9 @@ async function check(holdId: string): Promise<Verdict> {
       return { safe: false, step: 'connect_calendar', hold_id: h.id, message: `${site} takes instant bookings for "${where}", and its calendar link can't show whether dates are closed or booked. Switch ${site} to request-to-book, or connect it directly, before accepting.` };
     }
     if (!door.url) return { safe: false, step: 'connect_calendar', hold_id: h.id, message: `Add ${site}'s calendar link for "${where}" so Everyspace can check it.` };
+    if (!Number.isInteger(door.turnover_minutes) || door.turnover_minutes < 0) {
+      return { safe: false, step: 'retry', hold_id: h.id, message: 'Cleanup settings could not be checked. Try again before accepting.' };
+    }
 
     let events;
     try {
@@ -62,9 +70,9 @@ async function check(holdId: string): Promise<Verdict> {
     } catch (e) {
       return { safe: false, step: 'retry', hold_id: h.id, message: `Couldn't read ${site}'s calendar just now (${e instanceof Error ? e.message : 'error'}). Don't accept yet; try again in a minute.` };
     }
-    const result = checkDoor({ hold: padded, doorEvents: events, timeZone });
+    const result = checkDoor({ hold: padded, doorEvents: events, timeZone, bookingTurnoverMinutes: door.turnover_minutes });
     if (!result.ok && result.reason === 'taken') {
-      return { safe: false, step: 'retry', hold_id: h.id, message: `${site}'s calendar reports an overlapping booking for ${dates}. Check the provider directly before taking action.` };
+      return { safe: false, step: 'retry', hold_id: h.id, message: `${site}'s calendar shows a booking whose dates or cleanup overlap ${dates}. Check the provider directly before taking action.` };
     }
     if (!result.ok) {
       return { safe: false, step: 'close_dates', hold_id: h.id, message: `On ${site}, close ${h.all_day && !turnover ? describeNights(result.gapStart, result.gapEnd, timeZone) : `${describeDays(result.gapStart, result.gapEnd, timeZone)} (${site} closes whole days)`} for "${where}", then tap Check again. Everyspace is holding these dates for you meanwhile.` };

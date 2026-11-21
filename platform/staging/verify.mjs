@@ -4,7 +4,9 @@ import { existsSync } from 'node:fs';
 import { chromium } from 'playwright-core';
 import { createStaging, fixturesHost } from './stack.mjs';
 
-import { booked, calendar, CHECKOUT, conflictingPoolCancellation, currentPool, defaultPool, houseCalendar, NIGHT, POOL_DAY } from './calendar-fixtures.mjs';
+import {
+  booked, calendar, CHECKOUT, conflictingPoolCancellation, currentPool, defaultPool, houseCalendar, houseCheckoutCalendar, NIGHT, POOL_DAY,
+} from './calendar-fixtures.mjs';
 
 const poolFixturePath = '/pool.ics';
 const newPoolFixturePath = '/pool-replacement.ics';
@@ -238,6 +240,33 @@ async function checkTargetedCalendarSync(page, stage, { host, pool, poolImport }
   console.log('PASS browsers report gateway failures and refresh only the edited calendar connection');
 }
 
+async function checkProviderCleanup(stage, { host, house, pool, driveway }) {
+  const { api, sql, setCalendar } = stage;
+  await sql(`update public.spaces set turnover_minutes = 45 where id = '${house}';
+    update public.channel_listings set booking_mode = 'instant' where space_id = '${house}' and channel = 'airbnb';`);
+  setCalendar('/house.ics', houseCheckoutCalendar);
+  const guard = (body) => api('/functions/v1/booking-guard', 200, { jwt: host.jwt, method: 'POST', body });
+  const hold = (space_id, start, end) => guard({ action: 'hold', channel: 'direct', space_id, all_day: false, start, end });
+  const duringCleanup = await hold(pool, '2037-07-23T18:15:00Z', '2037-07-23T18:40:00Z');
+  assert.equal(duringCleanup.safe, false);
+  assert.equal(duringCleanup.step, 'retry');
+  assert.match(duringCleanup.message, /booking whose dates or cleanup overlap/);
+  const [protectedHold] = await api('/rest/v1/booking_holds?select=status&id=eq.' + duringCleanup.hold_id, 200, { jwt: host.jwt });
+  assert.equal(protectedHold.status, 'holding');
+  assert.deepEqual(await api('/rest/v1/reservations?select=id&external_uid=eq.just-checked-out', 200, { jwt: host.jwt }), []);
+  const independent = await hold(driveway, '2037-07-23T18:15:00Z', '2037-07-23T18:40:00Z');
+  assert.equal(independent.step, 'host_review');
+  await guard({ action: 'release', hold_id: duringCleanup.hold_id });
+  const boundary = await hold(pool, '2037-07-23T18:45:00Z', '2037-07-23T19:00:00Z');
+  assert.equal(boundary.step, 'accept');
+  await guard({ action: 'release', hold_id: independent.hold_id });
+  await guard({ action: 'release', hold_id: boundary.hold_id });
+  setCalendar('/house.ics', houseCalendar);
+  await sql(`update public.channel_listings set booking_mode = 'request' where space_id = '${house}' and channel = 'airbnb';
+    update public.spaces set turnover_minutes = 0 where id = '${house}';`);
+  console.log('PASS a fresh provider checkout protects house cleanup during a pool request and leaves the driveway independent');
+}
+
 async function checkHostConsole(browser, stage, data) {
   const { host, outsider, pool, driveway, house } = data;
   const { api, sql } = stage;
@@ -277,6 +306,12 @@ async function checkHostConsole(browser, stage, data) {
 
   await placeRequest(page, 'Practice Pool', { start: NIGHT + 'T15:00', end: NIGHT + 'T17:00', blocked: true });
   await placeRequest(page, 'Independent Driveway', { start: NIGHT + 'T15:00', end: NIGHT + 'T17:00' });
+  await page.route('**/functions/v1/booking-guard', (route) => route.fulfill({ status: 502, contentType: 'text/plain', body: 'Synthetic gateway failure' }), { times: 1 });
+  await page.getByRole('button', { name: 'Recheck', exact: true }).click();
+  const recheckVerdict = page.locator('#verdict');
+  await recheckVerdict.getByText(/Everyspace could not recheck these dates/).waitFor();
+  await recheckVerdict.getByRole('button', { name: 'Check again', exact: true }).click();
+  await recheckVerdict.getByText('Check the provider before accepting', { exact: true }).waitFor();
   await placeRequest(page, 'Practice House', { day: [POOL_DAY, '2037-07-17'], blocked: true });
   await placeRequest(page, 'Practice Pool', { start: POOL_DAY + 'T17:15', end: POOL_DAY + 'T18:00', blocked: true });
   await placeRequest(page, 'Practice Pool', { start: POOL_DAY + 'T17:30', end: POOL_DAY + 'T18:00' });
@@ -360,7 +395,7 @@ async function checkHostConsole(browser, stage, data) {
   assert.equal(cancellation.synced, 1);
   const [cancelled] = await api('/rest/v1/reservations?space_id=eq.' + pool + '&source=eq.ical', 200, { jwt: session.access_token });
   assert.equal(cancelled.status, 'cancelled');
-  console.log('PASS desktop and mobile Console, related and independent spaces, cleanup boundary, warning actions, email replay and booking edits');
+  console.log('PASS desktop and mobile Console, conflict checks, cleanup boundary, failed recheck recovery, email replay and booking edits');
   console.log('PASS closed signup, two isolated synthetic host accounts, service-only health report, and disabled real provider operations');
 }
 
@@ -392,6 +427,7 @@ try {
   browser = await chromium.launch({ executablePath: process.env.CHROMIUM_EXECUTABLE ?? chromiumPath, headless: true,
     args: ['--no-sandbox', '--disable-dev-shm-usage'] });
   await checkCalendars(stage, data);
+  await checkProviderCleanup(stage, data);
   await checkHostConsole(browser, stage, data);
   await verifyRollback(browser, stage, data);
 } finally {

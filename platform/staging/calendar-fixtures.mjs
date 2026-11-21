@@ -15,6 +15,11 @@ export function booked(id, start, end, { allDay = false, revision = 1, cancelled
 }
 
 export const houseCalendar = calendar([booked('fixture-home-1', '20370714', '20370715', { allDay: true })]);
+export const houseCheckoutCalendar = calendar([
+  booked('just-checked-out', '20370722T220000Z', '20370723T180000Z'),
+  ['BEGIN:VEVENT', 'UID:closed-day', 'DTSTART;VALUE=DATE:20370723', 'DTEND;VALUE=DATE:20370724',
+    'SUMMARY:Airbnb (Not available)', 'END:VEVENT'],
+]);
 export const defaultPool = calendar([booked('fixture-pool-1', '20370716T220000Z', '20370717T000000Z')]);
 export const currentPool = calendar([booked('fixture-pool-1', '20370716T220000Z', '20370717T000000Z', { revision: 3 })]);
 export const conflictingPoolCancellation = calendar([booked('fixture-pool-1', '20370716T220000Z', '20370717T000000Z', { revision: 3, cancelled: true })]);

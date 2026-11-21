@@ -165,6 +165,24 @@ test('the final manual guard rejects a changed feed or time zone', async () => {
   assert.equal(await mark(await snapshot()), true);
 });
 
+test('the final manual guard rejects a cleanup change on a related instant listing', async () => {
+  const c = await calendarFixture();
+  const { one } = database;
+  await one("insert into public.channel_listings(space_id, channel, booking_mode, status) values ($1,'airbnb','instant','live')", [c.space]);
+  const { id: child } = await one(`insert into public.spaces(property_id, parent_space_id, title, category)
+    values ($1,$2,'Private room','private_room') returning id`, [c.property, c.space]);
+  const held = await one("select public.place_hold($1,'direct',$2,$3,false) as id", [child, START, END]);
+  const snapshot = async () => (await one('select public.manual_guard_snapshot($1) as value', [child])).value;
+  const mark = async (observed: object) =>
+    (await one('select public.mark_hold_checked_snapshot($1,$2) as ok', [held.id, observed])).ok;
+  const before = await snapshot();
+  await one('update public.spaces set turnover_minutes = 35 where id = $1', [c.space]);
+  assert.equal(await mark(before), null);
+  assert.equal((await one('select status from public.booking_holds where id = $1', [held.id])).status, 'holding');
+  assert.equal((await snapshot()).doors[0].turnover_minutes, 35);
+  assert.equal(await mark(await snapshot()), true);
+});
+
 test('instant-listing alerts only apply to the current calendar observation', async () => {
   const c = await calendarFixture();
   const { one } = database;
