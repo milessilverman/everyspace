@@ -54,8 +54,8 @@ Attach workflow and service evidence using timestamps and status codes. Keep rea
 
 ## Next owner action
 
-Add and authenticate a separate Supabase MCP server in local Codex. This is a new connection alongside the existing plugin.
+Authorize the prepared Supabase connection in local Codex. The launcher adds `everyspace-staging-supabase` at `https://mcp.supabase.com/mcp` for that session. It uses the official browser OAuth flow under the new server name, alongside the existing plugin and local configuration.
 
-1. In the desktop app, open **Settings → MCP servers → Add server**. Choose **Streamable HTTP**, name it `everyspace-staging-supabase`, and enter `https://mcp.supabase.com/mcp?features=account,docs,database,development,functions,debugging`. Save and select **Restart**.
-2. Select **Authenticate** on that named server. In the browser, sign in with the separate staging identity and authorize only its Free organization with an unused project slot. Use a separate browser profile if the authorization screen is signed in to the current account.
-3. In a local Codex session for this repository, run `/mcp` to confirm the named connection. Continue in that session so the operator can verify the target organization and quote. Local MCP authorization is stored on that Codex host. Use the provider sign-in flow for credentials. [Codex MCP setup](https://learn.chatgpt.com/docs/extend/mcp?surface=desktop) · [Supabase MCP setup](https://supabase.com/docs/guides/ai-tools/mcp) · [Supabase organizations](https://supabase.com/dashboard/organizations)
+1. From the draft branch in a local checkout, run `bash platform/staging/codex-supabase.sh authorize` on the computer that will run Codex.
+2. In the browser prompt, sign in with the separate staging identity and select only its Free organization with an unused project slot. If the prompt shows the current account, open the authorization page in a separate browser profile and select the staging account there.
+3. The launcher opens local Codex with the named connection. Continue the staging work in that session so Codex can verify the authorized organization, available slot, and $0 quote. Use `bash platform/staging/codex-supabase.sh open` to reopen it on the same computer. [Codex MCP setup](https://learn.chatgpt.com/docs/extend/mcp?surface=cli) · [Supabase MCP setup](https://supabase.com/docs/guides/ai-tools/mcp) · [Supabase organizations](https://supabase.com/dashboard/organizations)
