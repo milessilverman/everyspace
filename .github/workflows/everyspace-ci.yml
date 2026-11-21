@@ -52,7 +52,7 @@ jobs:
         run: npm exec --prefix platform -- playwright-core install --with-deps chromium
 
       - name: Check Edge Functions
-        run: deno check --no-lock --node-modules-dir=none platform/supabase/functions/*/index.ts platform/staging/{edge,calendar-fixture}.ts
+        run: deno check --no-lock --node-modules-dir=none platform/supabase/functions/*/index.ts platform/staging/{edge,calendar-fixture,google-calendar-rehearsal}.ts
 
       - name: Verify auth, RLS, booking flows and rollback
         run: npm run test:staging --prefix platform

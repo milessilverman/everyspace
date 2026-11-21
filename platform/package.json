@@ -6,7 +6,8 @@
     "test": "node --test tests/*.test.ts tests/*.test.mjs",
     "test:concurrency": "node --test tests/channel-concurrency.postgres.mjs",
     "test:staging": "node staging/verify.mjs",
-    "staging:package": "node staging/package-preview.mjs"
+    "staging:package": "node staging/package-preview.mjs",
+    "staging:verify-access": "node staging/preview-access.mjs"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.2.17",
