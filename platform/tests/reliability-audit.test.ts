@@ -94,6 +94,32 @@ test('calendar snapshots preserve disappeared bookings and ignore earlier explic
   assert.ok(await one("select public.place_hold($1, 'swimply', $2, $3, false)", [c.space, START, END]));
 });
 
+test('conflicting data at the same iCal revision never changes recorded occupancy', async () => {
+  const c = await calendarFixture();
+  const { one } = database;
+  const confirmed = busyEvent('known-revision');
+  await c.apply(await c.claim(), confirmed);
+  await c.apply(await c.claim(), []);
+  const moved = [{ ...confirmed[0], starts_at: '2037-08-10T16:00:00Z' }];
+  for (const incoming of [moved, busyEvent('known-revision', 3, 'cancelled')]) {
+    const result = await c.apply(await c.claim(), incoming);
+    assert.equal(result.status, 'needs_review');
+    assert.equal(result.revision_conflicts, 1);
+    const stored = await one('select starts_at, status, calendar_missing_since from public.reservations where space_id = $1', [c.space]);
+    assert.equal(stored.status, 'confirmed');
+    assert.equal(stored.starts_at.toISOString(), new Date(START).toISOString());
+    assert.ok(stored.calendar_missing_since);
+  }
+  await assert.rejects(one("select public.place_hold($1, 'swimply', $2, $3, false)", [c.space, START, END]), /above capacity/);
+
+  assert.equal((await c.apply(await c.claim(), confirmed)).status, 'ok');
+  assert.equal((await one('select calendar_missing_since from public.reservations where space_id = $1', [c.space])).calendar_missing_since, null);
+  assert.equal((await c.apply(await c.claim(), confirmed)).upserts, 0);
+  assert.equal((await c.apply(await c.claim(), busyEvent('known-revision', 4, 'cancelled'))).status, 'ok');
+  assert.equal((await c.apply(await c.claim(), busyEvent('known-revision', 4))).status, 'needs_review');
+  assert.equal((await one('select status from public.reservations where space_id = $1', [c.space])).status, 'cancelled');
+});
+
 test('calendar link changes discard in-flight reads and failed reads preserve the last success', async () => {
   const c = await calendarFixture();
   const { one, db } = database;

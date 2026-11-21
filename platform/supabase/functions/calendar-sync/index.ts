@@ -13,11 +13,16 @@ const fetchCalendar = createCalendarFetcher(Deno.env.get('CALENDAR_FEED_HOST_ALL
 const BATCH = 120;
 const CONCURRENCY = 8;
 const START_BUDGET_MS = 32_000;
+const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const minAge = (scheduled: boolean) => scheduled ? 14 * 60 : 30;
 
 type Import = { id: string; space_id: string; channel: string; url: string };
 type Requirement = { kind: 'reservation' | 'hold'; id: string; starts_at: string; ends_at: string };
-type SnapshotResult = { status: 'ok' | 'needs_review' | 'error' | 'superseded'; seen_at?: string; missing?: number; older?: number };
+type SnapshotResult = {
+  status: 'ok' | 'needs_review' | 'error' | 'superseded';
+  seen_at?: string;
+  revision_conflicts?: number;
+};
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
   status, headers: { ...CORS, 'content-type': 'application/json', 'cache-control': 'no-store' },
 });
@@ -83,7 +88,7 @@ async function syncOne(imp: Import, scheduled: boolean) {
   }
   const result = data as SnapshotResult;
   let datesStillOpen = 0;
-  if (result.seen_at && timeZone && !result.older) {
+  if (result.status === 'ok' && result.seen_at && timeZone) {
     try {
       datesStillOpen = await recordAvailabilityWarnings(imp, result.seen_at, events, timeZone);
     } catch {
@@ -91,9 +96,12 @@ async function syncOne(imp: Import, scheduled: boolean) {
       return { id: imp.id, ...result, status: 'needs_review', error: 'Calendar saved. Availability warnings could not be refreshed.' };
     }
   }
+  const reviewMessage = result.revision_conflicts
+    ? 'The provider returned different details for the same event revision. Everyspace kept the recorded booking. Verify the change on the provider.'
+    : 'Some events need review. Everyspace kept the previous bookings.';
   return {
     id: imp.id, ...result, datesStillOpen,
-    error: readError ?? (result.status === 'needs_review' ? 'Some events need review. Everyspace kept the previous bookings.'
+    error: readError ?? (result.status === 'needs_review' ? reviewMessage
       : result.status === 'error' ? 'Calendar settings changed during the read. Try again.' : undefined),
   };
 }
@@ -106,10 +114,9 @@ Deno.serve(async (req) => {
   try { input = JSON.parse(new TextDecoder().decode(await readBoundedBody(req, 8192))); }
   catch { return json({ error: 'Invalid sync request.' }, 400); }
   if (!input || typeof input !== 'object' || Array.isArray(input)) return json({ error: 'Invalid sync request.' }, 400);
-  const { space_id } = input as { space_id?: string };
-  if (space_id !== undefined && (typeof space_id !== 'string' || !/^[0-9a-f-]{36}$/i.test(space_id))) {
-    return json({ error: 'Invalid space.' }, 400);
-  }
+  const { space_id, import_id } = input as { space_id?: string; import_id?: string };
+  if (space_id !== undefined && (typeof space_id !== 'string' || !UUID.test(space_id))) return json({ error: 'Invalid space.' }, 400);
+  if (import_id !== undefined && (typeof import_id !== 'string' || !UUID.test(import_id))) return json({ error: 'Invalid calendar connection.' }, 400);
 
   const cronSecret = req.headers.get('x-cron-secret');
   let scheduled = isServiceAuthorization(auth);
@@ -122,12 +129,14 @@ Deno.serve(async (req) => {
   let query = client.from('calendar_imports').select('id, space_id, channel, url')
     .order('last_attempt_at', { ascending: true, nullsFirst: true }).order('id').limit(BATCH + 1);
   if (space_id) query = query.eq('space_id', space_id);
+  if (import_id) query = query.eq('id', import_id);
   const { data, error } = await query;
   if (error) {
     console.error('calendar_sync_list_failed');
     return json({ error: 'Calendar connections could not be loaded.' }, 503);
   }
   const all = (data ?? []) as Import[];
+  if (import_id && !all.length) return json({ error: 'Calendar connection is unavailable.' }, 404);
   const queue = all.slice(0, BATCH);
   const results: Awaited<ReturnType<typeof syncOne>>[] = [];
   const startedAt = Date.now();

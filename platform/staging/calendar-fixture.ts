@@ -1,11 +1,12 @@
 // This handler is packaged separately for the synthetic project. It is not a provider connection.
-import { booked, calendar, currentPool, defaultPool, houseCalendar } from './calendar-fixtures.mjs';
+import { booked, calendar, conflictingPoolCancellation, currentPool, defaultPool, houseCalendar } from './calendar-fixtures.mjs';
 
 const token = Deno.env.get('STAGING_FIXTURE_TOKEN') ?? '';
 const fixtures = new Map<string, [number, string]>([
   ['house', [200, houseCalendar]],
   ['pool', [200, currentPool]],
   ['pool-older', [200, defaultPool]],
+  ['pool-ambiguous-cancel', [200, conflictingPoolCancellation]],
   ['pool-changed', [200, calendar([booked('fixture-pool-1', '20370716T223000Z', '20370717T003000Z', { revision: 4 })])]],
   ['pool-cancelled', [200, calendar([booked('fixture-pool-1', '20370716T223000Z', '20370717T003000Z', { revision: 5, cancelled: true })])]],
   ['missing', [200, calendar()]],

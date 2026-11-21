@@ -27,9 +27,12 @@ export async function packagePreview(destination, projectRef, publishableKey) {
   if (!current || !keyDeclaration.test(source) || current === stagingUrl) {
     throw new Error('The preview must target a separate Supabase project.');
   }
+  const publicAuth = 'const PUBLIC_AUTH_SETUP = true;';
+  if (!source.includes(publicAuth)) throw new Error('The Host Console must support staging-only sign-in.');
   const consolePage = source
     .replace('<title>Everyspace Host Console</title>', '<title>Everyspace staging | Host Console</title>')
     .replace('<body>', '<body>\n<div class="wrap"><p class="callout warn small">Staging environment. Use synthetic accounts, bookings and calendar links only.</p></div>')
+    .replace(publicAuth, 'const PUBLIC_AUTH_SETUP = false;')
     .replace(urlDeclaration, 'const SUPABASE_URL = ' + JSON.stringify(stagingUrl))
     .replace(keyDeclaration, 'const ANON_KEY = ' + JSON.stringify(publishableKey));
   const assets = join(destination, 'public');

@@ -165,6 +165,7 @@ import { CAPABILITY_LABELS, CHANNEL_GROUPS, INTEGRATIONS, PLATFORM_NAMES } from 
 const SUPABASE_URL = 'https://hnzcwfvxpfsyjpbebevp.supabase.co';
 const ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhuemN3ZnZ4cGZzeWpwYmViZXZwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTQ3OTc1OTQsImV4cCI6MjExMDM3MzU5NH0.1f_cTQkLdy4_yph68M-AcTNhbEfmPtMotia-zZPoDCE';
 const sb = window.supabase?.createClient(SUPABASE_URL, ANON_KEY);
+const PUBLIC_AUTH_SETUP = true;
 if (!sb) document.querySelector('#app').innerHTML = '<main class="wrap" style="padding-top:40px"><div class="callout warn" role="alert">The sign-in service could not load. <a href="./">Reload the Host Console</a></div></main>';
 const feedUrl = (token) => `${SUPABASE_URL}/functions/v1/calendar-feed/${token}.ics`;
 
@@ -313,7 +314,8 @@ async function loadAll() {
     sb.from('properties').select('id, title, address, city, timezone, created_at').order('created_at'),
     sb.from('spaces').select('*').order('created_at'),
     sb.from('channel_listings').select('id, space_id, channel, status, booking_mode, url, created_at').order('created_at'),
-    sb.from('calendar_imports').select('id, space_id, channel, url, last_synced_at, last_status, last_error, event_count'),
+    loadColumns('calendar_imports', 'id, space_id, channel, url, created_at, last_synced_at, last_status, last_error, event_count',
+      'last_issue', (q) => q),
     sb.from('calendar_feeds').select('id, space_id, for_channel, token, last_fetched_at'),
     loadColumns('reservations', 'id, space_id, channel, kind, status, source, external_uid, starts_at, ends_at, all_day, guest_name, updated_at',
       'units, calendar_missing_since',
@@ -368,7 +370,7 @@ function render() {
 }
 
 function authView() {
-  if (S.authMode === 'reset' || S.authMode === 'newpw') {
+  if (PUBLIC_AUTH_SETUP && (S.authMode === 'reset' || S.authMode === 'newpw')) {
     const reset = S.authMode === 'reset';
     return `<div class="wrap"><div class="auth">
     <div class="logo" style="justify-content:center;margin-bottom:18px"><i aria-hidden="true"></i>Everyspace <span>Host</span></div>
@@ -383,7 +385,7 @@ function authView() {
       ${reset ? '<p class="small" style="margin:16px 0 0;text-align:center"><a href="#" data-act="authmode" data-mode="signin">Back to sign in</a></p>' : ''}
     </div></div></div>`;
   }
-  const up = S.authMode === 'signup';
+  const up = PUBLIC_AUTH_SETUP && S.authMode === 'signup';
   return `<div class="wrap"><div class="auth">
     <div class="logo" style="justify-content:center;margin-bottom:18px"><i aria-hidden="true"></i>Everyspace <span>Host</span></div>
     <div class="card">
@@ -396,8 +398,8 @@ function authView() {
         <button class="btn primary" style="width:100%" type="submit">${up ? 'Create account' : 'Sign in'}</button>
         <p class="small muted" id="authMsg" role="alert" style="margin:0"></p>
       </form>
-      ${up ? '' : '<p class="small" style="margin:12px 0 0;text-align:center"><a href="#" data-act="authmode" data-mode="reset">Forgot your password?</a></p>'}
-      <p class="small" style="margin:${up ? 16 : 6}px 0 0;text-align:center">${up ? 'Already have an account?' : 'New to Everyspace?'} <a href="#" data-act="authmode">${up ? 'Sign in' : 'Create an account'}</a></p>
+      ${PUBLIC_AUTH_SETUP && !up ? '<p class="small" style="margin:12px 0 0;text-align:center"><a href="#" data-act="authmode" data-mode="reset">Forgot your password?</a></p>' : ''}
+      ${PUBLIC_AUTH_SETUP ? `<p class="small" style="margin:${up ? 16 : 6}px 0 0;text-align:center">${up ? 'Already have an account?' : 'New to Everyspace?'} <a href="#" data-act="authmode">${up ? 'Sign in' : 'Create an account'}</a></p>` : ''}
     </div>
     <ul class="hero-note">
       <li>Keep using Airbnb exactly as you do today. Everyspace works alongside it.</li>
@@ -456,7 +458,8 @@ function todayView() {
   const gaps = setupGaps();
   const hello = (S.profile?.full_name || '').split(' ')[0];
   const apiAttention = S.apiRequests.filter(providerNeedsAttention);
-  const degraded = S.viewError || S.imports.some((i) => i.last_status !== 'ok' || Date.now() - Date.parse(i.last_synced_at ?? 0) > 30 * 60_000);
+  const degraded = S.viewError || S.limited || S.operationsError
+    || S.imports.some((i) => i.last_status !== 'ok' || calendarOverdue(i));
   return `
     <div class="section-title"><h1>${hello ? `Hi ${esc(hello)}` : 'Today'}</h1><div class="row"><button class="btn" data-act="syncall">Sync calendars now</button><button class="btn primary" data-act="newreq">New request</button></div></div>
     ${S.alerts.length || S.conflicts.length ? `<div class="stack">${S.conflicts.map((c) => `
@@ -579,16 +582,25 @@ function providerRequestRow(r) {
     <span class="chip ${providerNeedsAttention(r) ? 'warn' : r.status === 'confirmed' ? 'ok' : ''}">${esc(labels[r.status] ?? r.status)}</span></div>`;
 }
 
+function calendarOverdue(calendar) {
+  const lastRead = Date.parse(calendar.last_synced_at ?? calendar.created_at);
+  return Date.now() - lastRead >= 30 * 60_000;
+}
+
 function calendarHealth(channel, spaceId) {
   const calendar = S.imports.find((item) => item.space_id === spaceId && item.channel === channel);
   const feed = S.feeds.find((item) => item.space_id === spaceId && item.for_channel === channel);
   const entry = INTEGRATIONS[channel];
-  const incoming = calendar?.last_status === 'error' ? 'iCal needs attention'
-    : calendar?.last_synced_at ? `${Date.now() - Date.parse(calendar.last_synced_at) > 30 * 60_000 ? 'iCal fetch overdue' : 'iCal fetched'} ${ago(calendar.last_synced_at)}`
+  const overdue = calendar && calendarOverdue(calendar);
+  const incomplete = calendar?.last_issue === 'incomplete_import';
+  const failed = calendar?.last_status === 'error';
+  const incoming = incomplete ? 'Calendar import incomplete'
+    : failed ? 'Calendar sync failed' : overdue ? 'Calendar read overdue'
+    : calendar?.last_synced_at ? `iCal fetched ${ago(calendar.last_synced_at)}`
     : calendar ? 'iCal sync pending' : hasCalendar(entry?.calendarExport) ? 'Import link needed' : 'Manual calendar';
   const outgoing = feed?.last_fetched_at ? `Export requested ${ago(feed.last_fetched_at)}`
     : feed ? 'Waiting for first export request' : hasCalendar(entry?.calendarImport) ? 'Export feed not set up' : 'Provider import not configured';
-  return { incoming, outgoing, error: calendar?.last_status === 'error' ? calendar.last_error : null };
+  return { incoming, outgoing, tone: failed && !incomplete ? 'bad' : incomplete || overdue ? 'warn' : '', error: failed ? calendar.last_error : null };
 }
 
 function capabilityList(entry) {
@@ -624,7 +636,7 @@ function channelsView() {
             : api?.authorized ? 'Partner authorization recorded · API off' : 'API disconnected';
           return `<div class="item"><div class="grow"><strong>${esc(spaceTitle(id))}</strong>
             <div class="small muted">${listing?.status === 'paused' ? 'Listing paused · ' : ''}${esc(apiStatus)} · Automatic approval off</div>
-            <div class="small">${esc(health.incoming)} · ${esc(health.outgoing)}</div>
+            <div class="row"><span class="chip ${health.tone}">${esc(health.incoming)}</span><span class="small">${esc(health.outgoing)}</span></div>
             ${health.error ? `<div class="small" style="color:var(--bad)">${esc(health.error)}</div>` : ''}</div>
             <button class="btn sm" data-tab="places" data-space="${esc(id)}">Manage listing</button></div>`;
         });
@@ -727,7 +739,7 @@ function siteRow(s, l, openSpace) {
   const providerImport = INTEGRATIONS[l.channel]?.calendarImport;
   const providerExport = INTEGRATIONS[l.channel]?.calendarExport;
   const health = calendarHealth(l.channel, s.id);
-  const status = !imp ? `<span class="chip">${esc(health.incoming)}</span>` : imp.last_status === 'error' ? '<span class="chip bad">Calendar needs attention</span>' : imp.last_synced_at ? `<span class="chip">${esc(health.incoming)}</span>` : '<span class="chip">Not synced yet</span>';
+  const status = `<span class="chip ${health.tone}">${esc(health.incoming)}</span>`;
   const reading = feed || hasCalendar(providerImport) ? `<span class="chip">${esc(health.outgoing)}</span>` : '';
   const key = `${s.id}:${l.channel}`;
   return `<div class="item" style="display:block">
@@ -739,7 +751,7 @@ function siteRow(s, l, openSpace) {
       <div class="steps" style="margin-top:10px">
         <div class="step"><h4>${siteName(l.channel)} → Everyspace</h4><div class="small muted" style="margin-bottom:8px">${esc(h.out)}</div>
           ${imp || providerExport?.status !== 'unsupported' ? `<form class="copy" data-form="import" data-space="${s.id}" data-channel="${l.channel}"><input type="url" name="url" placeholder="https://… (${esc(siteName(l.channel))} calendar link)" value="${esc(imp?.url ?? '')}" required aria-label="${esc(siteName(l.channel))} calendar link"><button class="btn sm primary" type="submit">${imp ? 'Save & sync' : hasCalendar(providerExport) ? 'Connect' : 'Try iCal link'}</button></form>` : ''}
-          ${imp?.last_status === 'error' ? `<div class="small" style="color:var(--bad);margin-top:6px">${esc(imp.last_error)}</div>` : imp?.last_synced_at ? `<div class="tiny muted" style="margin-top:6px">Read ${imp.event_count ?? 0} dates · ${ago(imp.last_synced_at)}</div>` : ''}</div>
+          ${health.error ? `<div class="small" style="color:var(--bad);margin-top:6px">${esc(health.error)}</div>` : imp?.last_synced_at ? `<div class="tiny muted" style="margin-top:6px">Read ${imp.event_count ?? 0} events · ${ago(imp.last_synced_at)}</div>` : ''}</div>
         <div class="step"><h4>Everyspace → ${siteName(l.channel)}</h4><div class="small muted" style="margin-bottom:8px">${esc(h.in)} This feed publishes busy times. Feed access does not show when the provider applied the update.</div>
           ${feed ? `<div class="copy"><input type="text" readonly value="${esc(feedUrl(feed.token))}" aria-label="Everyspace calendar link for ${esc(siteName(l.channel))}"><button class="btn sm" data-act="copy" data-text="${esc(feedUrl(feed.token))}">Copy</button></div>
             <div class="tiny muted" style="margin-top:6px">${feed.last_fetched_at ? `Last fetch request ${ago(feed.last_fetched_at)}` : 'Waiting for the first fetch request.'}</div>` : providerImport?.status !== 'unsupported' ? `<button class="btn sm" data-act="makefeed" data-space="${s.id}" data-channel="${l.channel}">${hasCalendar(providerImport) ? 'Create link' : 'Create optional iCal link'}</button>` : ''}</div>
@@ -967,15 +979,21 @@ async function busy(btn, fn) {
   catch (e) { if (!scope.signal.aborted) toast(prettyError(e.message), true); }
   finally { if (btn) btn.disabled = false; }
 }
-async function syncSpace(spaceId) {
-  const r = await callFn('calendar-sync', spaceId ? { space_id: spaceId } : {});
-  if (r.error) throw new Error(r.error);
-  const failed = (r.results ?? []).filter((x) => x.status === 'error');
-  const review = (r.results ?? []).filter((x) => x.status === 'needs_review');
-  await loadAll(); render();
+async function syncCalendars(importId = null) {
+  const scope = hostActions.signal;
+  const r = await callFn('calendar-sync', importId ? { import_id: importId } : {}).finally(() => {
+    if (!scope.aborted) return refresh();
+  });
+  scope.throwIfAborted();
+  if (r.status !== 200 || !Array.isArray(r.results) || !Number.isInteger(r.synced) || !Number.isInteger(r.skipped)) {
+    const message = r.error || 'Calendar sync could not be completed. Check the provider and try again.';
+    throw new Error(importId ? `Calendar link saved. ${message}` : message);
+  }
+  const failed = r.results.filter((x) => x.status === 'error');
+  const review = r.results.filter((x) => x.status === 'needs_review');
   const attention = failed.length + review.length;
   if (attention) toast(`${attention} calendar ${attention === 1 ? 'connection needs' : 'connections need'} attention. ${(failed[0] ?? review[0]).error}`, true);
-  else if (r.skipped) toast(`Fetched ${r.synced} calendars. Some reads were deferred.`);
+  else if (r.skipped) toast(r.synced ? `Fetched ${r.synced} calendars. Some reads were deferred.` : 'Calendar reads were deferred. Check the provider or retry shortly.');
   else toast(r.synced ? `Fetched ${r.synced} calendar${r.synced > 1 ? 's' : ''}.` : 'No calendar links to sync yet.');
 }
 async function check(holdId) {
@@ -1024,7 +1042,7 @@ document.addEventListener('click', async (e) => {
     d.querySelectorAll('[data-kind]').forEach((f) => { f.hidden = f.dataset.kind !== t.dataset.v; f.querySelectorAll('input').forEach((i) => { i.required = !f.hidden; }); });
   }
   else if (a === 'dismiss') { await busy(t, async () => { must(await sb.rpc('dismiss_alert', { p_alert: t.dataset.id })); await loadAll(); render(); }); }
-  else if (a === 'syncall') { await busy(t, () => syncSpace(null)); }
+  else if (a === 'syncall') { await busy(t, () => syncCalendars()); }
   else if (a === 'check') { await busy(t, () => check(t.dataset.id)); }
   else if (a === 'release') {
     if (!confirm('Mark this request as declined? The held dates are freed for other requests.')) return;
@@ -1129,8 +1147,11 @@ document.addEventListener('submit', async (e) => {
     } else if (kind === 'import') {
       const url = String(fd.get('url')).trim();
       if (!/^https:\/\//i.test(url)) throw new Error('Calendar links start with https://');
-      must(await sb.from('calendar_imports').upsert({ space_id: f.dataset.space, channel: f.dataset.channel, url }, { onConflict: 'space_id,channel' }));
-      await syncSpace(f.dataset.space);
+      const scope = hostActions.signal;
+      const saved = must(await sb.from('calendar_imports').upsert({ space_id: f.dataset.space, channel: f.dataset.channel, url },
+        { onConflict: 'space_id,channel' }).select('id').single());
+      scope.throwIfAborted();
+      await syncCalendars(saved.id);
     } else if (kind === 'inventory') {
       must(await sb.from('spaces').update({
         quantity: Number(fd.get('quantity')), turnover_minutes: Number(fd.get('turnover')),
@@ -1214,7 +1235,7 @@ sb?.auth.onAuthStateChange((event, session) => {
     $('.toast')?.remove();
     Object.assign(S, emptyDashboard(), { tab: 'today', authMode: 'signin', recovering: false });
   }
-  if (event === 'PASSWORD_RECOVERY') { S.recovering = true; S.authMode = 'newpw'; }
+  if (event === 'PASSWORD_RECOVERY' && PUBLIC_AUTH_SETUP) { S.recovering = true; S.authMode = 'newpw'; }
   if (!S.user || S.recovering) { if (S.recovering) $('#app').innerHTML = authView(); else render(); return; }
   if (S.user.id !== was) {
     render();

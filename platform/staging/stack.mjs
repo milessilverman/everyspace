@@ -126,7 +126,7 @@ export async function createStaging() {
       GOTRUE_DB_DRIVER: 'postgres', GOTRUE_DB_DATABASE_URL: dbUri('everyspace_auth', authPassword),
       GOTRUE_DB_NAMESPACE: 'auth', GOTRUE_DB_MIGRATIONS_PATH: '/usr/local/etc/auth/migrations',
       GOTRUE_JWT_SECRET: secret, GOTRUE_JWT_AUD: 'authenticated', GOTRUE_JWT_DEFAULT_GROUP_NAME: 'authenticated',
-      GOTRUE_JWT_EXP: 3600, GOTRUE_MAILER_AUTOCONFIRM: true, GOTRUE_EXTERNAL_EMAIL_ENABLED: true,
+      GOTRUE_JWT_EXP: 3600, GOTRUE_DISABLE_SIGNUP: true, GOTRUE_MAILER_AUTOCONFIRM: false, GOTRUE_EXTERNAL_EMAIL_ENABLED: true,
       GOTRUE_RATE_LIMIT_EMAIL_SENT: 100,
     }, 9999);
     try {
@@ -191,6 +191,7 @@ export async function createStaging() {
     const host = original
       .replace(/const SUPABASE_URL = '[^']+'/, 'const SUPABASE_URL = ' + JSON.stringify(base))
       .replace(/const ANON_KEY = '[^']+'/, 'const ANON_KEY = ' + JSON.stringify(modernKeys ? publishable : anon))
+      .replace('const PUBLIC_AUTH_SETUP = true;', 'const PUBLIC_AUTH_SETUP = false;')
       .replace(sdkUrl, '/_staging/supabase.js');
     assert.ok(host.includes('const SUPABASE_URL = ' + JSON.stringify(base)), 'Staging could not configure the Host Console.');
     for (const [url, type, body] of [

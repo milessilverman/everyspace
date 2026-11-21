@@ -45,6 +45,7 @@ test('the preview and calendar job use only the staging project', async () => {
     const consolePage = await readFile(join(destination, 'public/host/index.html'), 'utf8');
     const schedule = await readFile(join(destination, 'calendar-schedule.sql'), 'utf8');
     assert.match(consolePage, /Staging environment\. Use synthetic accounts, bookings and calendar links only\./);
+    assert.match(consolePage, /const PUBLIC_AUTH_SETUP = false;/);
     assert.ok(consolePage.includes('https://' + stagingRef + '.supabase.co'));
     assert.ok(schedule.includes('https://' + stagingRef + '.supabase.co/functions/v1/calendar-sync'));
     assert.ok(!consolePage.includes(productionRef));

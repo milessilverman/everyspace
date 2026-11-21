@@ -4,21 +4,30 @@ import { existsSync } from 'node:fs';
 import { chromium } from 'playwright-core';
 import { createStaging, fixturesHost } from './stack.mjs';
 
-import { booked, calendar, CHECKOUT, currentPool, defaultPool, houseCalendar, NIGHT, POOL_DAY } from './calendar-fixtures.mjs';
+import { booked, calendar, CHECKOUT, conflictingPoolCancellation, currentPool, defaultPool, houseCalendar, NIGHT, POOL_DAY } from './calendar-fixtures.mjs';
 
 const poolFixturePath = '/pool.ics';
+const newPoolFixturePath = '/pool-replacement.ics';
 
 async function seed(stage) {
   const { api } = stage;
   const password = randomBytes(18).toString('base64url');
-  async function signup(name) {
+  async function createSyntheticHost(name) {
     const email = name.toLowerCase() + '@staging.example.com';
-    const signup = await api('/auth/v1/signup', 200, { method: 'POST', body: { email, password, data: { full_name: name } } });
-    assert.ok(signup.access_token);
-    return { email, password, jwt: signup.access_token, id: signup.user.id };
+    const created = await api('/auth/v1/admin/users', 200, {
+      jwt: stage.service, method: 'POST', body: { email, password, email_confirm: true, user_metadata: { full_name: name } },
+    });
+    const session = await api('/auth/v1/token?grant_type=password', 200, { method: 'POST', body: { email, password } });
+    assert.equal(session.user.id, created.id);
+    assert.ok(session.access_token);
+    return { email, password, jwt: session.access_token, id: created.id };
   }
-  const host = await signup('Avery');
-  const outsider = await signup('Blair');
+  const rejected = await api('/auth/v1/signup', 422, {
+    method: 'POST', body: { email: 'uninvited@staging.example.com', password },
+  });
+  assert.equal(rejected.error_code, 'signup_disabled');
+  const host = await createSyntheticHost('Avery');
+  const outsider = await createSyntheticHost('Blair');
   const insert = (table, body, actor = host) => api('/rest/v1/' + table, 201, { method: 'POST', body, jwt: actor.jwt,
     headers: { prefer: 'return=representation' } });
   const [{ id: property }] = await insert('properties', { host_id: host.id, title: 'Practice Property', timezone: 'America/Los_Angeles' });
@@ -30,10 +39,11 @@ async function seed(stage) {
     { space_id: house, channel: 'airbnb', status: 'live' },
     { space_id: pool, channel: 'swimply', status: 'live' },
   ]);
-  await insert('calendar_imports?select=id', [
+  const imports = await insert('calendar_imports?select=id,channel', [
     { space_id: house, channel: 'airbnb', url: 'https://' + fixturesHost + '/house.ics' },
     { space_id: pool, channel: 'swimply', url: 'https://' + fixturesHost + poolFixturePath },
   ]);
+  const poolImport = imports.find(({ channel }) => channel === 'swimply').id;
   const [{ token: houseFeed }, { token: poolFeed }] = await insert('calendar_feeds', [
     { space_id: house, for_channel: 'airbnb' }, { space_id: pool, for_channel: 'swimply' },
   ]);
@@ -41,7 +51,7 @@ async function seed(stage) {
     p_space: house, p_channel: 'airbnb', p_start: '2037-07-12T07:00:00Z', p_end: '2037-07-13T07:00:00Z',
     p_all_day: true, p_units: 1, p_reference: 'BASELINE-BOOKING',
   } });
-  return { host, outsider, house, pool, driveway, houseFeed, poolFeed };
+  return { host, outsider, house, pool, driveway, houseFeed, poolFeed, poolImport };
 }
 
 async function localPage(browser, stage, viewport) {
@@ -100,7 +110,7 @@ async function importEmail(page) {
 
 async function checkCalendars(stage, data) {
   const { api, setCalendar, anon, cronSecret, sql, edgeLogs } = stage;
-  const { host, house, pool, houseFeed, poolFeed } = data;
+  const { host, outsider, house, pool, houseFeed, poolFeed, poolImport } = data;
   const sync = (jwt, space_id, secret = null, expected = 200) => api('/functions/v1/calendar-sync', expected, {
     jwt, method: 'POST', body: space_id ? { space_id } : {}, headers: secret ? { 'x-cron-secret': secret } : {},
   });
@@ -114,6 +124,19 @@ async function checkCalendars(stage, data) {
   setCalendar('/house.ics', houseCalendar);
   setCalendar(poolFixturePath, defaultPool);
   await sync(anon, null, 'synthetic-unauthorized-scheduler-value', 401);
+  const targetPool = { method: 'POST', body: { import_id: poolImport } };
+  const denied = await api('/functions/v1/calendar-sync', 404, { ...targetPool, jwt: outsider.jwt });
+  const absent = await api('/functions/v1/calendar-sync', 404, {
+    method: 'POST', body: { import_id: '564c72a8-d5fd-46d2-89af-901b5cc09750' }, jwt: outsider.jwt,
+  });
+  assert.deepEqual(denied, absent);
+  assert.deepEqual(await api('/rest/v1/calendar_imports?select=id&id=eq.' + poolImport, 200, { jwt: outsider.jwt }), []);
+  await api('/rest/v1/rpc/apply_calendar_sync', 403, { jwt: host.jwt, method: 'POST', body: {
+    p_import: poolImport, p_lease: poolImport, p_time_zone: 'America/Los_Angeles', p_events: [],
+  } });
+  await api('/functions/v1/calendar-sync', 400, {
+    method: 'POST', body: { import_id: '------------------------------------' }, jwt: host.jwt,
+  });
   const batch = await sync(anon, null, cronSecret);
   assert.equal(batch.synced, 2);
   assert.ok(edgeLogs.some((entry) => entry.event === 'calendar_sync_run' && entry.synced === 2));
@@ -159,12 +182,60 @@ async function checkCalendars(stage, data) {
   await ageAttempt();
   assert.equal((await read()).synced, 1);
 
+  setCalendar(poolFixturePath, conflictingPoolCancellation);
+  await ageAttempt();
+  const disputed = await api('/functions/v1/calendar-sync', 200, { ...targetPool, jwt: host.jwt });
+  assert.equal(disputed.results[0].status, 'needs_review');
+  assert.equal(disputed.results[0].revision_conflicts, 1);
+  assert.equal((await getPool()).status, 'confirmed');
+
   setCalendar(poolFixturePath, '', 503);
   await sql(`update public.calendar_imports set last_synced_at = now()-interval '35 minutes' where space_id = '${pool}'`);
   await ageAttempt();
   assert.equal((await read()).results[0].status, 'error');
   assert.equal((await getPool()).status, 'confirmed');
   console.log('PASS scheduled authorization, both calendar directions, cleanup export, partial data, retries and provider revision order');
+}
+
+async function checkTargetedCalendarSync(page, stage, { host, pool, poolImport }) {
+  const { api, setCalendar } = stage;
+  const write = { jwt: host.jwt, method: 'POST', headers: { prefer: 'return=representation' } };
+  await api('/rest/v1/channel_listings', 201, { ...write, body: { space_id: pool, channel: 'peerspace', status: 'live' } });
+  const [{ id: secondImport }] = await api('/rest/v1/calendar_imports?select=id', 201, {
+    ...write, body: { space_id: pool, channel: 'peerspace', url: 'https://' + fixturesHost + '/peer.ics' },
+  });
+  setCalendar('/peer.ics', calendar());
+
+  await page.reload();
+  await navigate(page, 'channels');
+  const swimply = page.locator('article').filter({ has: page.getByRole('heading', { name: 'Swimply', exact: true }) });
+  await swimply.getByText(/^iCal fetched/).waitFor();
+  await swimply.getByRole('button', { name: 'Manage listing' }).click();
+  setCalendar(newPoolFixturePath, currentPool);
+  const form = page.locator('[data-form="import"][data-channel="swimply"]');
+  await form.getByLabel('Swimply calendar link').fill('https://' + fixturesHost + newPoolFixturePath);
+
+  const syncUrl = '**/functions/v1/calendar-sync';
+  await page.route(syncUrl, (route) => route.fulfill({ status: 502, contentType: 'text/plain', body: 'Synthetic gateway failure' }), { times: 1 });
+  await form.getByRole('button', { name: 'Save & sync' }).click();
+  await page.getByText('Calendar link saved. Calendar sync could not be completed. Check the provider and try again.').waitFor();
+  assert.equal(await page.getByText('No calendar links to sync yet.').count(), 0);
+  const swimplyRow = page.locator('#space-' + pool + ' .item').filter({ has: form });
+  await swimplyRow.getByText('iCal sync pending', { exact: true }).waitFor();
+  assert.equal(await form.getByLabel('Swimply calendar link').inputValue(), 'https://' + fixturesHost + newPoolFixturePath);
+
+  const [response] = await Promise.all([
+    page.waitForResponse((reply) => reply.url().endsWith('/functions/v1/calendar-sync') && reply.request().method() === 'POST'),
+    form.getByRole('button', { name: 'Save & sync' }).click(),
+  ]);
+  assert.deepEqual(response.request().postDataJSON(), { import_id: poolImport });
+  const outcome = await response.json();
+  assert.equal(outcome.synced, 1);
+  assert.deepEqual(outcome.results.map(({ id }) => id), [poolImport]);
+  await page.getByText('Fetched 1 calendar.').waitFor();
+  const [untouched] = await api('/rest/v1/calendar_imports?select=last_attempt_at&id=eq.' + secondImport, 200, { jwt: host.jwt });
+  assert.equal(untouched.last_attempt_at, null);
+  console.log('PASS browsers report gateway failures and refresh only the edited calendar connection');
 }
 
 async function checkHostConsole(browser, stage, data) {
@@ -180,6 +251,8 @@ async function checkHostConsole(browser, stage, data) {
   await page.getByRole('link', { name: 'Explore the simulated host demo' }).click();
   await page.getByText('Demo · Bookings and connections are simulated.', { exact: false }).waitFor();
   await page.getByRole('link', { name: 'Open the Host Console' }).first().click();
+  await page.getByRole('heading', { name: 'Sign in' }).waitFor();
+  assert.equal(await page.getByRole('link', { name: /Create an account|Forgot your password/ }).count(), 0);
   await signIn(page, host);
   await page.getByText('Calendar sync failed', { exact: true }).waitFor();
   await page.getByText('Calendar read overdue', { exact: true }).waitFor();
@@ -190,8 +263,13 @@ async function checkHostConsole(browser, stage, data) {
   };
   await retryCalendar('Incomplete exported data', 206);
   await page.getByText('Calendar import incomplete', { exact: true }).waitFor();
+  await navigate(page, 'channels');
+  await page.locator('article').filter({ has: page.getByRole('heading', { name: 'Swimply', exact: true }) })
+    .getByText('Calendar import incomplete', { exact: true }).waitFor();
+  await navigate(page, 'today');
   await retryCalendar(currentPool);
   await page.getByText('Calendar import incomplete', { exact: true }).waitFor({ state: 'hidden' });
+  await checkTargetedCalendarSync(page, stage, data);
   await navigate(page, 'channels');
   await page.getByRole('heading', { name: 'Swimply', exact: true }).waitFor();
   assert.equal(await page.locator('main article h3').count(), 22);
@@ -272,8 +350,8 @@ async function checkHostConsole(browser, stage, data) {
   await mobile.close();
 
   await sql(`update public.calendar_imports set last_attempt_at = now()-interval '35 minutes' where space_id = '${pool}'`);
-  stage.setCalendar(poolFixturePath, calendar([booked('fixture-pool-1', '20370716T220000Z', '20370717T000000Z', { revision: 4, cancelled: true })]));
-  const syncPool = { method: 'POST', body: { space_id: pool } };
+  stage.setCalendar(newPoolFixturePath, calendar([booked('fixture-pool-1', '20370716T220000Z', '20370717T000000Z', { revision: 4, cancelled: true })]));
+  const syncPool = { method: 'POST', body: { import_id: data.poolImport } };
   await api('/functions/v1/calendar-sync', 401, { ...syncPool, jwt: host.jwt });
   const session = await api('/auth/v1/token?grant_type=password', 200, {
     method: 'POST', body: { email: host.email, password: host.password },
@@ -283,7 +361,7 @@ async function checkHostConsole(browser, stage, data) {
   const [cancelled] = await api('/rest/v1/reservations?space_id=eq.' + pool + '&source=eq.ical', 200, { jwt: session.access_token });
   assert.equal(cancelled.status, 'cancelled');
   console.log('PASS desktop and mobile Console, related and independent spaces, cleanup boundary, warning actions, email replay and booking edits');
-  console.log('PASS host account isolation, service-only health report, and disabled real provider operations');
+  console.log('PASS closed signup, two isolated synthetic host accounts, service-only health report, and disabled real provider operations');
 }
 
 async function verifyRollback(browser, stage, data) {
