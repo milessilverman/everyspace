@@ -62,8 +62,17 @@ export function productionDeps(): FeedDeps {
       if (!feed) return { status: 'not_found' };
       const space = feed.spaces;
       // This space, the space it sits inside (whole house blocks the room) and spaces inside it (a booked room blocks the whole house).
-      const { data: kids } = await db.from('spaces').select('id').eq('parent_space_id', feed.space_id);
-      const ids = [feed.space_id, space.parent_space_id, ...(kids ?? []).map((k: { id: string }) => k.id)].filter(Boolean);
+      // After migration M5 the database lists every space whose bookings block this one (whole family plus related
+      // spaces). Before M5 that function does not exist, so fall back to parent and direct children.
+      // Shared-resource capacity cannot be expressed in a calendar feed and is enforced only by the booking RPCs.
+      let ids: string[];
+      const { data: blocking, error: bErr } = await db.rpc('blocking_spaces', { p_space: feed.space_id });
+      if (!bErr && Array.isArray(blocking) && blocking.length) {
+        ids = [...new Set([feed.space_id, ...blocking.map((b: unknown) => typeof b === 'string' ? b : (b as { blocking_spaces?: string })?.blocking_spaces).filter(Boolean) as string[]])];
+      } else {
+        const { data: kids } = await db.from('spaces').select('id').eq('parent_space_id', feed.space_id);
+        ids = [feed.space_id, space.parent_space_id, ...(kids ?? []).map((k: { id: string }) => k.id)].filter(Boolean);
+      }
       const { data: rows, error: rErr } = await db.from('reservations')
         .select('id, space_id, channel, status, starts_at, ends_at, all_day')
         .in('space_id', ids).eq('status', 'confirmed').gte('ends_at', sinceIso);
