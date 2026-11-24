@@ -105,7 +105,8 @@ table.scen thead th:not(:first-child) { text-align: right; }
 table.scen .big { font-family: var(--display); font-weight: 700; font-size: 17px; }
 .opp { margin-top: 14px; }
 .opp > header { display: flex; gap: 10px; align-items: baseline; justify-content: space-between; flex-wrap: wrap; margin-bottom: 8px; }
-.opp .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.opp .chips { margin-bottom: 8px; }
+.card > p + form { margin-top: 14px; }
 .opp .why { margin: 10px 0; font-size: 14px; }
 .edit-inline { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .edit-inline input[type=number], .edit-inline input[type=text], .edit-inline select { width: 9em; min-height: 36px; }
@@ -117,6 +118,12 @@ footer { border-top: 1px solid var(--line); padding: 18px 0 40px; color: var(--m
 footer p + p { margin-top: 6px; }
 
 @media (max-width: 680px) {
+  table.scen { table-layout: fixed; font-size: 13px; }
+  table.scen th, table.scen td { padding: 6px 3px; }
+  table.scen th:first-child { width: 26%; }
+  table.scen thead th { text-transform: none; letter-spacing: 0; font-size: 10px; white-space: normal; overflow-wrap: normal; }
+  table.scen .big { font-size: 15px; }
+  details.panel { padding: 8px 8px; }
   h1 { font-size: 22px; }
   .card { padding: 14px; }
   table.stack-sm thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
