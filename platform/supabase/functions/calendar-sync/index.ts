@@ -9,6 +9,10 @@
 // - a success records last_ok_at and resets consecutive_failures; a failure stores a short error code (never the URL),
 //   adds one to consecutive_failures, and the import is left alone for min(15 min * 2^failures, 6 h);
 // - a feed that had events and comes back empty changes nothing until the third empty read in a row.
+//
+// Writes: every reservation change goes through one RPC, sync_calendar_import (service role only), which takes the
+// property lock, upserts the feed's rows, cancels the rows missing from the feed that planImport lists, and records
+// conflicts in the same transaction (review finding 5). The service role has no direct write on reservations.
 import { CORS, preflight } from '../_shared/cors.ts';
 import { adapterFor, ProviderError } from '../_shared/providers/index.ts';
 import { doorGaps } from '../_shared/door.ts';
@@ -23,7 +27,8 @@ const BATCH = 200;
 const CONCURRENCY = 5;
 
 export type Import = ImportRecord & { id: string; space_id: string; channel: string; url: string };
-export type AfterApply = { newConflicts: number; uncheckedAccepts: number; datesStillOpen: number };
+export type Applied = { newConflicts: number };
+export type AfterApply = { uncheckedAccepts: number; datesStillOpen: number };
 
 /** Everything the handler needs from the outside world. Production wires Supabase; tests pass fakes. */
 export type SyncDeps = {
@@ -34,8 +39,8 @@ export type SyncDeps = {
   listImports(scope: { service: boolean; auth: string; spaceId?: string; limit: number }): Promise<{ data: Import[] | null; error: string | null }>;
   timeZoneOf(spaceId: string): Promise<string | null>;
   existing(spaceId: string, channel: string): Promise<ExistingReservation[]>;
-  upsert(spaceId: string, channel: string, rows: unknown[], now: string): Promise<void>;
-  cancel(spaceId: string, channel: string, uids: string[], now: string): Promise<void>;
+  /** One locked transaction: upsert `rows`, cancel `cancelUids`, record conflicts (sync_calendar_import). */
+  apply(spaceId: string, channel: string, rows: unknown[], cancelUids: string[]): Promise<Applied>;
   afterApply(imp: Import, events: CalendarEvent[], timeZone: string): Promise<AfterApply>;
   patch(importId: string, patch: ImportPatch): Promise<void>;
 };
@@ -60,11 +65,11 @@ export async function syncOne(imp: Import, deps: SyncDeps, started: string) {
 
     const existing = await deps.existing(imp.space_id, imp.channel);
     const plan = planImport({ events, existing, timeZone, now: started });
-    if (plan.upserts.length) await deps.upsert(imp.space_id, imp.channel, plan.upserts, started);
-    if (plan.cancelUids.length) await deps.cancel(imp.space_id, imp.channel, plan.cancelUids, started);
+    // Always applied, even with nothing to change, so conflict detection runs on every successful read.
+    const applied = await deps.apply(imp.space_id, imp.channel, plan.upserts, plan.cancelUids);
     const after = await deps.afterApply(imp, events, timeZone);
     await deps.patch(imp.id, successPatch(started, events.length));
-    return { id: imp.id, ok: true, events: events.length, upserts: plan.upserts.length, cancelled: plan.cancelUids.length, ...after };
+    return { id: imp.id, ok: true, events: events.length, upserts: plan.upserts.length, cancelled: plan.cancelUids.length, ...applied, ...after };
   } catch (e) {
     const code = errorCodeOf(e);
     await deps.patch(imp.id, failurePatch(imp, code, started)).catch(() => {});
@@ -137,21 +142,14 @@ export function productionDeps(): SyncDeps {
       const { data, error } = await admin.from('reservations').select('external_uid, status, ends_at').eq('space_id', spaceId).eq('channel', channel).eq('source', 'ical');
       fail(error); return data ?? [];
     },
-    async upsert(spaceId, channel, rows, now) {
+    async apply(spaceId, channel, rows, cancelUids) {
       const { admin } = await clients();
-      const { error } = await admin.from('reservations').upsert(
-        (rows as Record<string, unknown>[]).map((r) => ({ ...r, space_id: spaceId, channel, source: 'ical', updated_at: now })),
-        { onConflict: 'space_id,channel,external_uid' });
+      const { data, error } = await admin.rpc('sync_calendar_import', { p_space: spaceId, p_channel: channel, p_rows: rows, p_cancel_uids: cancelUids });
       fail(error);
-    },
-    async cancel(spaceId, channel, uids, now) {
-      const { admin } = await clients();
-      const { error } = await admin.from('reservations').update({ status: 'cancelled', updated_at: now }).eq('space_id', spaceId).eq('channel', channel).in('external_uid', uids);
-      fail(error);
+      return { newConflicts: ((data as { new_conflicts?: number } | null)?.new_conflicts) ?? 0 };
     },
     async afterApply(imp, events, timeZone) {
       const { admin } = await clients();
-      const { data: conflicts } = await admin.rpc('detect_conflicts', { p_space: imp.space_id });
       // No-double-booking guard: link holds to the bookings they became, flag requests accepted without the check…
       const { data: unchecked } = await admin.rpc('settle_holds', { p_space: imp.space_id });
       // …and if this site is the space's instant site, make sure it still shows every other booking as closed.
@@ -168,7 +166,7 @@ export function productionDeps(): SyncDeps {
         });
         doorOpen = (n as number) ?? 0;
       }
-      return { newConflicts: (conflicts as number) ?? 0, uncheckedAccepts: (unchecked as number) ?? 0, datesStillOpen: doorOpen };
+      return { uncheckedAccepts: (unchecked as number) ?? 0, datesStillOpen: doorOpen };
     },
     async patch(importId, patch) {
       const { admin } = await clients();

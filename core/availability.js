@@ -10,9 +10,9 @@
 //   - Time ranges are half-open [startsAt, endsAt): back-to-back bookings do not overlap.
 //   - A reservation or hold occupies its own space for [start - setupMinutes, end + cleanupMinutes). Buffers never
 //     extend onto related spaces or onto shared resources.
-//   - A space is blocked by bookings on itself, its ancestors and its descendants, and by bookings on any space with a
-//     relation that blocks it (A blocks B: a booking on A blocks B; symmetric: both ways). Relations are not
-//     transitive. Siblings with no relation are independent.
+//   - A space is blocked by bookings on itself, its ancestors and its descendants, and by bookings on any space it has
+//     a relation with. A relation is mutual exclusion: {spaceId, blocksSpaceId} blocks both ways, whichever was booked
+//     first (the field names are historical). Relations are not transitive. Siblings with no relation are independent.
 //   - quantity n: up to n bookings may overlap on the space itself (peak concurrent use, buffers included).
 //   - A shared resource: the units of all bookings using it at the same moment (peak, not total) plus the candidate's
 //     units must stay <= capacity.
@@ -24,7 +24,7 @@
 /**
  * @typedef {string | number | Date} Instant ISO-8601 string, epoch milliseconds or Date.
  * @typedef {{id: string, parentId?: string|null, quantity?: number, setupMinutes?: number, cleanupMinutes?: number}} AvSpace
- * @typedef {{spaceId: string, blocksSpaceId: string, symmetric?: boolean}} AvRelation
+ * @typedef {{spaceId: string, blocksSpaceId: string}} AvRelation Mutual exclusion between the two spaces (order does not matter).
  * @typedef {{id: string, capacity: number}} AvResource
  * @typedef {{spaceId: string, resourceId: string, units?: number}} AvSpaceResource
  * @typedef {{id: string, spaceId: string, startsAt: Instant, endsAt: Instant, status?: string, kind?: string}} AvReservation
@@ -71,9 +71,10 @@ export function blockingSpaces(model, spaceId) {
     for (const s of model.spaces) if (s.parentId && frontier.includes(s.parentId)) { out.add(s.id); next.push(s.id); }
     frontier = next;
   }
+  // Relations: mutual, either stored direction.
   for (const r of model.relations ?? []) {
     if (r.blocksSpaceId === spaceId) out.add(r.spaceId);
-    if (r.spaceId === spaceId && r.symmetric) out.add(r.blocksSpaceId);
+    if (r.spaceId === spaceId) out.add(r.blocksSpaceId);
   }
   return [...out].sort(cmpStr);
 }

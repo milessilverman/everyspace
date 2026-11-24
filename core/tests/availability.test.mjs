@@ -25,15 +25,39 @@ for (const c of CASES) {
   });
 }
 
-test('blockingSpaces: family plus relations, not siblings, directional unless symmetric', () => {
+test('blockingSpaces: family plus relations in either stored direction, not siblings', () => {
   const m = {
     spaces: [{ id: 'house' }, { id: 'room1', parentId: 'house' }, { id: 'room2', parentId: 'house' }, { id: 'yard' }, { id: 'tub' }],
-    relations: [{ spaceId: 'house', blocksSpaceId: 'yard' }, { spaceId: 'yard', blocksSpaceId: 'tub', symmetric: true }],
+    relations: [{ spaceId: 'house', blocksSpaceId: 'yard' }, { spaceId: 'yard', blocksSpaceId: 'tub' }],
   };
   assert.deepEqual(blockingSpaces(m, 'room1'), ['house', 'room1']);
-  assert.deepEqual(blockingSpaces(m, 'house'), ['house', 'room1', 'room2']);
+  assert.deepEqual(blockingSpaces(m, 'house'), ['house', 'room1', 'room2', 'yard']);
   assert.deepEqual(blockingSpaces(m, 'yard'), ['house', 'tub', 'yard']);
   assert.deepEqual(blockingSpaces(m, 'tub'), ['tub', 'yard']);
+});
+
+test('relations are mutual: b blocks a exactly when a blocks b, in every shared case', () => {
+  for (const c of CASES) {
+    for (const a of c.model.spaces) {
+      for (const b of blockingSpaces(c.model, a.id)) {
+        assert.ok(blockingSpaces(c.model, b).includes(a.id), `${c.name}: ${b} blocks ${a.id} but not the reverse`);
+      }
+    }
+  }
+});
+
+// Guard against a vacuous suite: each conflict kind, and relations in both arrival orders, must really be exercised.
+export const MIN_CASES_PER_KIND = 2;
+test(`every conflict kind appears in at least ${MIN_CASES_PER_KIND} cases, and relations are checked in both orders`, () => {
+  for (const kind of ['overlap', 'buffer', 'capacity', 'resource', 'hold']) {
+    const n = CASES.filter((c) => c.expectedKinds.includes(kind)).length;
+    assert.ok(n >= MIN_CASES_PER_KIND, `${kind}: only ${n} case(s)`);
+  }
+  assert.ok(CASES.filter((c) => c.expectedKinds.length === 0 && !c.throws).length >= 5, 'free-slot cases');
+  // A relation case where the candidate is the stored blocksSpaceId, and one where it is the stored spaceId.
+  const rel = CASES.filter((c) => (c.model.relations ?? []).length && c.expectedKinds.length);
+  assert.ok(rel.some((c) => c.model.relations.some((r) => r.blocksSpaceId === c.candidate.spaceId)), 'candidate on blocksSpaceId side');
+  assert.ok(rel.some((c) => c.model.relations.some((r) => r.spaceId === c.candidate.spaceId)), 'candidate on spaceId side');
 });
 
 test('results are deterministic and the model is not mutated', () => {

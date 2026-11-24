@@ -3,6 +3,7 @@
 // on PGlite (platform/tests/availability_parity.test.mjs); both must return exactly `expectedKinds`, in order.
 // A case with `throws: true` must be rejected by both (bad time range). Ids are plain names; the parity test maps them
 // to uuids that sort the same way. Holds listed here are live (the DB test inserts them with a future expiry).
+// Relations are mutual exclusion: a relation blocks both ways, so the cases check both arrival orders.
 
 /** @typedef {import('../../availability.js').AvModel} AvModel */
 /** @typedef {import('../../availability.js').AvCandidate} AvCandidate */
@@ -21,8 +22,8 @@ const houseSpaces = () => [sp('house'), sp('room1', { parentId: 'house' }), sp('
 /** @type {AvCase[]} */
 export const CASES = [
   {
-    name: 'whole house blocks backyard (directional relation)',
-    model: model({ spaces: houseSpaces(), relations: [{ spaceId: 'house', blocksSpaceId: 'backyard', symmetric: false }],
+    name: 'relation: a whole-house stay blocks the backyard',
+    model: model({ spaces: houseSpaces(), relations: [{ spaceId: 'house', blocksSpaceId: 'backyard' }],
       reservations: [bk('stay', 'house', T(10), T(13))] }),
     candidate: { spaceId: 'backyard', startsAt: T(11, '15:00'), endsAt: T(11, '18:00') },
     expectedKinds: ['overlap'],
@@ -52,32 +53,53 @@ export const CASES = [
     expectedKinds: [],
   },
   {
-    name: 'symmetric privacy relation: studio booking blocks hot tub',
-    model: model({ spaces: [sp('studio'), sp('hottub')], relations: [{ spaceId: 'studio', blocksSpaceId: 'hottub', symmetric: true }],
+    name: 'privacy relation: studio booking blocks hot tub',
+    model: model({ spaces: [sp('studio'), sp('hottub')], relations: [{ spaceId: 'studio', blocksSpaceId: 'hottub' }],
       reservations: [bk('s1', 'studio', T(5), T(7))] }),
     candidate: { spaceId: 'hottub', startsAt: T(6, '19:00'), endsAt: T(6, '21:00') },
     expectedKinds: ['overlap'],
   },
   {
-    name: 'symmetric privacy relation: hot tub booking blocks studio',
-    model: model({ spaces: [sp('studio'), sp('hottub')], relations: [{ spaceId: 'studio', blocksSpaceId: 'hottub', symmetric: true }],
+    name: 'privacy relation: hot tub booking blocks studio',
+    model: model({ spaces: [sp('studio'), sp('hottub')], relations: [{ spaceId: 'studio', blocksSpaceId: 'hottub' }],
       reservations: [bk('h1', 'hottub', T(6, '19:00'), T(6, '21:00'))] }),
     candidate: { spaceId: 'studio', startsAt: T(5), endsAt: T(7) },
     expectedKinds: ['overlap'],
   },
   {
-    name: 'directional relation: an event on the lawn blocks the pool',
-    model: model({ spaces: [sp('lawn'), sp('pool')], relations: [{ spaceId: 'lawn', blocksSpaceId: 'pool', symmetric: false }],
+    name: 'relation blocks in both arrival orders: lawn party first, then a pool booking',
+    model: model({ spaces: [sp('lawn'), sp('pool')], relations: [{ spaceId: 'lawn', blocksSpaceId: 'pool' }],
       reservations: [bk('party', 'lawn', T(8, '17:00'), T(8, '23:00'))] }),
     candidate: { spaceId: 'pool', startsAt: T(8, '18:00'), endsAt: T(8, '20:00') },
     expectedKinds: ['overlap'],
   },
   {
-    name: 'directional relation does not block the other way',
-    model: model({ spaces: [sp('lawn'), sp('pool')], relations: [{ spaceId: 'lawn', blocksSpaceId: 'pool', symmetric: false }],
+    name: 'relation blocks in both arrival orders: pool booking first, then a lawn party',
+    model: model({ spaces: [sp('lawn'), sp('pool')], relations: [{ spaceId: 'lawn', blocksSpaceId: 'pool' }],
       reservations: [bk('swim', 'pool', T(8, '18:00'), T(8, '20:00'))] }),
     candidate: { spaceId: 'lawn', startsAt: T(8, '17:00'), endsAt: T(8, '23:00') },
+    expectedKinds: ['overlap'],
+  },
+  {
+    name: 'relation blocks in both arrival orders: a backyard event blocks a whole-house stay',
+    model: model({ spaces: houseSpaces(), relations: [{ spaceId: 'house', blocksSpaceId: 'backyard' }],
+      reservations: [bk('bbq', 'backyard', T(11, '15:00'), T(11, '18:00'))] }),
+    candidate: { spaceId: 'house', startsAt: T(10), endsAt: T(13) },
+    expectedKinds: ['overlap'],
+  },
+  {
+    name: 'a relation is not inherited: a room inside the house is free while the backyard is booked',
+    model: model({ spaces: houseSpaces(), relations: [{ spaceId: 'house', blocksSpaceId: 'backyard' }],
+      reservations: [bk('bbq', 'backyard', T(11, '15:00'), T(11, '18:00'))] }),
+    candidate: { spaceId: 'room1', startsAt: T(10), endsAt: T(13) },
     expectedKinds: [],
+  },
+  {
+    name: 'a hold on a related space blocks, whichever side holds it',
+    model: model({ spaces: [sp('lawn'), sp('pool')], relations: [{ spaceId: 'lawn', blocksSpaceId: 'pool' }],
+      holds: [{ id: 'h1', spaceId: 'pool', startsAt: T(8, '18:00'), endsAt: T(8, '20:00') }] }),
+    candidate: { spaceId: 'lawn', startsAt: T(8, '17:00'), endsAt: T(8, '23:00') },
+    expectedKinds: ['hold'],
   },
   {
     name: 'back-to-back without a buffer is fine (half-open ranges)',
@@ -138,6 +160,13 @@ export const CASES = [
         bk('k3', 'kayaks', T(4, '09:30'), T(4, '10:30'))] }),
     candidate: { spaceId: 'kayaks', startsAt: T(4, '09:00'), endsAt: T(4, '11:00') },
     expectedKinds: [],
+  },
+  {
+    name: 'capacity counts cleaning time: two kayaks still being cleaned fill quantity 2',
+    model: model({ spaces: [sp('kayaks', { quantity: 2, cleanupMinutes: 60 })],
+      reservations: [bk('k1', 'kayaks', T(4, '09:00'), T(4, '11:00')), bk('k2', 'kayaks', T(4, '10:00'), T(4, '12:00'))] }),
+    candidate: { spaceId: 'kayaks', startsAt: T(4, '11:30'), endsAt: T(4, '12:00') },
+    expectedKinds: ['capacity', 'capacity'],
   },
   {
     name: 'shared bathroom (capacity 1) across two rooms that are otherwise independent',

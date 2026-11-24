@@ -121,7 +121,8 @@ test('provider_data requires expires_at and is purged by the service role only',
   await ins(new Date(Date.now() - 86400000).toISOString());
   await ins(new Date(Date.now() + 86400000).toISOString());
   await as(db, MAYA, async () => {
-    assert.equal((await one(`select count(*)::int as n from public.provider_data`)).n, 2);
+    // The expired row is hidden at once, before any purge (review finding 8).
+    assert.equal((await one(`select count(*)::int as n from public.provider_data`)).n, 1);
     await assert.rejects(db.query(`select public.purge_expired_provider_data()`), /permission denied/);
     await assert.rejects(db.query(`insert into public.provider_data (channel_key, org_id, kind, payload, expires_at) values ('airbnb', $1, 'x', '{}', now() + interval '1 day')`, [orgA]), DENIED);
   });

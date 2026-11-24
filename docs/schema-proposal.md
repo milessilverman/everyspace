@@ -12,14 +12,14 @@ Principles: Everyspace owns its records under its own UUIDs; external ids are at
 | M2 | `20261124020000_catalog.sql` | `channels`, `space_categories`, `amenities`, `space_amenities` | enum `channel` columns (6 tables) become `text` with FK to `channels(key)`; functions taking `public.channel` are recreated with `text`; `site_name()` reads `channels`; `spaces.category` gets FK to `space_categories(key)`; enum dropped last | yes (type change only) |
 | M3 | `20261124030000_property_intelligence.sql` | `parcels`, `buildings`, `property_attributes`, view `property_profile`, `property_photos`, `regulatory_rules`, `property_regulatory`, `opportunities`, `projections`, `provider_data`; RPC `confirm_attribute`, `purge_expired_provider_data` | none | yes |
 | M4 | `20261124040000_operations.sql` | `pricing_rules`, `expenses`, `revenue_entries`, `maintenance_tasks`, `communications` | `reservations.source`, `reservations.guest_count`, `reservations.import_batch_id` | yes |
-| M5 | `20261124050000_availability.sql` | `space_relations`, `resources`, `space_resources`; `blocking_spaces()`, `availability_conflicts()`, `create_booking()`, `import_reservations()`, view `sync_health` | `spaces.setup_minutes`, `spaces.cleanup_minutes`; `reservations.exclusive`; exclusion constraint (needs `btree_gist`); direct `insert/update/delete` on `reservations` revoked from `authenticated` (RPC only); `detect_conflicts` made quantity-, relation- and resource-aware; `calendar_imports.consecutive_failures`, `last_ok_at` | yes |
+| M5 | `20261124050000_availability.sql` | `space_relations`, `resources`, `space_resources`; `blocking_spaces()`, `availability_conflicts()`, `create_booking()`, `import_reservations()`, view `sync_health` | `spaces.setup_minutes`, `spaces.cleanup_minutes`; `reservations.exclusive`; exclusion constraint (needs `btree_gist`); direct `insert/update/delete` on `reservations` revoked from `authenticated` and `service_role` (RPC only); `detect_conflicts` made quantity-, relation- and resource-aware; `calendar_imports.consecutive_failures`, `last_ok_at` | yes |
 
 ## Tables
 | table | key columns | tenant key | RLS |
 |---|---|---|---|
 | `organizations` | `id, name, kind (personal/team), created_by` | self | members read; `org.manage` writes |
 | `roles` | `key, label, permissions text[]` (seed: owner, admin, manager, operator, viewer) | global | read all signed-in; service role writes |
-| `memberships` | `org_id, user_id, role_key, status`; unique (org, user) | org | members read; `org.manage` writes; a user cannot raise their own role |
+| `memberships` | `org_id, user_id, role_key, status`; unique (org, user) | org | members read; `org.manage` invites (insert is forced to `invited`); only the invitee activates (`accept_invite`/`decline_invite`); a user cannot raise their own role; the last owner cannot be removed or demoted. Teammates' names via `org_member_profiles(org)` between active members, phone only with `org.manage` |
 | `channels` | `key, name, kind, cap_calendar, cap_booking, cap_listing, cap_pricing, cap_messaging` (each `L0`-`L4`), `active` | global | read all (incl. anon); service role writes |
 | `space_categories` | `key, label, group_key, units text[], active` | global | read all; service role writes |
 | `amenities` / `space_amenities` | `key, label` / `space_id, amenity_key, provenance_tag` | global / via space | read all / space rules |
@@ -32,13 +32,13 @@ Principles: Everyspace owns its records under its own UUIDs; external ids are at
 | `property_regulatory` | `property_id, rule_id, status, permit_number, expires_at, provenance_tag` | via property | property rules |
 | `opportunities` | `id, property_id, category_key, basis, status, feasibility jsonb, projection_id` | via property | property rules |
 | `projections` | `id, property_id, org_id, model_version, goal, inputs jsonb, assumptions jsonb, scenarios jsonb, confidence, created_by` — immutable | org | members read; managers insert |
-| `provider_data` | `id, channel_key, org_id, space_id, kind, payload jsonb, retrieved_at, expires_at not null` | org | members read own; service role writes; purged daily; no FK from any intelligence table |
+| `provider_data` | `id, channel_key, org_id, space_id, kind, payload jsonb, retrieved_at, expires_at not null` | org | members read own unexpired rows (`expires_at > now()`); service role writes; purged daily (`cron/calendar_sync.sql`); no FK from any intelligence table |
 | `pricing_rules` | `id, space_id, channel_key, rule_type, unit (hour/day/night/week/month), amount_cents, starts_on, ends_on, dow int[], min_units, priority` | via space | space rules |
 | `expenses` | `id, org_id, property_id, space_id, category, amount_cents, incurred_on, recurring, note` | org | `finance.read` / `finance.write` |
 | `revenue_entries` | `id, org_id, property_id, space_id, reservation_id, channel_key, gross_cents, platform_fee_cents, cleaning_cents, tax_cents, net_cents (generated), earned_on, source` | org | `finance.read` / `finance.write` |
 | `maintenance_tasks` | `id, property_id, space_id, reservation_id, kind, due_at, status, assigned_to` | via property | viewers read; managers write; assignee may update status |
 | `communications` | `id, org_id, space_id, reservation_id, channel_key, direction, body, sent_at, source` | org | members read; managers write |
-| `space_relations` | `id, property_id, space_id, blocks_space_id, reason (contains/privacy/access/noise/other), symmetric` | via property | space rules |
+| `space_relations` | `id, space_id, blocks_space_id, note`; one row per unordered pair, no self-relation (mutual exclusion; no `symmetric` column) | via property | space rules |
 | `resources` / `space_resources` | `id, property_id, key, kind (entrance/bathroom/parking/kitchen/laundry/other), capacity` / `space_id, resource_id, units` | via property | space rules |
 
 ## Availability rules (M5), enforced in SQL under `lock_property`
@@ -47,11 +47,11 @@ Principles: Everyspace owns its records under its own UUIDs; external ids are at
 | Time | half-open `tstzrange(starts_at, ends_at)`; hourly through monthly use the same range |
 | Buffers | a reservation occupies `[starts_at - setup_minutes, ends_at + cleanup_minutes)` of its own space; buffers do not extend onto related spaces |
 | Family | a space is blocked by reservations on itself, its ancestors and descendants (existing `related_spaces`) |
-| Relations | `space_relations(space_id A, blocks_space_id B)`: a booking on A blocks B; `symmetric` blocks both ways. No row = independent (an ADU does not block the driveway) |
+| Relations | `space_relations(A, B)` means mutual exclusion: a booking on either blocks the other, whichever arrived first; the pair is stored once. No row = independent (an ADU does not block the driveway). The one-instant-site rule and `door_listings`/`door_requirements` use the same set (`blocking_spaces`) |
 | Capacity | a space with `quantity = n` accepts up to n overlapping bookings |
 | Shared resources | sum of `units` over overlapping bookings of spaces using a resource must stay <= `resources.capacity` |
 | Holds | active `booking_holds` count as occupancy (existing behaviour) |
-| External facts | `import_reservations` always records what a marketplace reports, then flags conflicts; it never rejects reality. `create_booking` (Everyspace-originated) is rejected on any conflict |
+| External facts | `import_reservations` (and calendar-sync's `sync_calendar_import`, service role, same code) always records what a marketplace reports, then flags conflicts in the same transaction; it never rejects reality, but never imports channel `everyspace` or touches an Everyspace-made row. `create_booking`, `reschedule_booking` (Everyspace-originated) are rejected on any conflict; `cancel_booking` cancels one. A space cannot change property once it has a parent, children, relations, resources, bookings or holds |
 | Constraint | `exclude using gist (space_id with =, tstzrange(starts_at, ends_at) with &&) where (exclusive and status = 'confirmed')`; `exclusive` is set only by `create_booking` on `quantity = 1` spaces |
 
 ## Verification (staging)

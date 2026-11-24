@@ -23,7 +23,8 @@ const io = (handler: () => Response | Promise<Response>, resolve = async () => [
 
 type Imp = sync.Import;
 function syncFake(imports: Imp[], feedBody: () => Response, existing: { external_uid: string; status: 'confirmed' | 'cancelled'; ends_at: string }[] = []) {
-  const log = { patches: [] as [string, Record<string, unknown>][], upserts: [] as unknown[][], cancels: [] as string[][], listScope: null as unknown };
+  const log = { patches: [] as [string, Record<string, unknown>][], upserts: [] as unknown[][], cancels: [] as string[][], applies: 0, listScope: null as unknown,
+    applyError: null as Error | null };
   const deps: sync.SyncDeps = {
     now: () => NOW,
     io: io(feedBody),
@@ -31,9 +32,15 @@ function syncFake(imports: Imp[], feedBody: () => Response, existing: { external
     listImports: async (scope) => { log.listScope = scope; return { data: imports.filter((i) => !scope.spaceId || i.space_id === scope.spaceId).map((i) => ({ ...i })), error: null }; },
     timeZoneOf: async () => LA,
     existing: async () => existing,
-    upsert: async (_s, _c, rows) => { log.upserts.push(rows); },
-    cancel: async (_s, _c, uids) => { log.cancels.push(uids); },
-    afterApply: async () => ({ newConflicts: 0, uncheckedAccepts: 0, datesStillOpen: 0 }),
+    // One call per successful read (sync_calendar_import in production); rows and cancellations travel together.
+    apply: async (_s, _c, rows, uids) => {
+      log.applies++;
+      if (log.applyError) throw log.applyError;
+      if (rows.length) log.upserts.push(rows);
+      if (uids.length) log.cancels.push(uids);
+      return { newConflicts: rows.length ? 1 : 0 };
+    },
+    afterApply: async () => ({ uncheckedAccepts: 0, datesStillOpen: 0 }),
     patch: async (id, p) => { log.patches.push([id, p as never]); const i = imports.find((x) => x.id === id)!; Object.assign(i, p); },
   };
   return { deps, log };
@@ -65,7 +72,27 @@ test('calendar-sync: a failed read stores a short code (never the URL), counts u
   assert.equal(patch.last_error, 'fetch_failed'); assert.equal(patch.consecutive_failures, 2); assert.equal(patch.last_status, 'error');
   assert.ok(!('last_ok_at' in patch));
   assert.equal(log.upserts.length + log.cancels.length, 0);
+  assert.equal(log.applies, 0);
   assert.ok(!JSON.stringify([out, log.patches]).includes(SECRET));
+});
+
+test('calendar-sync: writes go through one locked apply call per read, which also reports new conflicts', async () => {
+  const gone = { external_uid: 'gone', status: 'confirmed' as const, ends_at: '2026-12-20T08:00:00Z' };
+  const { deps, log } = syncFake([imp({ event_count: 1 })], () => new Response(ics(day('r1', '20261201', '20261204', 'Reserved'))), [gone]);
+  const out = await bodyOf(await sync.handle(post('x', {}, SERVICE), deps));
+  assert.equal(log.applies, 1);
+  assert.deepEqual(log.cancels, [['gone']]);
+  assert.equal(out.results[0].newConflicts, 1);
+  // Nothing to change: still one apply (so conflicts are re-detected), with no rows and no cancellations.
+  const idle = syncFake([imp()], () => new Response(ics()));
+  await sync.handle(post('x', {}, SERVICE), idle.deps);
+  assert.deepEqual([idle.log.applies, idle.log.upserts.length, idle.log.cancels.length], [1, 0, 0]);
+  // A failed apply (e.g. the RPC refuses a row) is a failed sync: no success patch, failures count up.
+  const bad = syncFake([imp({ consecutive_failures: 0 })], () => new Response(ics(day('r1', '20261201', '20261204', 'Reserved'))));
+  bad.log.applyError = new Error('Row 1: "r1" is a booking made in Everyspace; an import cannot change it.');
+  const res = (await bodyOf(await sync.handle(post('x', {}, SERVICE), bad.deps))).results[0];
+  assert.equal(res.ok, false);
+  assert.equal(bad.log.patches[0][1].last_status, 'error'); assert.equal(bad.log.patches[0][1].consecutive_failures, 1);
 });
 
 test('calendar-sync: pasted links to private addresses are refused and recorded as blocked_url', async () => {

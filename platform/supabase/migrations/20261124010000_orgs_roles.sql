@@ -190,7 +190,14 @@ begin
     if new.user_id = (select auth.uid()) then
       raise exception 'You cannot add yourself to an organization.' using errcode = '42501';
     end if;
+    -- No membership without consent (review finding 7): a signed-in user can only invite; the invited person
+    -- accepts with accept_invite() (or declines with decline_invite()).
+    new.status := 'invited';
+    new.invited_by := (select auth.uid());
   else
+    if tg_op = 'UPDATE' and new.status = 'active' and old.status is distinct from 'active' then
+      raise exception 'Only the invited person can accept an invitation.' using errcode = '42501';
+    end if;
     if tg_op = 'UPDATE' and (new.org_id <> old.org_id or new.user_id <> old.user_id) then
       raise exception 'A membership cannot be moved.' using errcode = '42501';
     end if;
@@ -229,14 +236,44 @@ create policy "Org managers rename their org" on public.organizations for update
 create policy "Signed-in users read roles" on public.roles for select to authenticated using (true);
 
 create policy "Members read their org's members" on public.memberships for select to authenticated using (public.is_org_member(org_id));
+create policy "Users read their own invitations" on public.memberships for select to authenticated using (user_id = (select auth.uid()));
 create policy "Org managers add members" on public.memberships for insert to authenticated with check (public.has_org_permission(org_id, 'org.manage'));
 create policy "Org managers change members" on public.memberships for update to authenticated
   using (public.has_org_permission(org_id, 'org.manage')) with check (public.has_org_permission(org_id, 'org.manage'));
 create policy "Org managers remove members" on public.memberships for delete to authenticated using (public.has_org_permission(org_id, 'org.manage'));
 
--- Profiles: still your own; teammates can see each other's names.
-create policy "Members see teammates' profiles" on public.profiles for select to authenticated using (exists (
-  select 1 from public.memberships them where them.user_id = profiles.id and public.is_org_member(them.org_id)));
+-- The invited person, and only they, accepts or declines (the membership guard refuses everyone else's 'active').
+-- Definer functions run as the owner, so the guard's signed-in checks do not apply to them.
+create function public.accept_invite(p_org uuid) returns boolean
+language plpgsql security definer set search_path = '' as $$
+begin
+  if (select auth.uid()) is null then raise exception 'Sign in first.' using errcode = '42501'; end if;
+  update public.memberships set status = 'active'
+  where org_id = p_org and user_id = (select auth.uid()) and status = 'invited';
+  return found;
+end $$;
+
+create function public.decline_invite(p_org uuid) returns boolean
+language plpgsql security definer set search_path = '' as $$
+begin
+  if (select auth.uid()) is null then raise exception 'Sign in first.' using errcode = '42501'; end if;
+  delete from public.memberships where org_id = p_org and user_id = (select auth.uid()) and status = 'invited';
+  return found;
+end $$;
+
+-- Profiles: a signed-in user reads only their own row (policy "Hosts manage their profile"). Teammates' names come
+-- from org_member_profiles(), and only between ACTIVE members of the same org; a phone number only to members with
+-- org.manage (review finding 7: an invite alone shows nothing).
+create function public.org_member_profiles(p_org uuid)
+returns table (user_id uuid, role_key text, status text, full_name text, phone text)
+language sql stable security definer set search_path = '' as $$
+  select m.user_id, m.role_key, m.status,
+         case when m.status = 'active' then p.full_name end,
+         case when m.status = 'active' and public.has_org_permission(p_org, 'org.manage') then p.phone end
+  from public.memberships m join public.profiles p on p.id = m.user_id
+  where m.org_id = p_org and public.is_org_member(p_org)
+  order by m.created_at, m.user_id
+$$;
 
 -- Properties and everything under them: read = property.read, write = the matching *.write permission.
 drop policy "Hosts manage their properties" on public.properties;
@@ -291,20 +328,24 @@ drop policy "Hosts see their alerts" on public.booking_alerts;
 create policy "Members see alerts" on public.booking_alerts for select to authenticated using (public.can_view_space(space_id));
 
 drop policy "Hosts see their earnings" on public.earnings_ledger;
-create policy "Hosts and finance readers see earnings" on public.earnings_ledger for select to authenticated using (
-  host_id = (select auth.uid()) or exists (
-    select 1 from public.reservations r join public.spaces s on s.id = r.space_id
-    where r.id = reservation_id and public.has_property_permission(s.property_id, 'finance.read')));
+-- Visibility follows current membership (review finding 12): finance readers of the property's org, or the ledger's
+-- host while still an active member of that org. A host removed from a team org no longer reads its earnings.
+create policy "Hosts and finance readers see earnings" on public.earnings_ledger for select to authenticated using (exists (
+    select 1 from public.reservations r join public.spaces s on s.id = r.space_id join public.properties p on p.id = s.property_id
+    where r.id = earnings_ledger.reservation_id
+      and (public.has_org_permission(p.org_id, 'finance.read')
+           or (earnings_ledger.host_id = (select auth.uid()) and public.is_org_member(p.org_id)))));
 
 -- ---------------------------------------------------------------- function privileges
 revoke execute on function public.has_org_permission(uuid, text), public.is_org_member(uuid), public.org_role_rank(uuid),
   public.has_property_permission(uuid, text), public.has_space_permission(uuid, text), public.can_view_space(uuid),
   public.can_manage_space(uuid), public.owns_space(uuid), public.create_organization(text),
   public.ensure_personal_org(uuid), public.on_profile_created(), public.default_org_from_host(), public.guard_host_id(),
-  public.guard_membership()
+  public.guard_membership(), public.accept_invite(uuid), public.decline_invite(uuid), public.org_member_profiles(uuid)
   from public, anon, authenticated;
 grant execute on function public.has_org_permission(uuid, text), public.is_org_member(uuid), public.org_role_rank(uuid),
   public.has_property_permission(uuid, text), public.has_space_permission(uuid, text), public.can_view_space(uuid),
-  public.can_manage_space(uuid), public.owns_space(uuid), public.create_organization(text)
+  public.can_manage_space(uuid), public.owns_space(uuid), public.create_organization(text),
+  public.accept_invite(uuid), public.decline_invite(uuid), public.org_member_profiles(uuid)
   to authenticated;
 grant execute on function public.ensure_personal_org(uuid) to service_role;

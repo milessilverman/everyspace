@@ -27,7 +27,8 @@ const TENANT = {
     insert: () => `insert into public.organizations (name, kind) values ('Intruder', 'team')` },
   memberships: { where: () => `id = '${F.vicMembership}'`, viewer: true, owner: true, set: `role_key = 'owner'`,
     insert: () => `insert into public.memberships (org_id, user_id, role_key) values ('${F.org}', '${SAM}', 'viewer')` },
-  profiles: { where: () => `id = '${MAYA}'`, viewer: true, owner: false, set: `full_name = 'pwned'`,
+  // Only your own row; teammates' names come from org_member_profiles() (review finding 7).
+  profiles: { where: () => `id = '${MAYA}'`, viewer: false, owner: false, set: `full_name = 'pwned'`,
     insert: () => `insert into public.profiles (id) values ('${MAYA}')` },
   properties: { where: () => `id = '${F.prop}'`, viewer: true, owner: true, set: `title = 'pwned'`,
     insert: (me) => `insert into public.properties (host_id, org_id, title) values ('${me}', '${F.org}', 'Intruder')` },
@@ -79,7 +80,7 @@ const TENANT = {
   maintenance_tasks: { where: () => `id = '${F.task}'`, viewer: true, owner: true, set: `status = 'done'`,
     insert: () => `insert into public.maintenance_tasks (property_id, kind) values ('${F.prop}', 'repair')` },
   space_relations: { where: () => `id = '${F.relation}'`, viewer: true, owner: true, set: `note = 'pwned'`,
-    insert: () => `insert into public.space_relations (space_id, blocks_space_id) values ('${F.space2}', '${F.space}')` },
+    insert: () => `insert into public.space_relations (space_id, blocks_space_id) values ('${F.space2}', '${F.space3}')` },
   resources: { where: () => `id = '${F.resource}'`, viewer: true, owner: true, set: `capacity = 99`,
     insert: () => `insert into public.resources (property_id, name, capacity) values ('${F.prop}', 'Intruder', 1)` },
   space_resources: { where: () => `space_id = '${F.space}' and resource_id = '${F.resource}'`, viewer: true, owner: true, set: `units = 9`,
@@ -108,6 +109,7 @@ before(async () => {
   F.prop = await ins(`insert into public.properties (host_id, title) values ($1, 'Maple St')`, [MAYA]);
   F.space = await ins(`insert into public.spaces (property_id, category, title) values ($1, 'pool', 'Pool')`, [F.prop]);
   F.space2 = await ins(`insert into public.spaces (property_id, category, title) values ($1, 'parking_spot', 'Driveway')`, [F.prop]);
+  F.space3 = await ins(`insert into public.spaces (property_id, category, title) values ($1, 'backyard', 'Lawn')`, [F.prop]);
   F.conn = await ins(`insert into public.channel_connections (host_id, channel, method) values ($1, 'airbnb', 'ical')`, [MAYA]);
   F.listing = await ins(`insert into public.channel_listings (space_id, channel) values ($1, 'airbnb')`, [F.space]);
   F.import = await ins(`insert into public.calendar_imports (space_id, channel, url) values ($1, 'swimply', 'https://example.test/s.ics')`, [F.space]);
@@ -244,6 +246,24 @@ test('self role escalation and self-adds are refused', async () => {
     assert.equal((await one(`select role_key from public.memberships where org_id = $1 and user_id = $2`, [team, MAYA])).role_key, 'owner');
   });
   assert.deepEqual([await role(VIC), await role(ADA), await role(MAYA)], ['viewer', 'admin', 'owner']);
+});
+
+// Every SECURITY DEFINER function is classified: the ones a signed-in user may call are listed here (a new one fails
+// this test until it is added, with its own caller check); none is callable by anon or PUBLIC; all pin search_path.
+const AUTHENTICATED_RPC = ['accept_invite', 'availability_conflicts', 'can_manage_space', 'can_view_space', 'cancel_booking',
+  'create_booking', 'create_organization', 'decline_invite', 'dismiss_alert', 'has_org_permission', 'has_property_permission',
+  'has_space_permission', 'import_reservations', 'is_org_member', 'org_member_profiles', 'org_role_rank', 'owns_space',
+  'place_hold', 'release_hold', 'reschedule_booking'];
+test('every SECURITY DEFINER function is classified, pins search_path and is closed to anon and PUBLIC', async () => {
+  const names = async (where) => (await db.query(`select p.proname from pg_proc p where p.pronamespace = 'public'::regnamespace and ${where} order by 1`)).rows.map((r) => r.proname);
+  assert.deepEqual(await names(`p.prosecdef and has_function_privilege('authenticated', p.oid, 'execute')`), AUTHENTICATED_RPC);
+  assert.deepEqual(await names(`has_function_privilege('anon', p.oid, 'execute')`), ['site_name']);
+  assert.deepEqual(await names(`p.prosecdef and not ('search_path=""' = any (coalesce(p.proconfig, '{}')))`), []);
+  assert.deepEqual(await names(`p.prosecdef and exists (select 1 from aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
+    where a.grantee = 0 and a.privilege_type = 'EXECUTE')`), []);
+  // Internal helpers: not even the service role calls them directly.
+  assert.deepEqual(await names(`p.proname = 'apply_import' and has_function_privilege('service_role', p.oid, 'execute')`), []);
+  assert.deepEqual(await names(`p.proname = 'sync_calendar_import' and has_function_privilege('service_role', p.oid, 'execute')`), ['sync_calendar_import']);
 });
 
 function spec(name) { return TENANT[name]; }

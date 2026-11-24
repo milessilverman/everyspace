@@ -251,9 +251,9 @@ create index on public.opportunities (projection_id);
 create trigger opportunities_tenant_refs before insert or update on public.opportunities for each row execute function public.check_tenant_refs();
 
 -- ---------------------------------------------------------------- provider data (quarantined, ADR 9)
--- Restricted third-party data, scoped to the provider that supplied it. expires_at is required and rows are purged
--- daily by purge_expired_provider_data(). Nothing references this table: it is never joined into intelligence or
--- estimates.
+-- Restricted third-party data, scoped to the provider that supplied it. expires_at is required; expired rows are
+-- hidden by the read policy at once, and purge_expired_provider_data() deletes them daily (scheduled in
+-- supabase/cron/calendar_sync.sql). Nothing references this table: it is never joined into intelligence or estimates.
 create table public.provider_data (
   id uuid primary key default gen_random_uuid(),
   channel_key text not null references public.channels (key) on update cascade,
@@ -324,7 +324,9 @@ create policy "Members read projections" on public.projections for select to aut
 create policy "Managers save projections" on public.projections for insert to authenticated with check (public.has_org_permission(org_id, 'property.write'));
 revoke update, delete, truncate on public.projections from anon, authenticated;
 
-create policy "Members read their provider data" on public.provider_data for select to authenticated using (public.has_org_permission(org_id, 'property.read'));
+-- Expired rows are invisible at once, whether or not the daily purge has run yet (review finding 8).
+create policy "Members read their provider data" on public.provider_data for select to authenticated
+  using (expires_at > now() and public.has_org_permission(org_id, 'property.read'));
 revoke insert, update, delete, truncate on public.provider_data from anon, authenticated;
 
 -- ---------------------------------------------------------------- function privileges

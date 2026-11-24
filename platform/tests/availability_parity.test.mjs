@@ -41,7 +41,7 @@ before(async () => {
       done.add(s.id);
     }
     for (const r of c.model.relations ?? []) {
-      await db.query(`insert into public.space_relations (space_id, blocks_space_id, "symmetric") values ($1, $2, $3)`, [u(r.spaceId), u(r.blocksSpaceId), !!r.symmetric]);
+      await db.query(`insert into public.space_relations (space_id, blocks_space_id) values ($1, $2)`, [u(r.spaceId), u(r.blocksSpaceId)]);
     }
     for (const r of c.model.resources ?? []) {
       await db.query(`insert into public.resources (id, property_id, name, capacity) values ($1, $2, $3, $4)`, [u(r.id), prop, r.id, r.capacity]);
@@ -84,3 +84,17 @@ for (const [n, c] of CASES.entries()) {
     assert.deepEqual(blockSql, blockingSpaces(c.model, cand.spaceId));
   });
 }
+
+// The parity cases must not pass vacuously: both engines are compared against expectedKinds above, and here the
+// shared cases must exercise every conflict kind several times (and relations from both stored sides), so an engine
+// that regressed to "never conflicts" or "directional only" fails.
+test('parity cases cover every conflict kind and both relation directions', () => {
+  for (const kind of ['overlap', 'buffer', 'capacity', 'resource', 'hold']) {
+    const n = CASES.filter((c) => c.expectedKinds.includes(kind)).length;
+    assert.ok(n >= 2, `${kind}: only ${n} case(s)`);
+  }
+  const rel = CASES.filter((c) => (c.model.relations ?? []).length && c.expectedKinds.length);
+  assert.ok(rel.some((c) => c.model.relations.some((r) => r.blocksSpaceId === c.candidate.spaceId)));
+  assert.ok(rel.some((c) => c.model.relations.some((r) => r.spaceId === c.candidate.spaceId)));
+  assert.ok(CASES.length >= 38, `${CASES.length} cases`);
+});

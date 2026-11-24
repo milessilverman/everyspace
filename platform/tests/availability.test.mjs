@@ -206,7 +206,7 @@ test('relations and resource links must stay within one property', async () => {
   await assert.rejects(db.query(`insert into public.space_relations (space_id, blocks_space_id) values ($1, $2)`, [lawn, far]), /does not belong/);
   const res = (await one(`insert into public.resources (property_id, name, capacity) values ($1, 'Far parking', 1) returning id`, [other])).id;
   await assert.rejects(db.query(`insert into public.space_resources (space_id, resource_id) values ($1, $2)`, [lawn, res]), /does not belong/);
-  await assert.rejects(db.query(`update public.spaces set property_id = $1 where id = $2`, [other, lawn]), /before moving it/);
+  await assert.rejects(db.query(`update public.spaces set property_id = $1 where id = $2`, [other, lawn]), /cannot move to another property/);
   await assert.rejects(db.query(`insert into public.space_relations (space_id, blocks_space_id) values ($1, $1)`, [lawn]), /check constraint/);
 });
 

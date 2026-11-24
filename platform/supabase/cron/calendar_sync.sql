@@ -21,3 +21,9 @@ $$);
 
 -- Revenue share: add finished stays to the ledger once a day (2:17 AM Los Angeles time).
 select cron.schedule('accrue-earnings-daily', '17 9 * * *', $$ select public.accrue_earnings(); $$);
+
+-- Restricted provider data (ADR 9): delete rows past expires_at once a day (3:23 AM Los Angeles time). The read policy
+-- already hides expired rows; this removes them. Guarded so re-running this script does not add a second job.
+select cron.schedule('purge-expired-provider-data-daily', '23 11 * * *', $$ select public.purge_expired_provider_data(); $$)
+where not exists (select 1 from cron.job where jobname = 'purge-expired-provider-data-daily')
+  and exists (select 1 from pg_proc where proname = 'purge_expired_provider_data' and pronamespace = 'public'::regnamespace);

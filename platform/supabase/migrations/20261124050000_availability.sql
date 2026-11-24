@@ -3,6 +3,8 @@
 -- One definition of "is this time free?", availability_conflicts(), used by every path that books or flags:
 --   create_booking       Everyspace-originated bookings and host blocks: rejected on any conflict.
 --   import_reservations  what a marketplace reports: always recorded, then flagged; never rejected.
+--   sync_calendar_import calendar-sync's write path (service role), same code as import_reservations (apply_import).
+--   cancel_booking / reschedule_booking  owners change their own Everyspace bookings.
 --   place_hold           holds for requests from other sites (same name and signature as before).
 --   detect_conflicts     records conflicting pairs in public.conflicts (same name and signature as before).
 -- Every writer takes lock_property() first, so two writers for the same property run one after the other.
@@ -10,7 +12,7 @@
 --
 -- Rules: half-open ranges; a reservation or hold occupies its own space for [start - setup, end + cleanup) (buffers do
 -- not extend onto related spaces or resources); a space is blocked by itself, its ancestors, its descendants and any
--- space with a relation that blocks it; quantity n allows n overlapping bookings; a shared resource's units in use at
+-- space it has a relation with (mutual exclusion, either stored direction); quantity n allows n overlapping bookings; a shared resource's units in use at
 -- any one moment (peak, not total) must stay <= its capacity; live holds count; cancelled reservations never count;
 -- kinds 'block' and 'owner_block' occupy like bookings.
 
@@ -203,7 +205,10 @@ language sql stable security definer set search_path = '' as $$
     when 'service_role' then true
     when 'authenticated' then public.has_space_permission(p_space, 'booking.write')
     when 'anon' then false
+    -- No role set: a superuser, or the functions' own owner (on hosted Supabase `postgres` owns them but is not a
+    -- superuser: SQL editor, pg_cron). Inside this SECURITY DEFINER function current_user is that owner.
     else coalesce((select r.rolsuper from pg_catalog.pg_roles r where r.rolname = session_user), false)
+         or session_user = current_user
   end
 $$;
 
@@ -346,21 +351,37 @@ end $$;
 -- same rows changes nothing. Returns {inserted, updated, cancelled, conflicts:[...]}; conflicts lists, for each
 -- confirmed row in the batch, what it collides with (closed-dates blocks excluded, like detect_conflicts), and the
 -- pairs are also recorded in public.conflicts.
-create function public.import_reservations(p_space uuid, p_channel text, p_rows jsonb, p_source text default 'manual') returns jsonb
+--
+-- Imports never touch bookings Everyspace made (review finding 3): channel 'everyspace' and source 'everyspace' are
+-- refused, and a row whose existing source is not an import source (or that is exclusive) is never updated or
+-- cancelled. Owners change their own bookings with cancel_booking / reschedule_booking.
+--
+-- apply_import is the one implementation, called by import_reservations (signed-in users, booking.write) and by
+-- sync_calendar_import (calendar-sync, service role). It takes lock_property, upserts, optionally cancels the
+-- listed uids that are missing from a feed, then flags conflicts, all in the caller's transaction.
+-- p_cancel_uids: external_uids (same space and channel) to cancel; only confirmed rows from an import source are
+-- touched. Returns {inserted, updated, cancelled, conflicts, new_conflicts}.
+create function public.apply_import(p_space uuid, p_channel text, p_rows jsonb, p_source text, p_cancel_uids text[] default null) returns jsonb
 language plpgsql security definer set search_path = '' as $$
 declare
-  v jsonb; i int := 0; n_ins int := 0; n_upd int := 0; n_can int := 0;
+  v jsonb; i int := 0; n_ins int := 0; n_upd int := 0; n_can int := 0; n_new int := 0; n int;
   v_uid text; v_s timestamptz; v_e timestamptz; v_kind text; v_status text; v_all_day boolean; v_gc int; v_pay bigint;
   old public.reservations; v_id uuid; v_ids uuid[] := '{}'; seen text[] := '{}'; v_batch uuid := gen_random_uuid();
   v_conf jsonb;
+  import_sources constant text[] := array['ical', 'email', 'api', 'manual', 'csv'];
 begin
-  if not public.can_book(p_space) then raise exception 'Space not found.' using errcode = '42501'; end if;
   if not exists (select 1 from public.spaces where id = p_space) then raise exception 'Space not found.' using errcode = 'P0002'; end if;
+  if p_channel = 'everyspace' then
+    raise exception 'Everyspace bookings are not imported. Use cancel_booking or reschedule_booking to change them.' using errcode = '22023';
+  end if;
   if not exists (select 1 from public.channels where key = p_channel) then
     raise exception 'Unknown site "%".', p_channel using errcode = '22023';
   end if;
-  if p_source is null or p_source not in ('ical', 'email', 'api', 'manual', 'everyspace', 'csv') then
-    raise exception 'Source must be one of ical, email, api, manual, everyspace, csv.' using errcode = '22023';
+  if p_source is null or not (p_source = any (import_sources)) then
+    raise exception 'Source must be one of ical, email, api, manual, csv.' using errcode = '22023';
+  end if;
+  if p_cancel_uids is not null and cardinality(p_cancel_uids) > 5000 then
+    raise exception 'At most 5000 cancellations per import.' using errcode = '22023';
   end if;
   if p_rows is null or jsonb_typeof(p_rows) <> 'array' then raise exception 'Rows must be a JSON array.' using errcode = '22023'; end if;
   if jsonb_array_length(p_rows) > 5000 then raise exception 'At most 5000 rows per import.' using errcode = '22023'; end if;
@@ -406,7 +427,9 @@ begin
   end loop;
 
   perform public.lock_property(p_space);
+  i := 0;
   for v in select value from jsonb_array_elements(p_rows) loop
+    i := i + 1;
     v_uid := v ->> 'external_uid';
     v_s := (v ->> 'starts_at')::timestamptz; v_e := (v ->> 'ends_at')::timestamptz;
     v_kind := coalesce(v ->> 'kind', 'booking');
@@ -415,6 +438,9 @@ begin
     v_gc := (v ->> 'guest_count')::int;
     v_pay := (v ->> 'payout_cents')::bigint;
     select * into old from public.reservations r where r.space_id = p_space and r.channel = p_channel and r.external_uid = v_uid for update;
+    if old.id is not null and (old.exclusive or not (old.source = any (import_sources))) then
+      raise exception 'Row %: "%" is a booking made in Everyspace; an import cannot change it.', i, v_uid using errcode = '42501';
+    end if;
     if old.id is null then
       insert into public.reservations (space_id, channel, external_uid, kind, status, source, starts_at, ends_at, all_day,
         guest_count, payout_cents, guest_name, summary, exclusive, import_batch_id)
@@ -443,6 +469,16 @@ begin
     old := null;
   end loop;
 
+  -- Rows the feed no longer lists (calendar-sync decides which, with its empty-feed and past-row guards).
+  if p_cancel_uids is not null and cardinality(p_cancel_uids) > 0 then
+    update public.reservations r set status = 'cancelled', import_batch_id = v_batch, updated_at = now()
+    where r.space_id = p_space and r.channel = p_channel and r.external_uid = any (p_cancel_uids)
+      and not (r.external_uid = any (seen)) and r.status = 'confirmed'
+      and not r.exclusive and r.source = any (import_sources);
+    get diagnostics n = row_count;
+    n_can := n_can + n;
+  end if;
+
   -- Flag, never reject: what each confirmed row of the batch collides with.
   select coalesce(jsonb_agg(jsonb_build_object('reservation_id', x.id, 'external_uid', x.external_uid, 'kind', c.kind,
            'space_id', c.space_id, 'conflicting_reservation_id', c.reservation_id, 'hold_id', c.hold_id,
@@ -456,8 +492,75 @@ begin
   where x.id = any (v_ids)
     and x.kind <> 'block' and coalesce(o.kind, '') <> 'block'
     and (c.hold_id is null or h.channel <> x.channel); -- a hold on the same site is this booking arriving (settle_holds)
-  perform public.detect_conflicts(p_space);
-  return jsonb_build_object('inserted', n_ins, 'updated', n_upd, 'cancelled', n_can, 'conflicts', v_conf);
+  n_new := public.detect_conflicts(p_space);
+  return jsonb_build_object('inserted', n_ins, 'updated', n_upd, 'cancelled', n_can, 'conflicts', v_conf, 'new_conflicts', n_new);
+end $$;
+
+-- Signed-in users (booking.write) and the service role. Same result as before: {inserted, updated, cancelled, conflicts}.
+create function public.import_reservations(p_space uuid, p_channel text, p_rows jsonb, p_source text default 'manual') returns jsonb
+language plpgsql security definer set search_path = '' as $$
+begin
+  if not public.can_book(p_space) then raise exception 'Space not found.' using errcode = '42501'; end if;
+  return public.apply_import(p_space, p_channel, p_rows, p_source, null) - 'new_conflicts';
+end $$;
+
+-- calendar-sync's only write path (service role only): one transaction that locks the property, upserts the feed's
+-- rows, cancels the rows missing from the feed that the caller lists, and records conflicts (review finding 5).
+create function public.sync_calendar_import(p_space uuid, p_channel text, p_rows jsonb, p_cancel_uids text[] default '{}') returns jsonb
+language plpgsql security definer set search_path = '' as $$
+begin
+  -- Service role (or a superuser maintenance session); never a signed-in user, even one with booking.write.
+  if coalesce(current_setting('role', true), '') in ('authenticated', 'anon') or not public.can_book(p_space) then
+    raise exception 'Space not found.' using errcode = '42501';
+  end if;
+  return public.apply_import(p_space, p_channel, p_rows, 'ical', coalesce(p_cancel_uids, '{}'));
+end $$;
+
+-- ---------------------------------------------------------------- owners change their own bookings
+-- Only rows create_booking made (source 'everyspace'). Same caller check and lock as create_booking.
+create function public.cancel_booking(p_reservation uuid) returns boolean
+language plpgsql security definer set search_path = '' as $$
+declare r public.reservations;
+begin
+  select * into r from public.reservations where id = p_reservation;
+  if r.id is null or not public.can_book(r.space_id) then raise exception 'Booking not found.' using errcode = 'P0002'; end if;
+  if r.source <> 'everyspace' then
+    raise exception 'This booking came from another site. Cancel it there; the next sync records it.' using errcode = '42501';
+  end if;
+  perform public.lock_property(r.space_id);
+  select * into r from public.reservations where id = p_reservation for update;
+  if r.status = 'cancelled' then return false; end if;
+  update public.reservations set status = 'cancelled', updated_at = now() where id = p_reservation;
+  perform public.detect_conflicts(r.space_id);
+  return true;
+end $$;
+
+-- Moves a booking create_booking made. Rejected (23P01, conflicts as JSON in DETAIL) on any conflict other than
+-- the booking itself.
+create function public.reschedule_booking(p_reservation uuid, p_starts timestamptz, p_ends timestamptz) returns uuid
+language plpgsql security definer set search_path = '' as $$
+declare r public.reservations; found_conflicts jsonb;
+begin
+  select * into r from public.reservations where id = p_reservation;
+  if r.id is null or not public.can_book(r.space_id) then raise exception 'Booking not found.' using errcode = 'P0002'; end if;
+  if r.source <> 'everyspace' then
+    raise exception 'This booking came from another site. Change it there; the next sync records it.' using errcode = '42501';
+  end if;
+  if p_starts is null or p_ends is null or p_ends <= p_starts then
+    raise exception 'The end has to be after the start.' using errcode = '22023';
+  end if;
+  perform public.lock_property(r.space_id);
+  select * into r from public.reservations where id = p_reservation for update;
+  if r.status <> 'confirmed' then raise exception 'This booking is cancelled.' using errcode = '22023'; end if;
+  select coalesce(jsonb_agg(to_jsonb(a) order by a.kind, a.space_id, a.reservation_id, a.hold_id, a.resource_id), '[]'::jsonb)
+    into found_conflicts from public.availability_conflicts(r.space_id, p_starts, p_ends, p_reservation) a;
+  if jsonb_array_length(found_conflicts) > 0 then
+    raise exception 'Those times are not available (% conflict(s)).', jsonb_array_length(found_conflicts)
+      using errcode = '23P01', detail = found_conflicts::text, hint = 'BOOKING_CONFLICT';
+  end if;
+  update public.reservations set starts_at = p_starts, ends_at = p_ends, updated_at = now() where id = p_reservation;
+  perform public.detect_conflicts(r.space_id);
+  return p_reservation;
 end $$;
 
 -- ---------------------------------------------------------------- holds use the same rules (same signature)
@@ -478,6 +581,104 @@ begin
   return hid;
 end $$;
 
+-- Override of 20261116051049's mark_hold_safe (same signature): the re-check under the lock uses the same rules as
+-- everything else (relations, shared resources, buffers, capacity peak), ignoring the hold itself (review finding 4).
+-- As before, dates the host closed on a site (reservation kind 'block') are expected here and do not count.
+create or replace function public.mark_hold_safe(p_hold uuid) returns boolean
+language plpgsql security definer set search_path = '' as $$
+declare h public.booking_holds;
+begin
+  select * into h from public.booking_holds where id = p_hold;
+  if h.id is null then return false; end if;
+  perform public.lock_property(h.space_id);
+  select * into h from public.booking_holds where id = p_hold for update;
+  if h.status = 'safe' then return true; end if;
+  if h.status <> 'holding' or h.expires_at <= now() then return false; end if;
+  if exists (select 1 from public.availability_conflicts(h.space_id, h.starts_at, h.ends_at, h.id) c
+             left join public.reservations r on r.id = c.reservation_id
+             where coalesce(r.kind, '') <> 'block') then
+    update public.booking_holds set status = 'released', released_reason = 'taken' where id = p_hold;
+    return false;
+  end if;
+  -- Safe holds last long enough for the site's 24-hour accept window plus calendar lag.
+  update public.booking_holds set status = 'safe', verified_at = now(), expires_at = greatest(expires_at, now() + interval '3 days')
+  where id = p_hold;
+  return true;
+end $$;
+
+-- ---------------------------------------------------------------- one open door across related spaces (finding 6)
+-- Overrides of 20261116051049 / 20261124020000 (same signatures): the instant-site rule, the instant listings a
+-- request must be closed on, what an instant listing must show as busy, and the alerts it resolves all use
+-- blocking_spaces() (family plus relations in either direction) instead of the family only.
+create or replace function public.enforce_one_door() returns trigger
+language plpgsql security definer set search_path = '' as $$
+declare other record;
+begin
+  if tg_op = 'INSERT' or new.booking_mode is distinct from old.booking_mode then new.mode_since := now(); end if;
+  if new.booking_mode <> 'instant' or new.status not in ('pending', 'live') then return new; end if;
+  perform public.lock_property(new.space_id);
+  select l.channel, s.title into other
+  from public.channel_listings l join public.spaces s on s.id = l.space_id
+  where l.id <> new.id and l.booking_mode = 'instant' and l.status in ('pending', 'live')
+    and l.space_id in (select public.blocking_spaces(new.space_id))
+  limit 1;
+  if found then
+    raise exception 'Only one site can take instant bookings for the same space. % already does for "%". Switch one of them to request-to-book.', other.channel, other.title
+      using errcode = 'P0001', hint = 'ONE_DOOR';
+  end if;
+  return new;
+end $$;
+
+create or replace function public.door_listings(p_space uuid) returns table (space_id uuid, channel text)
+language sql stable security definer set search_path = '' as $$
+  select l.space_id, l.channel from public.channel_listings l
+  where l.booking_mode = 'instant' and l.status in ('pending', 'live') and l.space_id in (select public.blocking_spaces(p_space))
+$$;
+
+create or replace function public.door_requirements(p_space uuid, p_channel text)
+returns table (kind text, id uuid, starts_at timestamptz, ends_at timestamptz)
+language sql stable security definer set search_path = '' as $$
+  select 'reservation', r.id, r.starts_at, r.ends_at from public.reservations r
+  where r.space_id in (select public.blocking_spaces(p_space)) and not (r.channel = p_channel and r.space_id = p_space)
+    and r.status = 'confirmed' and r.kind = 'booking' and r.ends_at > now()
+  union all
+  select 'hold', h.id, h.starts_at, h.ends_at from public.booking_holds h
+  where h.space_id in (select public.blocking_spaces(p_space)) and h.status = 'safe' and h.expires_at > now()
+$$;
+
+-- Same body as 20261124020000_catalog, with blocking_spaces() so alerts on related spaces also resolve.
+create or replace function public.record_door_gaps(p_space uuid, p_channel text, p_reservations uuid[], p_holds uuid[]) returns int
+language plpgsql security definer set search_path = '' as $$
+declare added int; tz text; site text := public.site_name(p_channel);
+begin
+  select p.timezone into tz from public.spaces s join public.properties p on p.id = s.property_id where s.id = p_space;
+  update public.booking_alerts a set resolved_at = now()
+  where a.kind = 'door_open' and a.channel = p_channel and a.resolved_at is null
+    and a.space_id in (select public.blocking_spaces(p_space))
+    and not (coalesce(a.reservation_id = any(p_reservations), false) or coalesce(a.hold_id = any(p_holds), false));
+  with gaps as (
+    select r.space_id, r.id as rid, null::uuid as hid, r.starts_at, r.ends_at, r.all_day, r.channel as src
+    from public.reservations r where r.id = any(p_reservations)
+    union all
+    select h.space_id, null, h.id, h.starts_at, h.ends_at, h.all_day, h.channel from public.booking_holds h where h.id = any(p_holds)
+  ), worded as (
+    select g.*,
+      to_char(g.starts_at at time zone tz, 'Mon FMDD') as first_night,
+      to_char(case when g.all_day then g.ends_at - interval '12 hours' else g.ends_at end at time zone tz, 'Mon FMDD') as last_night
+    from gaps g
+  ), ins as (
+    insert into public.booking_alerts (space_id, kind, channel, reservation_id, hold_id, message)
+    select w.space_id, 'door_open', p_channel, w.rid, w.hid,
+      case when not w.all_day then format('Close %s on %s now. It''s booked on %s, but still open there.', w.first_night, site, public.site_name(w.src))
+           when w.first_night = w.last_night then format('Close the night of %s on %s now. It''s booked on %s, but still open there.', w.first_night, site, public.site_name(w.src))
+           else format('Close the nights of %s – %s on %s now. They''re booked on %s, but still open there.', w.first_night, w.last_night, site, public.site_name(w.src)) end
+    from worded w
+    on conflict (kind, channel, reservation_id, hold_id) do update set resolved_at = null, message = excluded.message
+    returning 1
+  ) select count(*) into added from ins;
+  return added;
+end $$;
+
 -- ---------------------------------------------------------------- detect_conflicts on the same rules (same signature)
 -- Conflicting pairs of confirmed reservations that involve p_space, found by availability_conflicts. As before, a date
 -- closed on one site for another site's guest (kind 'block') is the system working, not a conflict, and two host
@@ -488,9 +689,9 @@ language sql stable security definer set search_path = '' as $$
     select r.id, r.space_id, r.starts_at, r.ends_at, r.kind from public.reservations r
     where r.status = 'confirmed' and r.ends_at > now() - interval '1 day'
       and (r.space_id = p_space
-           -- spaces p_space blocks (their check sees p_space; family is symmetric and covered by p_space's own rows)
+           -- spaces related to p_space, in either stored direction (family is covered by p_space's own rows)
            or r.space_id in (select x.blocks_space_id from public.space_relations x where x.space_id = p_space)
-           or r.space_id in (select x.space_id from public.space_relations x where x.blocks_space_id = p_space and x."symmetric"))
+           or r.space_id in (select x.space_id from public.space_relations x where x.blocks_space_id = p_space))
   )
   select distinct least(x.id, c.reservation_id), greatest(x.id, c.reservation_id)
   from xs x
@@ -553,22 +754,30 @@ from public.calendar_imports ci;
 revoke all on public.sync_health from anon;
 
 -- ---------------------------------------------------------------- reservations: RPC-only writes
--- Reads stay under RLS. Signed-in users write through create_booking / import_reservations, which take the lock;
--- the service role (calendar-sync) keeps direct access.
+-- Reads stay under RLS. Everyone writes through create_booking / cancel_booking / reschedule_booking /
+-- import_reservations / sync_calendar_import, which take the lock. The service role (calendar-sync) has no direct
+-- write either (review finding 5): its writes would bypass lock_property.
 drop policy "Operators add reservations" on public.reservations;
 drop policy "Operators edit reservations" on public.reservations;
 drop policy "Operators delete reservations" on public.reservations;
-revoke insert, update, delete, truncate on public.reservations from anon, authenticated;
+revoke insert, update, delete, truncate on public.reservations from anon, authenticated, service_role;
 
 -- ---------------------------------------------------------------- function privileges
 revoke execute on function public.track_import_health(), public.check_same_property(), public.check_resource_move(),
   public.check_space_move(), public.can_book(uuid), public.can_read_bookings(uuid), public.blocking_spaces(uuid),
   public.availability_conflicts(uuid, timestamptz, timestamptz, uuid),
   public.create_booking(uuid, timestamptz, timestamptz, text, text, text, int, bigint, boolean, text, text),
-  public.import_reservations(uuid, text, jsonb, text), public.conflict_pairs(uuid)
+  public.import_reservations(uuid, text, jsonb, text), public.conflict_pairs(uuid),
+  public.apply_import(uuid, text, jsonb, text, text[]), public.sync_calendar_import(uuid, text, jsonb, text[]),
+  public.cancel_booking(uuid), public.reschedule_booking(uuid, timestamptz, timestamptz),
+  public.check_relation_doors(), public.check_space_parent()
   from public, anon, authenticated;
 grant execute on function public.availability_conflicts(uuid, timestamptz, timestamptz, uuid),
   public.create_booking(uuid, timestamptz, timestamptz, text, text, text, int, bigint, boolean, text, text),
-  public.import_reservations(uuid, text, jsonb, text)
+  public.import_reservations(uuid, text, jsonb, text),
+  public.cancel_booking(uuid), public.reschedule_booking(uuid, timestamptz, timestamptz)
   to authenticated, service_role;
-grant execute on function public.blocking_spaces(uuid), public.detect_conflicts(uuid) to service_role;
+grant execute on function public.blocking_spaces(uuid), public.detect_conflicts(uuid),
+  public.sync_calendar_import(uuid, text, jsonb, text[]) to service_role;
+-- apply_import has no caller check of its own: only its two wrappers call it.
+revoke execute on function public.apply_import(uuid, text, jsonb, text, text[]) from service_role;
