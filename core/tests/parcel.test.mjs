@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { geocode, parcelAt, buildingsNear, poolNear, transitNear, resolveAddress, classifyPropertyType, servicesFor } from '../parcel.js';
+import { geocode, parcelAt, buildingsNear, poolNear, transitNear, resolveAddress, classifyPropertyType, servicesFor, addressMismatch, situsMatchesAddress,
+  BROWSER_GEOCODERS, GEOCODERS_SERVER, CONFIDENCE } from '../parcel.js';
 import { PARCEL_SERVICES } from '../data/parcel-services.js';
 import { setAttribute, applyOwnerCorrection } from '../profile.js';
 
@@ -348,4 +349,244 @@ test('inputs are not mutated and `now` is required', async () => {
   await resolveAddress(ADDRESS, { fetch: happy(), now: NOW, services });
   assert.equal(JSON.stringify(services), snap);
   await assert.rejects(resolveAddress(ADDRESS, { fetch: happy() }), /now/);
+});
+
+// ---- Live-check regressions (2026-11-24): geocoded point in the street, buffered parcel search, mismatch gate ---------
+
+const STREET_PT = { lat: 34.03045, lng: -118.4199946 };
+const isBuffered = (url) => url.includes('distance=');
+/** LA service: exact query -> `exact` body, buffered query -> `buffer` body. */
+const la = (exact, buffer) => (url) => json(isBuffered(url) ? buffer : exact);
+const streetHappy = (buffer = fx('arcgis-la-buffer.json'), over = {}) => router([
+  ...Object.entries(over),
+  ['geocoder/geographies/onelineaddress', () => json(fx('census-geocode-la-street.json'))],
+  ['lacounty.gov', la(fx('arcgis-empty.json'), buffer)],
+  ['overpass', () => json(fx('overpass-la.json'))],
+]);
+const SPRING = '200 N Spring St, Los Angeles, CA 90012'; // the live check: Census matches 200 S SPRING ST
+const springRouter = (over = {}) => router([
+  ...Object.entries(over),
+  ['geocoder/geographies/onelineaddress', () => json(fx('census-geocode-spring-st-recorded.json'))],
+  ['lacounty.gov', la(fx('arcgis-empty.json'), fx('arcgis-la-buffer-spring-st-recorded.json'))],
+  ['overpass', () => json(fx('overpass-no-features.json'))],
+]);
+
+test('exact hit still wins: a point inside the parcel makes no buffered request, confidence 0.9, matchedBy containing-point', async () => {
+  const f = happy();
+  const p = await parcelAt({ ...PT, jurisdiction: laJ }, { fetch: f, now: NOW }, { matchedAddress: '99999 VENICE BLVD, LOS ANGELES, CA, 90034' });
+  assert.equal(p.ok, true);
+  assert.equal(p.matchedBy, 'containing-point');
+  assert.equal(f.calls.filter((c) => isBuffered(c.url)).length, 0, 'no buffered query needed');
+  const r = await resolveAddress(ADDRESS, { fetch: happy(), now: NOW });
+  assert.equal(r.profile.attributes.parcel_id.confidence, CONFIDENCE.parcelId);
+  assert.equal(r.steps[0].matchedAddress, '99999 VENICE BLVD, LOS ANGELES, CA, 90034');
+});
+
+test('buffered: point in the street, exactly one situs match -> used, lower confidence, method recorded', async () => {
+  const f = streetHappy();
+  const r = await resolveAddress(ADDRESS, { fetch: f, now: NOW });
+  assert.equal(r.ok, true);
+  const urls = f.calls.map((c) => c.url).filter((u) => u.includes('lacounty'));
+  assert.equal(urls.length, 2);
+  assert.match(urls[1], /distance=40&units=esriSRUnit_Meter/);
+  const id = r.profile.attributes.parcel_id;
+  assert.equal(id.value, '9999-999-001', 'not 99999 W WASHINGTON, not the blank-situs parcels, not 99997');
+  assert.equal(id.method, 'matched by situs address within 40 m of the geocoded point');
+  assert.equal(id.confidence, CONFIDENCE.parcelBySitus);
+  assert.ok(CONFIDENCE.parcelBySitus < CONFIDENCE.parcelId);
+  assert.ok(r.profile.attributes.parcel_boundary.confidence < CONFIDENCE.parcelId);
+  assert.equal(r.profile.attributes.year_built.value, 1948, 'YearBuilt1 arrives as the string "1948"');
+});
+
+test('situs matching normalises suffixes and compares the directional only when both sides have one', () => {
+  assert.equal(situsMatchesAddress('145 S SPRING STREET, LOS ANGELES, CA', '145 S SPRING ST LOS ANGELES CA 90012'), true);
+  assert.equal(situsMatchesAddress('99999 Venice Boulevard, Los Angeles, CA 90034', '99999 VENICE BLVD LOS ANGELES CA 90034'), true);
+  assert.equal(situsMatchesAddress('145 SPRING ST, LOS ANGELES', '145 S SPRING ST LOS ANGELES CA 90012'), true, 'directional missing on one side: not compared');
+  assert.equal(situsMatchesAddress('145 N SPRING ST, LOS ANGELES', '145 S SPRING ST LOS ANGELES CA 90012'), false, 'N vs S');
+  assert.equal(situsMatchesAddress('145 S SPRING ST, LOS ANGELES', '146 S SPRING ST LOS ANGELES CA 90012'), false, 'house number');
+  assert.equal(situsMatchesAddress('145 S SPRING ST, LOS ANGELES', '145 S MAIN ST LOS ANGELES CA 90012'), false, 'street name');
+  assert.equal(situsMatchesAddress('145 S SPRING ST, LOS ANGELES', '145 S SPRING PL LOS ANGELES CA 90012'), false, 'suffix');
+  assert.equal(situsMatchesAddress('100 W 1st St, Los Angeles', '100 W 1ST ST LOS ANGELES CA 90012'), true);
+  assert.equal(situsMatchesAddress('145 S SPRING ST, LOS ANGELES', ''), false, 'empty situs never matches');
+  assert.equal(situsMatchesAddress('145 S SPRING ST, LOS ANGELES', null), false);
+});
+
+test('buffered: zero situs match -> ok:false, counts the nearby parcels, lists candidates (apn + address only, max 10), never the nearest', async () => {
+  const f = springRouter();
+  const g = await geocode(SPRING, { fetch: f, now: NOW });
+  const p = await parcelAt({ lat: g.lat, lng: g.lng, jurisdiction: g.jurisdiction }, { fetch: f, now: NOW }, { matchedAddress: g.matchedAddress });
+  assert.equal(p.ok, false);
+  assert.match(p.reason, /no parcel at this point/);
+  assert.match(p.reason, /10 parcels within 40 m of the geocoded point, but none matches the address "200 S SPRING ST, LOS ANGELES, CA, 90012"/);
+  assert.equal(p.candidates.length, 10);
+  assert.deepEqual(Object.keys(p.candidates[0]).sort(), ['address', 'apn']);
+  assert.deepEqual(p.candidates[0], { apn: '5149001003', address: '145 S SPRING ST LOS ANGELES CA 90012' });
+  assert.equal(p.candidates.filter((c) => c.address).length, 4, 'addressed parcels first');
+  assert.equal(p.boundary, undefined);
+});
+
+test('buffered: several situs matches -> ok:false saying more than one matched, candidates are the matching parcels', async () => {
+  const p = await parcelAt({ ...STREET_PT, jurisdiction: laJ }, { fetch: router([['lacounty', la(fx('arcgis-empty.json'), fx('arcgis-la-buffer-ambiguous.json'))]]), now: NOW },
+    { matchedAddress: '99999 VENICE BLVD, LOS ANGELES, CA, 90034' });
+  assert.equal(p.ok, false);
+  assert.match(p.reason, /2 of 3 parcels within 40 m match the address .*more than one, so none was chosen/);
+  assert.deepEqual(p.candidates.map((c) => c.apn), ['9999-999-001', '9999-999-008']);
+});
+
+test('buffered: blank situs addresses are never an address match', async () => {
+  const p = await parcelAt({ ...STREET_PT, jurisdiction: laJ }, { fetch: router([['lacounty', la(fx('arcgis-empty.json'), fx('arcgis-la-buffer-nomatch.json'))]]), now: NOW },
+    { matchedAddress: '99999 VENICE BLVD, LOS ANGELES, CA, 90034' });
+  assert.equal(p.ok, false);
+  assert.match(p.reason, /2 parcels within 40 m .* none matches/);
+  assert.deepEqual(p.candidates.map((c) => c.address), ['99997 VENICE BLVD LOS ANGELES CA 90034', null]);
+});
+
+test('buffered: radius comes from the registry entry (searchRadiusM), default 40; a failed buffered query reports its reason', async () => {
+  const svc = { ...PARCEL_SERVICES[0], searchRadiusM: 25 };
+  const f = router([['lacounty', la(fx('arcgis-empty.json'), fx('arcgis-la-buffer.json'))]]);
+  const p = await parcelAt({ ...STREET_PT, jurisdiction: laJ }, { fetch: f, now: NOW, services: [svc] }, { matchedAddress: '99999 VENICE BLVD, LOS ANGELES' });
+  assert.equal(p.ok, true);
+  assert.match(f.calls[1].url, /distance=25&units=esriSRUnit_Meter/);
+  assert.equal(PARCEL_SERVICES[0].searchRadiusM, 40);
+  const bad = router([['lacounty', (u) => (isBuffered(u) ? json({}, 500) : json(fx('arcgis-empty.json')))]]);
+  const r = await parcelAt({ ...STREET_PT, jurisdiction: laJ }, { fetch: bad, now: NOW }, { matchedAddress: '99999 VENICE BLVD, LOS ANGELES' });
+  assert.match(r.reason, /search within 40 m failed: HTTP 500/);
+  assert.equal(r.candidates, undefined);
+});
+
+test('mismatch: N vs S directional (recorded response) -> needsConfirmation, geocode-only profile, no parcel request', async () => {
+  const f = springRouter();
+  const r = await resolveAddress(SPRING, { fetch: f, now: NOW });
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'address matched a different location');
+  assert.equal(r.needsConfirmation, true);
+  assert.equal(r.matchedAddress, '200 S SPRING ST, LOS ANGELES, CA, 90012');
+  assert.equal(r.steps[0].matchedAddress, '200 S SPRING ST, LOS ANGELES, CA, 90012');
+  assert.deepEqual(Object.keys(r.profile.attributes).sort(), ['address', 'jurisdiction', 'location']);
+  assert.equal(r.profile.attributes.address.confidence, CONFIDENCE.mismatch);
+  assert.match(r.profile.attributes.address.note, /street direction N vs S/);
+  assert.equal(f.calls.some((c) => /lacounty|overpass/.test(c.url)), false);
+});
+
+test('mismatch: house number and street name differences need confirmation; city-only differences do not', async () => {
+  assert.match(addressMismatch('200 N Spring St, Los Angeles', '200 S SPRING ST, LOS ANGELES, CA, 90012'), /direction N vs S/);
+  assert.match(addressMismatch('202 S Spring St', '200 S SPRING ST, LOS ANGELES'), /house number 202 vs 200/);
+  assert.match(addressMismatch('200 S Main St, Los Angeles', '200 S SPRING ST, LOS ANGELES'), /street MAIN ST vs SPRING ST/);
+  assert.equal(addressMismatch('99999 Venice Boulevard, LA', '99999 VENICE BLVD, LOS ANGELES, CA, 90034'), null);
+  const name = await resolveAddress('99999 Washington Blvd, Los Angeles, CA 90034', { fetch: happy(), now: NOW });
+  assert.equal(name.needsConfirmation, true);
+  const city = await resolveAddress(ADDRESS, { fetch: happy({ 'geocoder/geographies/onelineaddress': json(fx('census-geocode-wrongcity.json')) }), now: NOW });
+  assert.equal(city.needsConfirmation, undefined, "city-only difference keeps today's behaviour");
+  assert.equal(city.ok, true);
+});
+
+test('confirmMatchedAddress: continues past the mismatch; no situs match for the matched address -> candidates returned', async () => {
+  const r = await resolveAddress(SPRING, { fetch: springRouter(), now: NOW, confirmMatchedAddress: true });
+  assert.equal(r.needsConfirmation, undefined);
+  assert.equal(r.ok, false, 'no parcel could be chosen by address');
+  assert.equal(r.steps.find((s) => s.step === 'parcel').ok, false);
+  assert.equal(r.candidates.length, 10);
+  assert.deepEqual(r.steps.find((s) => s.step === 'parcel').candidates, r.candidates);
+  assert.match(r.profile.attributes.parcel_id.note, /none matches the address "200 S SPRING ST/);
+  assert.equal(r.profile.attributes.address.confidence, CONFIDENCE.mismatch, 'still low confidence');
+});
+
+test('parcelApn: the owner-picked candidate is resolved from the buffer and parcel_id is owner-confirmed (one parcel request)', async () => {
+  const f = springRouter();
+  const r = await resolveAddress(SPRING, { fetch: f, now: NOW, confirmMatchedAddress: true, parcelApn: '5149007006' });
+  assert.equal(r.ok, true);
+  const id = r.profile.attributes.parcel_id;
+  assert.deepEqual([id.value, id.tag, id.confidence], ['5149007006', 'owner-confirmed', 1]);
+  assert.match(id.method, /chosen by the owner/);
+  assert.equal(f.calls.filter((c) => c.url.includes('lacounty')).length, 1, 'only the buffered query');
+  assert.equal(r.profile.attributes.use_type.value, 'Commercial');
+  assert.equal(r.profile.attributes.property_type.value, 'commercial');
+  assert.equal(r.profile.attributes.year_built.value, 1905);
+  assert.equal(r.profile.attributes.living_area_sqft.value, 23089);
+  assert.equal(r.profile.attributes.parcel_boundary.tag, 'measured');
+  const bad = await resolveAddress(SPRING, { fetch: springRouter(), now: NOW, confirmMatchedAddress: true, parcelApn: '0000000000' });
+  assert.equal(bad.ok, false);
+  assert.match(bad.steps.find((s) => s.step === 'parcel').reason, /parcel 0000000000 is not among the 10 parcels/);
+});
+
+test('field hygiene: year "0000", zero bedrooms/units and null fields are unavailable ("not recorded by the assessor"), never 0', async () => {
+  const r = await resolveAddress(SPRING, { fetch: springRouter(), now: NOW, confirmMatchedAddress: true, parcelApn: '5149007005' });
+  const a = r.profile.attributes;
+  assert.equal(a.parcel_id.value, '5149007005');
+  for (const k of ['year_built', 'bedrooms', 'units']) { assert.deepEqual([a[k].tag, a[k].value, a[k].confidence], ['unavailable', null, 0], k); assert.equal(a[k].note, 'not recorded by the assessor', k); }
+  assert.equal(a.living_area_sqft.value, 12710);
+  const lot = await resolveAddress(SPRING, { fetch: springRouter(), now: NOW, confirmMatchedAddress: true, parcelApn: '5149008092' }); // blank situs, all-null attributes
+  for (const k of ['year_built', 'bedrooms', 'units', 'living_area_sqft']) assert.equal(lot.profile.attributes[k].tag, 'unavailable', k);
+  assert.equal(lot.profile.attributes.use_type.value, 'Commercial');
+  const str = await parcelAt({ ...STREET_PT, jurisdiction: laJ }, { fetch: router([['lacounty', json(fx('arcgis-la-parcel.json'))]]), now: NOW });
+  assert.equal(str.assessor.yearBuilt, 1948, 'string year parsed');
+});
+
+test('field hygiene: a residential parcel with Bedrooms1 = 0 and YearBuilt1 "0000" records both as unavailable', async () => {
+  const body = fx('arcgis-la-parcel.json');
+  body.features[0].attributes.Bedrooms1 = 0;
+  body.features[0].attributes.YearBuilt1 = '0000';
+  const r = await resolveAddress(ADDRESS, { fetch: happy({ lacounty: json(body) }), now: NOW });
+  assert.equal(r.profile.attributes.bedrooms.tag, 'unavailable');
+  assert.equal(r.profile.attributes.year_built.tag, 'unavailable');
+  assert.equal(r.profile.attributes.living_area_sqft.value, 1450);
+});
+
+test('geocoder order: default census then nominatim; `geocoders` overrides it; BROWSER_GEOCODERS never calls Census', async () => {
+  assert.deepEqual(GEOCODERS_SERVER, ['census', 'nominatim']);
+  assert.deepEqual(BROWSER_GEOCODERS, ['nominatim']);
+  const f = router([['nominatim', json(fx('nominatim-la.json'))], ['lacounty.gov', json(fx('arcgis-la-parcel.json'))], ['overpass', json(fx('overpass-no-features.json'))]]);
+  const r = await resolveAddress(ADDRESS, { fetch: f, now: NOW, geocoders: BROWSER_GEOCODERS });
+  assert.equal(f.calls.some((c) => c.url.includes('census.gov')), false, 'Census has no CORS header: no request at all, not even for the county');
+  assert.equal(r.steps[0].provider, 'nominatim');
+  assert.equal(r.steps[0].matchedAddress, '99999 Venice Boulevard, Los Angeles, CA 90034');
+  assert.equal(r.profile.attributes.jurisdiction.value.countyFips, undefined);
+  assert.equal(r.profile.attributes.jurisdiction.value.county, 'Los Angeles County');
+  assert.equal(r.ok, true, 'the LA service is found by county name when there is no FIPS');
+  assert.equal(r.profile.attributes.parcel_id.value, '9999-999-001');
+  const both = router([['nominatim', json(fx('nominatim-la.json'))], ['geographies/coordinates', json(fx('census-coordinates-la.json'))]]);
+  const g = await geocode(ADDRESS, { fetch: both, now: NOW, geocoders: ['nominatim', 'census'] });
+  assert.equal(g.provider, 'nominatim');
+  assert.equal(g.jurisdiction.countyFips, '06037');
+  assert.match(both.calls[0].url, /nominatim/, 'order respected');
+  assert.deepEqual(await geocode(ADDRESS, { fetch: both, now: NOW, geocoders: [] }), { ok: false, reason: 'no geocoder configured' });
+  assert.deepEqual(servicesFor(PARCEL_SERVICES, { state: 'CA', county: 'Los Angeles County' }).map((s) => s.id), ['la-county-assessor']);
+  assert.deepEqual(servicesFor(PARCEL_SERVICES, { state: 'AZ', county: 'Los Angeles County' }), []);
+});
+
+test('Nominatim spacing: calls through one resolver are >= 1000 ms apart via the injected sleep; no real timers', async () => {
+  const sleeps = [];
+  const sleep = async (ms) => { sleeps.push(ms); };
+  const f = router([['nominatim', () => json(fx('nominatim-la.json'))]]);
+  const deps = { fetch: f, now: NOW, geocoders: BROWSER_GEOCODERS, sleep };
+  await geocode(ADDRESS, deps);
+  assert.deepEqual(sleeps, [], 'first call goes straight out');
+  await geocode(ADDRESS, deps);
+  assert.deepEqual(sleeps, [1000]);
+  await geocode(ADDRESS, deps);
+  assert.deepEqual(sleeps, [1000, 2000], 'a third call queues behind the second');
+  // time passing is honoured: 1500 ms later no wait is needed
+  let clock = Date.parse(NOW) + 10000;
+  const d2 = { fetch: router([['nominatim', () => json(fx('nominatim-la.json'))]]), now: NOW, geocoders: BROWSER_GEOCODERS, sleep, nowMs: () => clock };
+  sleeps.length = 0;
+  await geocode(ADDRESS, d2); clock += 1500; await geocode(ADDRESS, d2);
+  assert.deepEqual(sleeps, []);
+  clock += 200; await geocode(ADDRESS, d2);
+  assert.deepEqual(sleeps, [800]);
+  // injectable interval; another resolver instance (another fetch) is independent
+  const d3 = { fetch: router([['nominatim', () => json(fx('nominatim-la.json'))]]), now: NOW, geocoders: BROWSER_GEOCODERS, sleep, nominatimMinIntervalMs: 250 };
+  sleeps.length = 0;
+  await geocode(ADDRESS, d3); await geocode(ADDRESS, d3);
+  assert.deepEqual(sleeps, [250]);
+  const d4 = { ...d3, fetch: router([['nominatim', () => json(fx('nominatim-la.json'))]]) };
+  sleeps.length = 0;
+  await geocode(ADDRESS, d4);
+  assert.deepEqual(sleeps, []);
+});
+
+test("the geocoder's matched address is surfaced in steps[0] (recorded response) and no parcel is invented", async () => {
+  const r = await resolveAddress(SPRING, { fetch: springRouter(), now: NOW, confirmMatchedAddress: true });
+  assert.equal(r.steps[0].step, 'geocode');
+  assert.equal(r.steps[0].matchedAddress, '200 S SPRING ST, LOS ANGELES, CA, 90012');
+  assert.equal(r.profile.attributes.parcel_id.tag, 'unavailable');
 });

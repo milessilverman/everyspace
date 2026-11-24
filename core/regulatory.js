@@ -14,24 +14,48 @@ export const UNVERIFIED_CAP = 0.3;
 const BASE_CONFIDENCE = 0.8;
 const STALE_DAYS = 365;
 export const NO_RULES_NOTE = 'No rules on file for this location; check with the city or county.';
-const UNVERIFIED_NOTE = 'These rules are unverified (not yet checked against official sources); treat them as a checklist, not legal advice.';
+export const NOT_COVERED_NOTE = 'Rules on file for this location do not cover this use; check with the city.';
+export const UNVERIFIED_NOTE = 'Rule text has not been verified against the official source.';
+export const NO_CITY_NOTE = 'The city could not be determined for this property, so city rules were not applied; check with the city.';
 
-const norm = (/** @type {any} */ s) => (typeof s === 'string' ? s.trim().toLowerCase() : '');
+/** Trim, lower-case, collapse whitespace. @param {any} s */
+const norm = (s) => (typeof s === 'string' ? s.trim().replace(/\s+/g, ' ').toLowerCase() : '');
+/** County name without a trailing "County" / "Parish" / "Borough". @param {any} s */
+const normCounty = (s) => norm(s).replace(/ (county|parish|borough)$/, '');
+/** FIPS compared as a trimmed string. @param {any} s */
+const normFips = (s) => (typeof s === 'string' || typeof s === 'number' ? String(s).trim() : '');
 
 /**
  * Specificity of a rule for a location: 3 city, 2 county, 1 state, 0 generic, -1 no match.
+ * County matches by FIPS when both sides carry one (a differing FIPS never matches), otherwise by normalised name.
+ * A city-scoped rule never matches a location without a city.
  * @param {JurisdictionRule['jurisdiction']} rj
  * @param {any} loc
  */
 function specificity(rj, loc) {
   if (!rj) return 0;
-  const hasAny = rj.state || rj.county || rj.city;
+  const hasAny = rj.state || rj.county || rj.countyFips || rj.city;
   if (!hasAny) return 0;
   if (!loc) return -1;
-  for (const f of /** @type {const} */ (['state', 'county', 'city'])) {
-    if (rj[f] && norm(rj[f]) !== norm(loc[f])) return -1;
+  if (rj.state && norm(rj.state) !== norm(loc.state)) return -1;
+  if (rj.county || rj.countyFips) {
+    const rf = normFips(rj.countyFips), lf = normFips(loc.countyFips);
+    if (rf && lf) { if (rf !== lf) return -1; }
+    else if (rj.county) { if (normCounty(rj.county) === '' || normCounty(rj.county) !== normCounty(loc.county)) return -1; }
+    else return -1;
   }
-  return rj.city ? 3 : rj.county ? 2 : 1;
+  if (rj.city && (norm(rj.city) === '' || norm(rj.city) !== norm(loc.city))) return -1;
+  return rj.city ? 3 : (rj.county || rj.countyFips) ? 2 : 1;
+}
+
+/**
+ * Would a city-scoped rule for this category apply in the location's state/county if the city were known?
+ * @param {JurisdictionRule[]} rules @param {any} loc @param {string} key @param {string|undefined} group
+ */
+function cityRuleSkipped(rules, loc, key, group) {
+  if (!loc || norm(loc.city) !== '') return false;
+  return rules.some((r) => r.jurisdiction?.city && appliesToCategory(r, key, group)
+    && specificity({ ...r.jurisdiction, city: undefined }, loc) > 0);
 }
 
 /**
@@ -83,8 +107,10 @@ export function checkFeasibility(categoryKey, profile, { now, jurisdictions = JU
 
   const deciding = matched.filter((m) => m.rule.effect !== 'require');
   const location = matched.filter((m) => m.level > 0);
+  const noCity = cityRuleSkipped(jurisdictions, loc, categoryKey, group);
   if (!loc || location.length === 0 || deciding.length === 0) {
-    const note = !loc || location.length === 0 ? NO_RULES_NOTE : 'Rules on file for this location do not decide this use; check with the city or county.';
+    let note = !loc || location.length === 0 ? NO_RULES_NOTE : NOT_COVERED_NOTE;
+    if (noCity) note = NO_CITY_NOTE;
     return { status: 'unknown', rules, confidence: 0, requirements, note };
   }
   const top = Math.max(...deciding.map((m) => m.level));
@@ -96,6 +122,9 @@ export function checkFeasibility(categoryKey, profile, { now, jurisdictions = JU
   const confidence = allVerified ? BASE_CONFIDENCE : Math.min(BASE_CONFIDENCE, UNVERIFIED_CAP);
   /** @type {Feasibility} */
   const out = { status, rules, confidence, requirements };
-  if (!allVerified) out.note = UNVERIFIED_NOTE;
+  const notes = [];
+  if (!allVerified) notes.push(UNVERIFIED_NOTE);
+  if (noCity) notes.push(NO_CITY_NOTE);
+  if (notes.length) out.note = notes.join(' ');
   return out;
 }

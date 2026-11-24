@@ -21,6 +21,13 @@ import { PARCEL_SERVICES } from './data/parcel-services.js';
  * @property {ParcelService[]} [services]
  * @property {string[]} [overpassEndpoints]
  * @property {{state?:string, countyFips?:string, county?:string}} [jurisdiction]
+ * @property {Array<'census'|'nominatim'>} [geocoders]   order to try (default GEOCODERS_SERVER); a browser must use BROWSER_GEOCODERS
+ * @property {number} [nominatimMinIntervalMs]  minimum gap between Nominatim calls (default 1000, usage policy)
+ * @property {(ms:number)=>Promise<void>} [sleep]  injected delay used by the Nominatim spacing (default: real timer)
+ * @property {()=>number} [nowMs]  injected clock (ms) for the spacing; default: Date.parse(now)
+ * @property {{lastAt:number|null}} [nominatimLimiter]  share one limiter between resolvers; default: one per `fetch`
+ * @property {boolean} [confirmMatchedAddress]  resolveAddress: continue although the geocoder matched a different street address
+ * @property {string} [parcelApn]  resolveAddress: the parcel number the owner picked from `candidates`
  */
 
 const NOT_VERIFIED = 'not verified 2026-11-24';
@@ -32,9 +39,18 @@ const OSM_LICENSE = 'ODbL 1.0';
 const OSM_ATTRIBUTION = '© OpenStreetMap contributors';
 const TRANSIT_RADIUS_M = 1500;
 const INTEL = 'Everyspace property intelligence';
+const DEFAULT_SEARCH_RADIUS_M = 40;
+const NOMINATIM_MIN_INTERVAL_MS = 1000; // Nominatim usage policy: at most 1 request per second for the whole application
+
+/** Server-side geocoder order: Census first (it also returns the county FIPS), then Nominatim. */
+export const GEOCODERS_SERVER = /** @type {Array<'census'|'nominatim'>} */ (['census', 'nominatim']);
+// The US Census geocoder sends no Access-Control-Allow-Origin header, so a browser cannot read its response (live check
+// 2026-11-24); Nominatim sends `access-control-allow-origin: *`. Pass this as `geocoders` from browser code.
+export const BROWSER_GEOCODERS = /** @type {Array<'census'|'nominatim'>} */ (['nominatim']);
 
 // Confidence assigned to each kind of value (documented here so tests and docs can cite them).
-export const CONFIDENCE = { census: 0.8, nominatim: 0.65, mismatch: 0.3, parcelId: 0.9, polygonArea: 0.85, assessor: 0.8,
+// parcelBySitus: parcel chosen by matching the geocoded street address (not containing the point): lower than parcelId.
+export const CONFIDENCE = { census: 0.8, nominatim: 0.65, mismatch: 0.3, parcelId: 0.9, parcelBySitus: 0.7, polygonArea: 0.85, assessor: 0.8,
   classified: 0.6, osmBuildings: 0.5, osmPool: 0.6, yard: 0.4, transit: 0.5 };
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -89,9 +105,56 @@ const text = (/** @type {any} */ v) => (typeof v === 'string' && v.trim() !== ''
 // ---------------------------------------------------------------------------------------------------------------
 
 const DIRS = { N: 'N', NORTH: 'N', S: 'S', SOUTH: 'S', E: 'E', EAST: 'E', W: 'W', WEST: 'W' };
+const SUFFIXES = /** @type {Record<string,string>} */ ({ ST: 'ST', STREET: 'ST', AVE: 'AVE', AVENUE: 'AVE', AV: 'AVE', BLVD: 'BLVD', BOULEVARD: 'BLVD',
+  RD: 'RD', ROAD: 'RD', DR: 'DR', DRIVE: 'DR', LN: 'LN', LANE: 'LN', CT: 'CT', COURT: 'CT', PL: 'PL', PLACE: 'PL', WAY: 'WAY',
+  TER: 'TER', TERRACE: 'TER', HWY: 'HWY', HIGHWAY: 'HWY', PKWY: 'PKWY', PARKWAY: 'PKWY', CIR: 'CIR', CIRCLE: 'CIR', SQ: 'SQ',
+  SQUARE: 'SQ', ALY: 'ALY', ALLEY: 'ALY', TRL: 'TRL', TRAIL: 'TRL', PLZ: 'PLZ', PLAZA: 'PLZ' });
 
 /**
- * House number / street direction comparison (from City Pretty addressMismatch), plus a missing-number check.
+ * Splits a street line ("200 S SPRING ST", or a situs "145 S SPRING ST LOS ANGELES CA 90012") into house number,
+ * directional prefix, street-name words and normalised suffix. Null when it does not start with a house number.
+ * @param {string|null|undefined} line
+ * @returns {{num:string, dir:string|null, core:string[], suffix:string|null}|null}
+ */
+function parseStreet(line) {
+  const t = String(line ?? '').toUpperCase().replace(/[.,#]/g, ' ').split(/\s+/).filter(Boolean);
+  if (!t.length || !/^\d/.test(t[0])) return null;
+  let i = 1, dir = null;
+  const left = t.length - 2; // tokens after a possible directional
+  if (DIRS[t[1] ?? ''] && (left >= 2 || (left === 1 && !SUFFIXES[t[2]]))) { dir = DIRS[t[1]]; i = 2; }
+  const rest = t.slice(i);
+  let k = -1;
+  for (let j = 1; j < rest.length; j++) if (SUFFIXES[rest[j]]) { k = j; break; }
+  return k < 0 ? { num: t[0], dir, core: rest, suffix: null } : { num: t[0], dir, core: rest.slice(0, k), suffix: SUFFIXES[rest[k]] };
+}
+
+/** Same street name: equal words and suffix when both have a suffix; otherwise one name is a prefix of the other. */
+function sameStreetName(/** @type {NonNullable<ReturnType<typeof parseStreet>>} */ a, /** @type {NonNullable<ReturnType<typeof parseStreet>>} */ b) {
+  const eq = a.core.length === b.core.length && a.core.every((x, i) => x === b.core[i]);
+  if (a.suffix && b.suffix) return a.suffix === b.suffix && eq;
+  const [s, l] = a.core.length <= b.core.length ? [a.core, b.core] : [b.core, a.core];
+  return s.length > 0 && s.every((x, i) => x === l[i]);
+}
+
+const firstSegment = (/** @type {string} */ a) => String(a ?? '').split(',')[0];
+const streetLabel = (/** @type {NonNullable<ReturnType<typeof parseStreet>>} */ p) => [...p.core, p.suffix].filter(Boolean).join(' ');
+
+/**
+ * Does a parcel's situs address ("145 S SPRING ST LOS ANGELES CA 90012") denote the geocoded street address? Same house
+ * number AND same normalised street name; the directional prefix is compared when both sides have one. An empty or
+ * number-less situs never matches.
+ * @param {string} geocodedAddress @param {string|null|undefined} situs
+ */
+export function situsMatchesAddress(geocodedAddress, situs) {
+  const g = parseStreet(firstSegment(geocodedAddress)), s = parseStreet(situs);
+  if (!g || !s || g.num !== s.num) return false;
+  if (g.dir && s.dir && g.dir !== s.dir) return false;
+  return sameStreetName(g, s);
+}
+
+/**
+ * House number / street direction / street name comparison (from City Pretty addressMismatch), plus a missing-number check.
+ * City, state and ZIP are not compared here.
  * @param {string} requested @param {string} matched @returns {string|null}
  */
 export function addressMismatch(requested, matched) {
@@ -102,6 +165,8 @@ export function addressMismatch(requested, matched) {
   const rd = /** @type {Record<string,string>} */ (DIRS)[r[1] || ''], md = /** @type {Record<string,string>} */ (DIRS)[m[1] || ''];
   if (rd && md && rd !== md) return `street direction ${rd} vs ${md}`;
   if (rd && !md) return `direction ${rd} missing in match`;
+  const rs = parseStreet(firstSegment(requested)), ms = parseStreet(firstSegment(matched));
+  if (rs && ms && !sameStreetName(rs, ms)) return `street ${streetLabel(rs)} vs ${streetLabel(ms)}`;
   return null;
 }
 
@@ -114,88 +179,115 @@ function typedPlace(/** @type {string} */ address) {
   return { state, city };
 }
 
-/** Compare typed vs matched; returns a list of problems. */
+/** Compare typed vs matched; `street` is the house-number/direction/street-name problem (needs confirmation), `list` has all problems. */
 function geocodeProblems(/** @type {string} */ typed, /** @type {string} */ matchedAddress, /** @type {{city?:string,state?:string}} */ got) {
-  const out = [];
-  const a = addressMismatch(typed, matchedAddress);
-  if (a) out.push(a);
+  const list = [];
+  const street = addressMismatch(typed, matchedAddress);
+  if (street) list.push(street);
   const t = typedPlace(typed);
-  if (t.state && got.state && t.state !== got.state.toUpperCase()) out.push(`state ${t.state} vs ${got.state}`);
-  if (t.city && got.city && t.city.toLowerCase() !== got.city.toLowerCase()) out.push(`city ${t.city} vs ${got.city}`);
-  return out;
+  if (t.state && got.state && t.state !== got.state.toUpperCase()) list.push(`state ${t.state} vs ${got.state}`);
+  if (t.city && got.city && t.city.toLowerCase() !== got.city.toLowerCase()) list.push(`city ${t.city} vs ${got.city}`);
+  return { list, street };
 }
 
 /**
- * Census geocoder first, then Nominatim. Never guesses: returns {ok:false, reason} when both fail.
+ * Waits (via the injected sleep) so that two Nominatim calls through the same resolver are at least the minimum interval
+ * apart. Uses virtual time (last call + interval), so a fixed injected `now` stays deterministic.
+ * @param {Deps} deps
+ */
+async function nominatimGate(deps) {
+  const min = deps.nominatimMinIntervalMs ?? NOMINATIM_MIN_INTERVAL_MS;
+  if (!(min > 0)) return;
+  let st = deps.nominatimLimiter;
+  if (!st) {
+    const key = /** @type {object} */ (deps.fetch);
+    st = limiters.get(key);
+    if (!st) { st = { lastAt: null }; limiters.set(key, st); }
+  }
+  const t = deps.nowMs ? deps.nowMs() : Date.parse(isoNow(deps.now));
+  const start = st.lastAt === null ? t : Math.max(t, st.lastAt + min);
+  st.lastAt = start;
+  if (start > t) await (deps.sleep ?? ((/** @type {number} */ ms) => new Promise((r) => setTimeout(r, ms))))(start - t);
+}
+/** @type {WeakMap<object,{lastAt:number|null}>} */
+const limiters = new WeakMap();
+
+/**
+ * Census geocoder, then Nominatim (order: `deps.geocoders`). Never guesses: returns {ok:false, reason} when all fail.
+ * The result carries `matchedAddress` (what the geocoder actually found), `mismatch` and `streetMismatch` (house number,
+ * directional or street name differs from what was typed).
  * @param {string} address @param {Deps} deps
  */
 export async function geocode(address, deps) {
   const typed = typeof address === 'string' ? address.trim().slice(0, 200) : '';
   if (!typed) return { ok: false, reason: 'empty address' };
   const at = isoNow(deps?.now);
+  const order = (deps.geocoders ?? GEOCODERS_SERVER).filter((x, i, a) => (x === 'census' || x === 'nominatim') && a.indexOf(x) === i);
+  if (!order.length) return { ok: false, reason: 'no geocoder configured' };
   /** @type {string[]} */
   const attempts = [];
 
-  // 1. US Census geocoder (also returns county FIPS).
-  const cUrl = `${CENSUS}/geographies/onelineaddress?` + new URLSearchParams({ address: typed, benchmark: 'Public_AR_Current', vintage: 'Current_Current', format: 'json' });
-  const c = await fetchJson(cUrl, deps);
-  if (!c.ok) attempts.push(`Census: ${c.reason}`);
-  else {
-    const matches = c.json?.result?.addressMatches;
-    const m = Array.isArray(matches) ? matches[0] : null;
-    const lat = num(m?.coordinates?.y), lng = num(m?.coordinates?.x);
-    if (!m || lat === null || lng === null || !text(m.matchedAddress)) attempts.push('Census: no address match');
-    else {
+  for (const which of order) {
+    if (which === 'census') {
+      // US Census geocoder (also returns county FIPS).
+      const cUrl = `${CENSUS}/geographies/onelineaddress?` + new URLSearchParams({ address: typed, benchmark: 'Public_AR_Current', vintage: 'Current_Current', format: 'json' });
+      const c = await fetchJson(cUrl, deps);
+      if (!c.ok) { attempts.push(`Census: ${c.reason}`); continue; }
+      const matches = c.json?.result?.addressMatches;
+      const m = Array.isArray(matches) ? matches[0] : null;
+      const lat = num(m?.coordinates?.y), lng = num(m?.coordinates?.x);
+      if (!m || lat === null || lng === null || !text(m.matchedAddress)) { attempts.push('Census: no address match'); continue; }
       const comp = m.addressComponents ?? {};
       const county = m.geographies?.Counties?.[0];
       const problems = geocodeProblems(typed, m.matchedAddress, { city: comp.city, state: comp.state });
       const notes = [];
       if (matches.length > 1) notes.push(`${matches.length} candidate matches; first used`);
-      if (problems.length) notes.push(`WARNING: the geocoder matched a different place (${problems.join('; ')}). Facts are for "${m.matchedAddress}", not necessarily the address typed.`);
+      if (problems.list.length) notes.push(`WARNING: the geocoder matched a different place (${problems.list.join('; ')}). Facts are for "${m.matchedAddress}", not necessarily the address typed.`);
       return {
         ok: true, provider: 'census', lat, lng, matchedAddress: m.matchedAddress,
         jurisdiction: /** @type {any} */ ({ country: 'US', state: text(comp.state) ?? text(m.geographies?.States?.[0]?.STUSAB) ?? undefined,
           ...(county?.GEOID ? { countyFips: String(county.GEOID), county: county.NAME } : {}), ...(text(comp.city) ? { city: comp.city } : {}) }),
-        confidence: problems.length ? CONFIDENCE.mismatch : CONFIDENCE.census,
-        mismatch: problems.length > 0, ...(notes.length ? { note: notes.join(' ') } : {}),
+        confidence: problems.list.length ? CONFIDENCE.mismatch : CONFIDENCE.census,
+        mismatch: problems.list.length > 0, streetMismatch: problems.street, ...(notes.length ? { note: notes.join(' ') } : {}),
         source: { name: 'US Census Geocoder', url: `${CENSUS}/geographies/onelineaddress`, license: NOT_VERIFIED }, retrievedAt: at,
       };
     }
-  }
 
-  // 2. Nominatim (OpenStreetMap), US only, one result.
-  const nUrl = `${NOMINATIM}?` + new URLSearchParams({ format: 'jsonv2', limit: '1', addressdetails: '1', countrycodes: 'us', q: typed });
-  const n = await fetchJson(nUrl, deps);
-  if (!n.ok) attempts.push(`Nominatim: ${n.reason}`);
-  else {
+    // Nominatim (OpenStreetMap), US only, one result; at most one request per second (usage policy).
+    await nominatimGate(deps);
+    const nUrl = `${NOMINATIM}?` + new URLSearchParams({ format: 'jsonv2', limit: '1', addressdetails: '1', countrycodes: 'us', q: typed });
+    const n = await fetchJson(nUrl, deps);
+    if (!n.ok) { attempts.push(`Nominatim: ${n.reason}`); continue; }
     const r = Array.isArray(n.json) ? n.json[0] : null;
     const lat = num(r?.lat), lng = num(r?.lon);
-    if (!r || lat === null || lng === null) attempts.push('Nominatim: no address match');
-    else {
-      const a = r.address ?? {};
-      const iso = typeof a['ISO3166-2-lvl4'] === 'string' && /^US-[A-Z]{2}$/.test(a['ISO3166-2-lvl4']) ? a['ISO3166-2-lvl4'].slice(3) : undefined;
-      const city = text(a.city) ?? text(a.town) ?? text(a.village) ?? text(a.municipality) ?? undefined;
-      const street = [a.house_number, a.road].filter(Boolean).join(' ');
-      const matchedAddress = street ? `${street}${city ? ', ' + city : ''}${iso ? ', ' + iso : ''}${a.postcode ? ' ' + a.postcode : ''}` : String(r.display_name ?? '');
-      if (!matchedAddress) attempts.push('Nominatim: no address match');
-      else {
-        const problems = geocodeProblems(typed, matchedAddress, { city, state: iso });
-        const notes = problems.length ? [`WARNING: the geocoder matched a different place (${problems.join('; ')}). Facts are for "${matchedAddress}", not necessarily the address typed.`] : [];
-        /** @type {any} */
-        const jurisdiction = { country: 'US', state: iso, ...(city ? { city } : {}) };
-        // Nominatim has no county FIPS: ask the Census geography service for the county at this point.
-        const g = await fetchJson(`${CENSUS}/geographies/coordinates?` + new URLSearchParams({ x: String(lng), y: String(lat), benchmark: 'Public_AR_Current', vintage: 'Current_Current', format: 'json' }), deps);
-        const cty = g.ok ? g.json?.result?.geographies?.Counties?.[0] : null;
-        if (cty?.GEOID) { jurisdiction.countyFips = String(cty.GEOID); jurisdiction.county = cty.NAME; }
-        else { if (text(a.county)) jurisdiction.county = a.county; notes.push(`County FIPS not available (${g.ok ? 'Census returned no county' : 'Census: ' + g.reason}).`); }
-        return {
-          ok: true, provider: 'nominatim', lat, lng, matchedAddress, jurisdiction,
-          confidence: problems.length ? CONFIDENCE.mismatch : CONFIDENCE.nominatim,
-          mismatch: problems.length > 0, ...(notes.length ? { note: notes.join(' ') } : {}),
-          source: { name: 'OpenStreetMap Nominatim', url: NOMINATIM, license: OSM_LICENSE }, retrievedAt: at,
-        };
-      }
+    if (!r || lat === null || lng === null) { attempts.push('Nominatim: no address match'); continue; }
+    const a = r.address ?? {};
+    const iso = typeof a['ISO3166-2-lvl4'] === 'string' && /^US-[A-Z]{2}$/.test(a['ISO3166-2-lvl4']) ? a['ISO3166-2-lvl4'].slice(3) : undefined;
+    const city = text(a.city) ?? text(a.town) ?? text(a.village) ?? text(a.municipality) ?? undefined;
+    const street = [a.house_number, a.road].filter(Boolean).join(' ');
+    const matchedAddress = street ? `${street}${city ? ', ' + city : ''}${iso ? ', ' + iso : ''}${a.postcode ? ' ' + a.postcode : ''}` : String(r.display_name ?? '');
+    if (!matchedAddress) { attempts.push('Nominatim: no address match'); continue; }
+    const problems = geocodeProblems(typed, matchedAddress, { city, state: iso });
+    const notes = problems.list.length ? [`WARNING: the geocoder matched a different place (${problems.list.join('; ')}). Facts are for "${matchedAddress}", not necessarily the address typed.`] : [];
+    /** @type {any} */
+    const jurisdiction = { country: 'US', state: iso, ...(city ? { city } : {}) };
+    // Nominatim has no county FIPS: ask the Census geography service for the county at this point (only where Census is
+    // reachable: it is not from a browser). Without it the county is the name Nominatim gave, which servicesFor can match.
+    if (order.includes('census')) {
+      const g = await fetchJson(`${CENSUS}/geographies/coordinates?` + new URLSearchParams({ x: String(lng), y: String(lat), benchmark: 'Public_AR_Current', vintage: 'Current_Current', format: 'json' }), deps);
+      const cty = g.ok ? g.json?.result?.geographies?.Counties?.[0] : null;
+      if (cty?.GEOID) { jurisdiction.countyFips = String(cty.GEOID); jurisdiction.county = cty.NAME; }
+      else { if (text(a.county)) jurisdiction.county = a.county; notes.push(`County FIPS not available (${g.ok ? 'Census returned no county' : 'Census: ' + g.reason}).`); }
+    } else {
+      if (text(a.county)) jurisdiction.county = a.county;
+      notes.push('County FIPS not available (Census is not used from a browser); the county name from Nominatim is used.');
     }
+    return {
+      ok: true, provider: 'nominatim', lat, lng, matchedAddress, jurisdiction,
+      confidence: problems.list.length ? CONFIDENCE.mismatch : CONFIDENCE.nominatim,
+      mismatch: problems.list.length > 0, streetMismatch: problems.street, ...(notes.length ? { note: notes.join(' ') } : {}),
+      source: { name: 'OpenStreetMap Nominatim', url: NOMINATIM, license: OSM_LICENSE }, retrievedAt: at,
+    };
   }
   return { ok: false, reason: `could not geocode: ${attempts.join('; ')}`, attempts };
 }
@@ -204,10 +296,18 @@ export async function geocode(address, deps) {
 // Parcel registry lookup
 // ---------------------------------------------------------------------------------------------------------------
 
-/** County match first, then statewide. @param {ParcelService[]} services @param {{state?:string,countyFips?:string}} j */
+const countyKey = (/** @type {any} */ n) => String(n ?? '').toLowerCase().replace(/\s+county$/, '').trim();
+
+/**
+ * County match first, then statewide. A county matches by FIPS, or (only when the jurisdiction has no FIPS, as with a
+ * browser-side Nominatim geocode) by the registry's `coverage.county` name within the same state.
+ * @param {ParcelService[]} services @param {{state?:string,countyFips?:string,county?:string}} j
+ */
 export function servicesFor(services, j) {
   const state = j?.state?.toUpperCase();
-  const county = services.filter((s) => s.coverage.countyFips && s.coverage.countyFips === j?.countyFips);
+  const byName = !j?.countyFips && state && j?.county ? countyKey(j.county) : null;
+  const county = services.filter((s) => s.coverage.countyFips && (s.coverage.countyFips === j?.countyFips
+    || (byName && s.coverage.county && s.coverage.state.toUpperCase() === state && countyKey(s.coverage.county) === byName)));
   const statewide = services.filter((s) => !s.coverage.countyFips && state && s.coverage.state.toUpperCase() === state);
   return [...county, ...statewide];
 }
@@ -232,52 +332,106 @@ function ringsToGeoJSON(/** @type {number[][][]} */ rings) {
 }
 
 /**
+ * Assessor fields -> numbers. '0000', 0, '' and null all become null ("not recorded by the assessor"); the LA service
+ * returns YearBuilt1 as a string.
+ * @param {any} a @param {ParcelService['fields']} f
+ */
+function assessorOf(a, f) {
+  const year = (/** @type {any} */ v) => { const n = pos(v); return n !== null && Number.isInteger(n) && n >= 1000 && n <= 9999 ? n : null; };
+  return {
+    useCode: f.useCode ? text(a[f.useCode]) : null, useType: f.useType ? text(a[f.useType]) : null,
+    useDescription: f.useDescription ? text(a[f.useDescription]) : null,
+    livingAreaSqft: f.livingAreaSqft ? pos(a[f.livingAreaSqft]) : null, units: f.units ? pos(a[f.units]) : null,
+    yearBuilt: f.yearBuilt ? year(a[f.yearBuilt]) : null, bedrooms: f.bedrooms ? pos(a[f.bedrooms]) : null,
+    lotAreaSqft: f.lotAreaSqft ? pos(a[f.lotAreaSqft]) : null,
+  };
+}
+
+const apnOf = (/** @type {any} */ a, /** @type {ParcelService['fields']} */ f) => text(a[f.apn]) ?? (num(a[f.apn]) !== null ? String(a[f.apn]) : null);
+
+/**
  * Parcel at a point via the registry: the county's service first, then a statewide one. Pass the jurisdiction on the
  * point (`{lat,lng,jurisdiction}`) or in deps.
+ *
+ * 1. Exact intersect at the point. 2. If that finds nothing and `opts.matchedAddress` is given (geocoders return a point
+ * on the street, not in the parcel): query again with a buffer (`service.searchRadiusM`, default 40 m) and take ONLY a
+ * parcel whose situs address matches the geocoded address (house number + street name; directional when both have one).
+ * Exactly one -> used, with `matchedBy:'situs'` and `method`. Zero or several -> ok:false with `candidates`
+ * ([{apn, address}], max 10) so an owner can pick; the nearest parcel is never chosen. `opts.parcelApn` resolves that one
+ * parcel from the buffered candidates (`matchedBy:'owner'`).
  * @param {{lat:number,lng:number,jurisdiction?:{state?:string,countyFips?:string,county?:string}}} point
  * @param {Deps} deps
+ * @param {{matchedAddress?:string, parcelApn?:string}} [opts]
  */
-export async function parcelAt(point, deps) {
+export async function parcelAt(point, deps, opts = {}) {
   const j = point.jurisdiction ?? deps.jurisdiction ?? {};
   const at = isoNow(deps?.now);
   const candidates = servicesFor(deps.services ?? PARCEL_SERVICES, j);
   if (!candidates.length) return { ok: false, reason: `no parcel service for ${j.county ?? j.countyFips ?? 'unknown county'}, ${j.state ?? 'unknown state'}` };
   /** @type {string[]} */
   const reasons = [];
+  /** @type {Array<{apn:string|null,address:string|null}>|undefined} */
+  let pickList;
   for (const svc of candidates) {
     const f = svc.fields;
     const outFields = [f.apn, f.address, f.useCode, f.useType, f.useDescription, f.livingAreaSqft, f.units, f.yearBuilt, f.bedrooms, f.lotAreaSqft]
       .filter((x, i, a) => x && a.indexOf(x) === i);
-    const url = `${svc.url}?` + `geometry=${point.lng.toFixed(6)},${point.lat.toFixed(6)}&geometryType=esriGeometryPoint&inSR=4326&spatialRel=esriSpatialRelIntersects&outFields=${outFields.join(',')}&returnGeometry=true&outSR=4326&f=json`;
-    const r = await fetchJson(url, deps);
-    if (!r.ok) { reasons.push(`${svc.id}: ${r.reason}`); continue; }
-    if (r.json?.error) { reasons.push(`${svc.id}: service error: ${r.json.error.message ?? r.json.error.code ?? 'unknown'}`); continue; }
-    const features = r.json?.features;
-    if (!Array.isArray(features)) { reasons.push(`${svc.id}: malformed response`); continue; }
-    if (!features.length) { reasons.push(`${svc.id}: no parcel at this point`); continue; }
-    let feature = features[0];
-    if (features.length > 1) {
-      feature = features.find((ft) => { const g = ringsToGeoJSON(ft?.geometry?.rings ?? []); return g && pointInPolygon(point, g); });
-      if (!feature) { reasons.push(`${svc.id}: ${features.length} parcels returned but none contains the point`); continue; }
-    }
-    const a = feature.attributes ?? {};
-    const boundary = ringsToGeoJSON(feature.geometry?.rings ?? []);
-    return {
-      ok: true, service: svc, boundary,
-      apn: text(a[f.apn]) ?? (num(a[f.apn]) !== null ? String(a[f.apn]) : null),
-      address: f.address ? text(a[f.address]) : null,
-      assessor: {
-        useCode: f.useCode ? text(a[f.useCode]) : null, useType: f.useType ? text(a[f.useType]) : null,
-        useDescription: f.useDescription ? text(a[f.useDescription]) : null,
-        livingAreaSqft: f.livingAreaSqft ? pos(a[f.livingAreaSqft]) : null, units: f.units ? pos(a[f.units]) : null,
-        yearBuilt: f.yearBuilt ? pos(a[f.yearBuilt]) : null, bedrooms: f.bedrooms ? pos(a[f.bedrooms]) : null,
-        lotAreaSqft: f.lotAreaSqft ? pos(a[f.lotAreaSqft]) : null,
-      },
-      multipleCandidates: features.length > 1,
-      source: { name: svc.publisher, url: svc.url, license: svc.license }, retrievedAt: at,
+    const base = `${svc.url}?` + `geometry=${point.lng.toFixed(6)},${point.lat.toFixed(6)}&geometryType=esriGeometryPoint&inSR=4326&spatialRel=esriSpatialRelIntersects&outFields=${outFields.join(',')}&returnGeometry=true&outSR=4326&f=json`;
+    const result = (/** @type {any} */ feature, /** @type {any} */ extra) => {
+      const a = feature.attributes ?? {};
+      return {
+        ok: true, service: svc, boundary: ringsToGeoJSON(feature.geometry?.rings ?? []), apn: apnOf(a, f),
+        address: f.address ? text(a[f.address]) : null, assessor: assessorOf(a, f),
+        multipleCandidates: false, source: { name: svc.publisher, url: svc.url, license: svc.license }, retrievedAt: at, ...extra,
+      };
     };
+
+    // 1. Exact intersect (skipped when the owner already picked a parcel from the candidates).
+    if (!opts.parcelApn) {
+      const r = await fetchJson(base, deps);
+      if (!r.ok) { reasons.push(`${svc.id}: ${r.reason}`); continue; }
+      if (r.json?.error) { reasons.push(`${svc.id}: service error: ${r.json.error.message ?? r.json.error.code ?? 'unknown'}`); continue; }
+      const features = r.json?.features;
+      if (!Array.isArray(features)) { reasons.push(`${svc.id}: malformed response`); continue; }
+      if (features.length) {
+        let feature = features[0];
+        if (features.length > 1) {
+          feature = features.find((ft) => { const g = ringsToGeoJSON(ft?.geometry?.rings ?? []); return g && pointInPolygon(point, g); });
+          if (!feature) { reasons.push(`${svc.id}: ${features.length} parcels returned but none contains the point`); continue; }
+        }
+        return result(feature, { multipleCandidates: features.length > 1, matchedBy: 'containing-point', method: 'parcel containing the geocoded point' });
+      }
+      if (!opts.matchedAddress || !f.address) { reasons.push(`${svc.id}: no parcel at this point`); continue; }
+    }
+
+    // 2. Buffered query: a geocoded point usually lies in the street, not in the parcel.
+    const radius = svc.searchRadiusM ?? DEFAULT_SEARCH_RADIUS_M;
+    const b = await fetchJson(`${base}&distance=${radius}&units=esriSRUnit_Meter`, deps);
+    const pre = opts.parcelApn ? `${svc.id}: ` : `${svc.id}: no parcel at this point; `;
+    if (!b.ok) { reasons.push(`${pre}search within ${radius} m failed: ${b.reason}`); continue; }
+    if (b.json?.error) { reasons.push(`${pre}search within ${radius} m: service error: ${b.json.error.message ?? b.json.error.code ?? 'unknown'}`); continue; }
+    const near = b.json?.features;
+    if (!Array.isArray(near)) { reasons.push(`${pre}search within ${radius} m: malformed response`); continue; }
+    const rows = near.map((ft) => { const a = ft?.attributes ?? {}; return { ft, apn: apnOf(a, f), address: f.address ? text(a[f.address]) : null }; });
+    // addressed parcels first: a blank situs cannot be recognised by an owner; capped at 10, addresses only
+    const list = [...rows.filter((x) => x.address), ...rows.filter((x) => !x.address)].slice(0, 10).map((x) => ({ apn: x.apn, address: x.address }));
+
+    if (opts.parcelApn) {
+      const hit = rows.filter((x) => x.apn !== null && x.apn === String(opts.parcelApn));
+      if (hit.length !== 1) { reasons.push(`${pre}parcel ${opts.parcelApn} is not among the ${near.length} parcels within ${radius} m of the geocoded point`); pickList ??= list; continue; }
+      return result(hit[0].ft, { matchedBy: 'owner', searchRadiusM: radius, method: `parcel ${opts.parcelApn} chosen by the owner from the ${near.length} parcels within ${radius} m of the geocoded point` });
+    }
+    const hits = rows.filter((x) => x.address && situsMatchesAddress(opts.matchedAddress ?? '', x.address));
+    if (hits.length === 1) {
+      return result(hits[0].ft, { matchedBy: 'situs', searchRadiusM: radius, method: `matched by situs address within ${radius} m of the geocoded point`,
+        nearbyParcels: near.length });
+    }
+    pickList ??= hits.length > 1 ? hits.slice(0, 10).map((x) => ({ apn: x.apn, address: x.address })) : list;
+    reasons.push(!near.length ? `${pre}no parcel within ${radius} m either`
+      : hits.length ? `${pre}${hits.length} of ${near.length} parcels within ${radius} m match the address "${opts.matchedAddress}"; more than one, so none was chosen`
+        : `${pre}${near.length} parcels within ${radius} m of the geocoded point, but none matches the address "${opts.matchedAddress}"`);
   }
-  return { ok: false, reason: `parcel lookup failed: ${reasons.join('; ')}` };
+  return { ok: false, reason: `parcel lookup failed: ${reasons.join('; ')}`, ...(pickList?.length ? { candidates: pickList } : {}) };
 }
 
 /**
@@ -418,23 +572,30 @@ const ALL_KEYS = ['address', 'location', 'jurisdiction', 'parcel_id', 'parcel_bo
 
 /**
  * Address -> geocode -> parcel -> OSM -> profile. Partial failure is normal; each step is reported.
+ * `steps[0].matchedAddress` is what the geocoder actually found. If it differs from the typed house number, directional
+ * or street, the result is `{ok:false, reason:'address matched a different location', matchedAddress, needsConfirmation:true,
+ * profile}` (profile holds only the geocode attributes) unless `deps.confirmMatchedAddress` is true. If no parcel could be
+ * chosen by address, the result carries `candidates` ([{apn,address}]); call again with `deps.parcelApn` to use the one
+ * the owner picks (recorded as owner-confirmed).
  * @param {string} address
  * @param {Deps & {now:string}} deps
- * @returns {Promise<{ok:boolean, profile:PropertyProfile, steps:Array<{step:string, ok:boolean, reason?:string, source:string}>}>}
+ * @returns {Promise<{ok:boolean, profile:PropertyProfile, steps:Array<{step:string, ok:boolean, reason?:string, source:string, matchedAddress?:string, provider?:string, candidates?:Array<{apn:string|null,address:string|null}>}>,
+ *   reason?:string, matchedAddress?:string, needsConfirmation?:boolean, candidates?:Array<{apn:string|null,address:string|null}>}>}
  */
 export async function resolveAddress(address, deps) {
   const at = isoNow(deps?.now);
   let profile = createProfile();
-  /** @type {Array<{step:string, ok:boolean, reason?:string, source:string}>} */
+  /** @type {Array<{step:string, ok:boolean, reason?:string, source:string, matchedAddress?:string, provider?:string, candidates?:any[]}>} */
   const steps = [];
   const put = (/** @type {string} */ k, /** @type {any} */ v) => { profile = setAttribute(profile, k, v); };
   const none = (/** @type {string} */ k, /** @type {string} */ reason, /** @type {string} */ source = INTEL) => put(k, unavailable(reason, source));
-  const step = (/** @type {string} */ name, /** @type {{ok:boolean, reason?:string}} */ r, /** @type {string} */ source) =>
-    steps.push({ step: name, ok: r.ok, ...(r.ok ? {} : { reason: r.reason }), source });
+  const step = (/** @type {string} */ name, /** @type {{ok:boolean, reason?:string}} */ r, /** @type {string} */ source, /** @type {any} */ extra = {}) =>
+    steps.push({ step: name, ok: r.ok, ...(r.ok ? {} : { reason: r.reason }), source, ...extra });
 
   // 1. Geocode
   const g = await geocode(address, deps);
-  step('geocode', g, g.ok ? g.source.name : 'US Census Geocoder, then OpenStreetMap Nominatim');
+  step('geocode', g, g.ok ? g.source.name : (deps.geocoders ?? GEOCODERS_SERVER).map((x) => (x === 'census' ? 'US Census Geocoder' : 'OpenStreetMap Nominatim')).join(', then '),
+    g.ok ? { matchedAddress: g.matchedAddress, provider: g.provider } : {});
   /** @type {{lat:number,lng:number}|null} */
   let point = null;
   if (g.ok) {
@@ -444,6 +605,10 @@ export async function resolveAddress(address, deps) {
     put('location', sourced(point, { ...m, confidence: g.confidence, unit: 'degrees (WGS84)', method: 'geocoded from the typed address' }));
     if (g.jurisdiction.state) put('jurisdiction', sourced(g.jurisdiction, { ...m, confidence: Math.min(g.confidence, g.jurisdiction.countyFips ? CONFIDENCE.census : CONFIDENCE.nominatim) }));
     else none('jurisdiction', 'the geocoder returned no state', g.source.name);
+    if (g.streetMismatch && !deps.confirmMatchedAddress) {
+      // The geocoder found a different house number / directional / street: do not continue to a parcel for it.
+      return { ok: false, reason: 'address matched a different location', matchedAddress: g.matchedAddress, needsConfirmation: true, profile, steps };
+    }
   } else {
     for (const k of ['address', 'location', 'jurisdiction']) none(k, g.reason, 'geocoding');
   }
@@ -452,8 +617,8 @@ export async function resolveAddress(address, deps) {
   /** @type {any} */
   let parcel = null;
   if (point && g.ok && g.jurisdiction.state) {
-    const p = await parcelAt({ ...point, jurisdiction: g.jurisdiction }, deps);
-    step('parcel', p, p.ok ? p.service.publisher : 'parcel service registry');
+    const p = await parcelAt({ ...point, jurisdiction: g.jurisdiction }, deps, { matchedAddress: g.matchedAddress, ...(deps.parcelApn ? { parcelApn: String(deps.parcelApn) } : {}) });
+    step('parcel', p, p.ok ? p.service.publisher : 'parcel service registry', !p.ok && p.candidates ? { candidates: p.candidates } : {});
     if (p.ok) parcel = p;
     else for (const k of ['parcel_id', 'parcel_boundary', 'lot_area_sqft', 'property_type', 'use_type', 'year_built', 'bedrooms', 'living_area_sqft', 'units']) none(k, p.reason, 'parcel service registry');
   } else {
@@ -467,13 +632,18 @@ export async function resolveAddress(address, deps) {
     const base = { source: svc.publisher, sourceUrl: svc.url, license: svc.license, retrievedAt: parcel.retrievedAt };
     const meas = (/** @type {number} */ confidence, /** @type {any} */ extra = {}) => ({ tag: /** @type {const} */ ('measured'), ...base, confidence, ...extra });
     const multi = parcel.multipleCandidates ? 'The service returned several parcels; the one containing the point was used.' : undefined;
-    if (parcel.apn) put('parcel_id', sourced(parcel.apn, meas(CONFIDENCE.parcelId, { note: multi }))); else none('parcel_id', 'the service returned no parcel number', svc.publisher);
-    if (parcel.boundary) put('parcel_boundary', sourced(parcel.boundary, meas(CONFIDENCE.parcelId, { unit: 'GeoJSON (WGS84)' })));
+    const bySitus = parcel.matchedBy === 'situs', byOwner = parcel.matchedBy === 'owner';
+    // a parcel chosen by situs address (the geocoded point was in the street) is less certain than one containing the point
+    const idConf = bySitus ? CONFIDENCE.parcelBySitus : CONFIDENCE.parcelId;
+    const idExtra = bySitus ? { method: parcel.method, note: `The geocoded point is not inside any parcel; this parcel's situs address (${parcel.address}) matches the geocoded address.` } : { note: multi };
+    if (parcel.apn && byOwner) put('parcel_id', sourced(parcel.apn, { tag: 'owner-confirmed', source: 'Owner', confidence: 1, retrievedAt: at, method: parcel.method }));
+    else if (parcel.apn) put('parcel_id', sourced(parcel.apn, meas(idConf, idExtra))); else none('parcel_id', 'the service returned no parcel number', svc.publisher);
+    if (parcel.boundary) put('parcel_boundary', sourced(parcel.boundary, meas(byOwner ? CONFIDENCE.parcelId : idConf, { unit: 'GeoJSON (WGS84)', ...(bySitus ? { method: parcel.method } : {}) })));
     else none('parcel_boundary', 'the service returned no parcel geometry', svc.publisher);
     let lotPoly = null;
     if (parcel.boundary) {
       lotPoly = Math.round(polygonAreaSqft(parcel.boundary));
-      put('lot_area_sqft', sourced(lotPoly, meas(CONFIDENCE.polygonArea, { unit: 'sqft', method: 'WGS84 parcel polygon area, holes subtracted (core/geometry.js)', note: 'Measured from the published outline; can differ from the recorded lot size.' })));
+      put('lot_area_sqft', sourced(lotPoly, meas(bySitus ? Math.min(CONFIDENCE.polygonArea, idConf) : CONFIDENCE.polygonArea, { unit: 'sqft', method: 'WGS84 parcel polygon area, holes subtracted (core/geometry.js)', note: 'Measured from the published outline; can differ from the recorded lot size.' })));
     }
     if (a.lotAreaSqft) put('lot_area_sqft', sourced(a.lotAreaSqft, meas(CONFIDENCE.assessor, { unit: 'sqft', method: 'lot size reported by the service' })));
     if (lotPoly === null && !a.lotAreaSqft) none('lot_area_sqft', 'no parcel polygon and the service reports no lot size', svc.publisher);
@@ -492,7 +662,7 @@ export async function resolveAddress(address, deps) {
     }
     const field = (/** @type {string} */ key, /** @type {string|undefined} */ f, /** @type {number|null} */ v, /** @type {string|undefined} */ unit) => {
       if (!f) none(key, 'this parcel service does not publish the field', svc.publisher);
-      else if (v === null) none(key, 'the assessor field is empty or zero', svc.publisher);
+      else if (v === null) none(key, 'not recorded by the assessor', svc.publisher);
       else put(key, sourced(v, meas(CONFIDENCE.assessor, unit ? { unit } : {})));
     };
     field('year_built', svc.fields.yearBuilt, a.yearBuilt, undefined);
@@ -555,5 +725,6 @@ export async function resolveAddress(address, deps) {
   for (const [k, why] of UNAVAILABLE_ALWAYS) none(k, why);
   for (const k of ALL_KEYS) if (!profile.attributes[k]) none(k, 'not looked up');
 
-  return { ok: Boolean(g.ok && parcel), profile, steps };
+  const pStep = steps.find((x) => x.step === 'parcel');
+  return { ok: Boolean(g.ok && parcel), profile, steps, ...(pStep && !pStep.ok && pStep.candidates ? { candidates: pStep.candidates } : {}) };
 }

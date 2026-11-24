@@ -1,5 +1,5 @@
 {
- "_fixture_note": "synthetic, shaped like the real response; not a recorded response; coordinates are invented",
+ "_fixture_note": "synthetic, shaped like the recorded response; not a recorded response; coordinates are invented",
  "displayFieldName": "AIN",
  "fieldAliases": {},
  "geometryType": "esriGeometryPolygon",
@@ -17,7 +17,7 @@
     "UseDescription": "Single",
     "SQFTmain1": 1450,
     "Units1": 1,
-    "YearBuilt1": 1948,
+    "YearBuilt1": "1948",
     "Bedrooms1": 3
    },
    "geometry": {
@@ -56,7 +56,7 @@
     "UseDescription": "Single",
     "SQFTmain1": 1450,
     "Units1": 1,
-    "YearBuilt1": 1948,
+    "YearBuilt1": "1948",
     "Bedrooms1": 3
    },
    "geometry": {

@@ -1,6 +1,6 @@
 [
  {
-  "_fixture_note": "synthetic, shaped like the real response; not a recorded response; coordinates are invented",
+  "_fixture_note": "synthetic, shaped like the recorded response; not a recorded response; coordinates are invented",
   "place_id": 1,
   "osm_type": "way",
   "osm_id": 1,

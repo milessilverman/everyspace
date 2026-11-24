@@ -14,7 +14,7 @@ import { CHECKLISTS } from './categories.js';
 /**
  * @typedef {Object} JurisdictionRule
  * @property {string} id
- * @property {{state?:string, county?:string, city?:string}|null} jurisdiction  null = generic (applies anywhere)
+ * @property {{state?:string, county?:string, countyFips?:string, city?:string}|null} jurisdiction  null = generic (applies anywhere); county matches by FIPS when both sides have one, else by name ("County"/"Parish"/"Borough" suffix ignored); city is case- and whitespace-insensitive
  * @property {string[]} [categoryKeys]
  * @property {string[]} [groups]
  * @property {'allow'|'restrict'|'prohibit'|'require'} effect
@@ -27,7 +27,9 @@ import { CHECKLISTS } from './categories.js';
  * @property {string} sourceRef
  */
 
-const LA = { state: 'CA', county: 'Los Angeles', city: 'Los Angeles' };
+// City-scoped (city rules stay city-scoped); county name + FIPS only disambiguate the city. FIPS 06037 is the Census code
+// the geocoder returns for Los Angeles County (a geocoder identifier, not a legal rule).
+const LA = { state: 'CA', county: 'Los Angeles', countyFips: '06037', city: 'Los Angeles' };
 
 /** @type {JurisdictionRule[]} */
 const LOS_ANGELES = [
@@ -79,7 +81,7 @@ export const JURISDICTIONS = [...LOS_ANGELES, ...GENERIC];
 
 /**
  * Per-jurisdiction defaults. Nothing in the repo states a tax rate or permit cost, so every value is unavailable.
- * @type {Array<{id:string, jurisdiction:{state?:string,county?:string,city?:string}, taxRate:{status:'unavailable', value:null, reason:string}, permitCentsPerYear:{status:'unavailable', value:null, reason:string}}>}
+ * @type {Array<{id:string, jurisdiction:{state?:string,county?:string,countyFips?:string,city?:string}, taxRate:{status:'unavailable', value:null, reason:string}, permitCentsPerYear:{status:'unavailable', value:null, reason:string}}>}
  */
 export const JURISDICTION_DEFAULTS = [
   {

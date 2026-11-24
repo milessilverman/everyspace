@@ -19,15 +19,35 @@
 //      index.html business/other owner types. No numeric threshold exists in the index.html quiz logic for any
 //      category (the only candidate, SOLAR.minKw at index.html:8806, is a kW size and is NOT converted to sqft),
 //      so every area/count requirement is presence-only (> 0).
-//  - attributes outside the AttributeKey list in core/types.js (not in the list): attic_present,
-//      basement_present, shed_present, waterfront_access, equipment_owned. They are asked via missingEvidence
-//      until the owner supplies them.
+//  - attributes outside the AttributeKey list in core/types.js: the owner keys (see OWNER_ATTRIBUTE_KEYS in
+//      opportunities.js): attic_present, basement_present, shed_present, waterfront_access, equipment_owned and
+//      `<category>_available`. They are asked via missingEvidence until the owner supplies them.
+//
+// EVIDENCE POLICY (2026-11-24 fix): every category has `evidence.class`:
+//  - 'auto':  the automated profile can evidence the asset directly (real attribute: property_type + bedrooms/units,
+//             yard_area_sqft, pool_present, parking_spaces/driveway_area_sqft, garage_present, roof/footprint area, adu_present).
+//  - 'owner': cannot be seen from data; emitted only once the owner confirms (leaf rules carry `ownerOnly: true`, so
+//             only an 'owner-confirmed' attribute counts). `evidence.ownerKeys` lists the boolean owner attributes
+//             (`<category>_available`, or the older `*_present` / `waterfront_access` / `equipment_owned` keys);
+//             `evidence.question` is the plain-language question for the UI.
+//  - 'none':  the 'building' container, never an opportunity.
+//  `evidence.investment` (adu, ev_charging) is an optional idea for something that does not exist yet; it is emitted
+//  only when identifyOpportunities is called with includeInvestmentIdeas:true, basis construction, cost/feasibility unknown.
+//  Presence of a yard or lot is NOT evidence of a sport court, pasture, hives, kitchen, RV pad, film location etc.
+//  resourceUse (Everyspace modelling assumption): home_interior / yard (+pool) / parking / garage / roof, see opportunities.js.
 //
 // Conflicts are stored symmetrically here, and opportunities.js symmetrises again so a data entry added one-sided still works.
 
 /**
- * @typedef {{attr:string, equals?:any, in?:any[], notIn?:any[], min?:number, includes?:any}
+ * @typedef {{attr:string, equals?:any, in?:any[], notIn?:any[], min?:number, includes?:any, ownerOnly?:boolean}
  *   | {all:Rule[]} | {any:Rule[]} | {never:true}} Rule
+ * @typedef {Object} EvidencePolicy
+ * @property {'auto'|'owner'|'none'} class
+ * @property {string[]} [attrs]       auto: the attribute keys that can evidence it (documentation)
+ * @property {string[]} [ownerKeys]   owner: attribute keys the owner answers
+ * @property {string} [question]      owner: plain-language question for the UI
+ * @property {{requires:Rule, basis:import('../types.js').OpportunityBasis}} [investment]  idea for something not built yet
+ *
  * @typedef {Object} CategoryDef
  * @property {string} key
  * @property {string} label
@@ -39,6 +59,7 @@
  * @property {import('../types.js').OpportunityBasis} basisDefault
  * @property {Array<{when:Rule, basis:import('../types.js').OpportunityBasis}>} [basisOverrides]
  * @property {Rule} requires
+ * @property {EvidencePolicy} evidence
  * @property {string[]} conflictsWith
  * @property {Record<string, number>} resourceUse
  * @property {string[]} [terms]    original index.html terms
@@ -58,13 +79,14 @@ export const CATEGORIES = [
     privacyImpact: 3,
     strangersInHome: true,
     basisDefault: "permit",
-    conflictsWith: ["apartment_unit","backyard","film_location","kitchen","pool","private_room","workspace","yard_campsite"],
-    resourceUse: {},
+    conflictsWith: ["apartment_unit","backyard","film_location","garage_storage","kitchen","pool","private_room","workspace","yard_campsite"],
+    resourceUse: {"home_interior":1},
     terms: ["daily","weekly","monthly","lease"],
     measure: "whole",
     sourceRef: "index.html:5153",
     gatingRef: "index.html:5317-5318 (HOME_ONLY/BUSINESS_ONLY), index.html:17656-17664 (PROP_HAVE/allowedFor)",
     requires: {"all":[{"attr":"property_type","in":["single_family","condo","multi_family","commercial"]}]},
+    evidence: {"class":"auto","attrs":["property_type"]},
   },
   {
     key: "apartment_unit",
@@ -76,12 +98,14 @@ export const CATEGORIES = [
     strangersInHome: true,
     basisDefault: "permit",
     conflictsWith: ["entire_home"],
-    resourceUse: {},
+    resourceUse: {"home_interior":1},
     terms: ["daily","monthly","lease"],
     measure: "whole",
     sourceRef: "index.html:5156",
     gatingRef: "index.html:5317-5318 (HOME_ONLY/BUSINESS_ONLY), index.html:17656-17664 (PROP_HAVE/allowedFor)",
-    requires: {"all":[{"attr":"property_type","in":["single_family","multi_family","commercial"]},{"attr":"units"}]},
+    // A separate unit must exist: a one-unit single-family home is `entire_home`, not an apartment (definition, not a market threshold).
+    requires: {"all":[{"attr":"property_type","in":["single_family","multi_family","commercial"]},{"attr":"units","min":2}]},
+    evidence: {"class":"auto","attrs":["property_type","units"]},
   },
   {
     key: "adu",
@@ -91,15 +115,15 @@ export const CATEGORIES = [
     effort: 4,
     privacyImpact: 2,
     strangersInHome: false,
-    basisDefault: "construction",
+    basisDefault: "permit",
     conflictsWith: [],
     resourceUse: {},
     terms: ["daily","weekly","monthly","lease"],
     measure: "whole",
     sourceRef: "index.html:5158",
     gatingRef: "index.html:5317-5318 (HOME_ONLY/BUSINESS_ONLY), index.html:17656-17664 (PROP_HAVE/allowedFor)",
-    requires: {"all":[{"attr":"property_type","in":["single_family","multi_family"]},{"any":[{"attr":"adu_present","equals":true},{"attr":"lot_area_sqft"}]}]},
-    basisOverrides: [{"when":{"attr":"adu_present","equals":true},"basis":"permit"}],
+    requires: {"all":[{"attr":"property_type","in":["single_family","multi_family"]},{"attr":"adu_present","equals":true}]},
+    evidence: {"class":"auto","attrs":["adu_present"],"investment":{"requires":{"all":[{"attr":"property_type","in":["single_family","multi_family"]},{"attr":"lot_area_sqft"}]},"basis":"construction"}},
   },
   {
     key: "private_room",
@@ -111,12 +135,13 @@ export const CATEGORIES = [
     strangersInHome: true,
     basisDefault: "setup",
     conflictsWith: ["entire_home"],
-    resourceUse: {"bathroom":1},
+    resourceUse: {"home_interior":1},
     terms: ["daily","weekly","monthly","lease"],
     measure: "whole",
     sourceRef: "index.html:5160",
     gatingRef: "index.html:5317-5318 (HOME_ONLY/BUSINESS_ONLY), index.html:17656-17664 (PROP_HAVE/allowedFor)",
     requires: {"all":[{"attr":"property_type","in":["single_family","condo","multi_family"]},{"attr":"bedrooms"}]},
+    evidence: {"class":"auto","attrs":["property_type","bedrooms"]},
   },
   {
     key: "backyard",
@@ -128,12 +153,13 @@ export const CATEGORIES = [
     strangersInHome: false,
     basisDefault: "setup",
     conflictsWith: ["entire_home","garden_plot","sport_court","yard_campsite"],
-    resourceUse: {"yard":1,"bathroom":1},
+    resourceUse: {"yard":1},
     terms: ["hourly","daily"],
     measure: "whole",
     sourceRef: "index.html:5164",
     gatingRef: "index.html:5317-5318 (HOME_ONLY/BUSINESS_ONLY), index.html:17656-17664 (PROP_HAVE/allowedFor)",
     requires: {"all":[{"attr":"property_type","in":["single_family","multi_family"]},{"attr":"yard_area_sqft"}]},
+    evidence: {"class":"auto","attrs":["yard_area_sqft"]},
   },
   {
     key: "yard_campsite",
@@ -145,12 +171,13 @@ export const CATEGORIES = [
     strangersInHome: false,
     basisDefault: "setup",
     conflictsWith: ["backyard","beehive_site","entire_home","garden_plot","pasture","pool","sport_court"],
-    resourceUse: {"yard":1,"bathroom":1},
+    resourceUse: {"yard":1},
     terms: ["daily","weekly"],
     measure: "site",
     sourceRef: "index.html:5166",
     gatingRef: "index.html:5317-5318 (HOME_ONLY/BUSINESS_ONLY), index.html:17656-17664 (PROP_HAVE/allowedFor)",
-    requires: {"all":[{"attr":"property_type","in":["single_family","multi_family","land","commercial"]},{"any":[{"attr":"yard_area_sqft"},{"attr":"lot_area_sqft"}]}]},
+    requires: {"all":[{"attr":"property_type","in":["single_family","multi_family","land","commercial"]},{"attr":"yard_campsite_available","equals":true,"ownerOnly":true}]},
+    evidence: {"class":"owner","ownerKeys":["yard_campsite_available"],"question":"Would you let guests camp in your yard?"},
   },
   {
     key: "pool",
@@ -162,12 +189,13 @@ export const CATEGORIES = [
     strangersInHome: false,
     basisDefault: "setup",
     conflictsWith: ["entire_home","yard_campsite"],
-    resourceUse: {"pool":1},
+    resourceUse: {"yard":1,"pool":1},
     terms: ["hourly"],
     measure: "whole",
     sourceRef: "index.html:5168",
     gatingRef: "index.html:5317-5318 (HOME_ONLY/BUSINESS_ONLY), index.html:17656-17664 (PROP_HAVE/allowedFor)",
     requires: {"all":[{"attr":"property_type","in":["single_family","multi_family","commercial"]},{"attr":"pool_present","equals":true}]},
+    evidence: {"class":"auto","attrs":["pool_present"]},
   },
   {
     key: "workspace",
@@ -178,13 +206,14 @@ export const CATEGORIES = [
     privacyImpact: 2,
     strangersInHome: false,
     basisDefault: "existing",
-    conflictsWith: ["entire_home","garage_storage"],
-    resourceUse: {"garage":1},
+    conflictsWith: ["entire_home"],
+    resourceUse: {"home_interior":1},
     terms: ["hourly","daily","monthly"],
     measure: "whole",
     sourceRef: "index.html:5170",
     gatingRef: "index.html:5317-5318 (HOME_ONLY/BUSINESS_ONLY), index.html:17656-17664 (PROP_HAVE/allowedFor)",
-    requires: {"all":[{"attr":"property_type","in":["single_family","condo","multi_family","commercial"]},{"any":[{"attr":"garage_present","equals":true},{"attr":"adu_present","equals":true}]}]},
+    requires: {"all":[{"attr":"property_type","in":["single_family","condo","multi_family","commercial"]},{"attr":"workspace_available","equals":true,"ownerOnly":true}]},
+    evidence: {"class":"owner","ownerKeys":["workspace_available"],"question":"Do you have a room, garage or studio you could rent out as a workspace?"},
   },
   {
     key: "film_location",
@@ -196,12 +225,13 @@ export const CATEGORIES = [
     strangersInHome: false,
     basisDefault: "setup",
     conflictsWith: ["entire_home"],
-    resourceUse: {},
+    resourceUse: {"home_interior":1},
     terms: ["hourly","daily"],
     measure: "whole",
     sourceRef: "index.html:5172",
     gatingRef: "index.html:5317-5318 (HOME_ONLY/BUSINESS_ONLY), index.html:17656-17664 (PROP_HAVE/allowedFor)",
-    requires: {"all":[{"attr":"property_type","in":["single_family","multi_family","commercial"]},{"attr":"living_area_sqft"}]},
+    requires: {"all":[{"attr":"property_type","in":["single_family","multi_family","commercial"]},{"attr":"film_location_available","equals":true,"ownerOnly":true}]},
+    evidence: {"class":"owner","ownerKeys":["film_location_available"],"question":"Would you let film or photo crews shoot at the property?"},
   },
   {
     key: "kitchen",
@@ -213,12 +243,13 @@ export const CATEGORIES = [
     strangersInHome: true,
     basisDefault: "setup",
     conflictsWith: ["entire_home"],
-    resourceUse: {},
+    resourceUse: {"home_interior":1},
     terms: ["hourly","daily","monthly"],
     measure: "whole",
     sourceRef: "index.html:5174",
     gatingRef: "index.html:5317-5318 (HOME_ONLY/BUSINESS_ONLY), index.html:17656-17664 (PROP_HAVE/allowedFor)",
-    requires: {"all":[{"attr":"property_type","in":["single_family","condo","multi_family","commercial"]},{"attr":"living_area_sqft"}]},
+    requires: {"all":[{"attr":"property_type","in":["single_family","condo","multi_family","commercial"]},{"attr":"kitchen_available","equals":true,"ownerOnly":true}]},
+    evidence: {"class":"owner","ownerKeys":["kitchen_available"],"question":"Do you have a kitchen suitable for rent (commercial or shared-use) and would you rent it out?"},
   },
   {
     key: "sport_court",
@@ -235,7 +266,8 @@ export const CATEGORIES = [
     measure: "whole",
     sourceRef: "index.html:5176",
     gatingRef: "index.html:5317-5318 (HOME_ONLY/BUSINESS_ONLY), index.html:17656-17664 (PROP_HAVE/allowedFor)",
-    requires: {"all":[{"attr":"property_type","in":["single_family","multi_family","land","commercial"]},{"any":[{"attr":"yard_area_sqft"},{"attr":"lot_area_sqft"}]}]},
+    requires: {"all":[{"attr":"property_type","in":["single_family","multi_family","land","commercial"]},{"attr":"sport_court_available","equals":true,"ownerOnly":true}]},
+    evidence: {"class":"owner","ownerKeys":["sport_court_available"],"question":"Do you have a sport court (tennis, basketball, pickleball...) on the property?"},
   },
   {
     key: "meeting_room",
@@ -247,12 +279,13 @@ export const CATEGORIES = [
     strangersInHome: false,
     basisDefault: "existing",
     conflictsWith: [],
-    resourceUse: {"bathroom":1},
+    resourceUse: {"home_interior":1},
     terms: ["hourly","daily"],
     measure: "whole",
     sourceRef: "index.html:5178",
     gatingRef: "index.html:5317-5318 (HOME_ONLY/BUSINESS_ONLY), index.html:17656-17664 (PROP_HAVE/allowedFor)",
-    requires: {"all":[{"attr":"property_type","in":["multi_family","commercial"]},{"attr":"building_footprint_sqft"}]},
+    requires: {"all":[{"attr":"property_type","in":["multi_family","commercial"]},{"attr":"meeting_room_available","equals":true,"ownerOnly":true}]},
+    evidence: {"class":"owner","ownerKeys":["meeting_room_available"],"question":"Do you have a meeting or event room you could rent by the hour?"},
   },
   {
     key: "parking_spot",
@@ -269,7 +302,8 @@ export const CATEGORIES = [
     measure: "spot",
     sourceRef: "index.html:5182",
     gatingRef: "index.html:5317-5318 (HOME_ONLY/BUSINESS_ONLY), index.html:17656-17664 (PROP_HAVE/allowedFor)",
-    requires: {"all":[{"attr":"property_type","in":["single_family","condo","multi_family","land","commercial"]},{"any":[{"attr":"parking_spaces"},{"attr":"driveway_area_sqft"},{"attr":"garage_present","equals":true},{"all":[{"attr":"property_type","in":["land"]},{"attr":"lot_area_sqft"}]}]}]},
+    requires: {"all":[{"attr":"property_type","in":["single_family","condo","multi_family","land","commercial"]},{"any":[{"attr":"parking_spaces"},{"attr":"driveway_area_sqft"}]}]},
+    evidence: {"class":"auto","attrs":["parking_spaces","driveway_area_sqft"]},
   },
   {
     key: "rv_parking",
@@ -286,7 +320,8 @@ export const CATEGORIES = [
     measure: "spot",
     sourceRef: "index.html:5184",
     gatingRef: "index.html:5317-5318 (HOME_ONLY/BUSINESS_ONLY), index.html:17656-17664 (PROP_HAVE/allowedFor)",
-    requires: {"all":[{"attr":"property_type","in":["single_family","multi_family","land","commercial"]},{"any":[{"attr":"driveway_area_sqft"},{"attr":"yard_area_sqft"},{"attr":"lot_area_sqft"}]}]},
+    requires: {"all":[{"attr":"property_type","in":["single_family","multi_family","land","commercial"]},{"attr":"rv_parking_available","equals":true,"ownerOnly":true}]},
+    evidence: {"class":"owner","ownerKeys":["rv_parking_available"],"question":"Is there a pad or space where an RV or trailer could park?"},
   },
   {
     key: "ev_charging",
@@ -303,7 +338,8 @@ export const CATEGORIES = [
     measure: "charger",
     sourceRef: "index.html:5186",
     gatingRef: "index.html:5317-5318 (HOME_ONLY/BUSINESS_ONLY), index.html:17656-17664 (PROP_HAVE/allowedFor)",
-    requires: {"all":[{"attr":"property_type","in":["single_family","condo","multi_family","commercial"]},{"any":[{"attr":"garage_present","equals":true},{"attr":"parking_spaces"},{"attr":"driveway_area_sqft"}]}]},
+    requires: {"all":[{"attr":"property_type","in":["single_family","condo","multi_family","commercial"]},{"attr":"ev_charging_available","equals":true,"ownerOnly":true}]},
+    evidence: {"class":"owner","ownerKeys":["ev_charging_available"],"question":"Do you have an EV charger installed that you would share?","investment":{"requires":{"all":[{"attr":"property_type","in":["single_family","condo","multi_family","commercial"]},{"any":[{"attr":"parking_spaces"},{"attr":"driveway_area_sqft"},{"attr":"garage_present","equals":true}]}]},"basis":"construction"}},
   },
   {
     key: "dock_slip",
@@ -320,7 +356,8 @@ export const CATEGORIES = [
     measure: "slip",
     sourceRef: "index.html:5188",
     gatingRef: "index.html:5317-5318 (HOME_ONLY/BUSINESS_ONLY), index.html:17656-17664 (PROP_HAVE/allowedFor)",
-    requires: {"all":[{"attr":"property_type","in":["single_family","condo","multi_family","land","commercial"]},{"attr":"waterfront_access","equals":true}]},
+    requires: {"all":[{"attr":"property_type","in":["single_family","condo","multi_family","land","commercial"]},{"attr":"waterfront_access","equals":true,"ownerOnly":true}]},
+    evidence: {"class":"owner","ownerKeys":["waterfront_access"],"question":"Do you have water access, such as a dock or boat slip?"},
   },
   {
     key: "lot_parking",
@@ -337,7 +374,8 @@ export const CATEGORIES = [
     measure: "spot",
     sourceRef: "index.html:5190",
     gatingRef: "index.html:5317-5318 (HOME_ONLY/BUSINESS_ONLY), index.html:17656-17664 (PROP_HAVE/allowedFor)",
-    requires: {"all":[{"attr":"property_type","in":["multi_family","commercial"]},{"attr":"parking_spaces"}]},
+    requires: {"all":[{"attr":"property_type","in":["multi_family","commercial"]},{"attr":"lot_parking_available","equals":true,"ownerOnly":true}]},
+    evidence: {"class":"owner","ownerKeys":["lot_parking_available"],"question":"Do you have a parking lot with spaces you could rent out?"},
   },
   {
     key: "garage_storage",
@@ -348,13 +386,14 @@ export const CATEGORIES = [
     privacyImpact: 1,
     strangersInHome: false,
     basisDefault: "existing",
-    conflictsWith: ["workspace"],
+    conflictsWith: ["entire_home"],
     resourceUse: {"garage":1},
     terms: ["weekly","monthly","lease"],
     measure: "sqft",
     sourceRef: "index.html:5194",
     gatingRef: "index.html:5317-5318 (HOME_ONLY/BUSINESS_ONLY), index.html:17656-17664 (PROP_HAVE/allowedFor)",
     requires: {"all":[{"attr":"property_type","in":["single_family","condo","multi_family"]},{"attr":"garage_present","equals":true}]},
+    evidence: {"class":"auto","attrs":["garage_present"]},
   },
   {
     key: "attic_storage",
@@ -371,7 +410,8 @@ export const CATEGORIES = [
     measure: "sqft",
     sourceRef: "index.html:5196",
     gatingRef: "index.html:5317-5318 (HOME_ONLY/BUSINESS_ONLY), index.html:17656-17664 (PROP_HAVE/allowedFor)",
-    requires: {"all":[{"attr":"property_type","in":["single_family","multi_family"]},{"attr":"attic_present","equals":true}]},
+    requires: {"all":[{"attr":"property_type","in":["single_family","multi_family"]},{"attr":"attic_present","equals":true,"ownerOnly":true}]},
+    evidence: {"class":"owner","ownerKeys":["attic_present"],"question":"Do you have an attic you could store things in?"},
   },
   {
     key: "basement_storage",
@@ -388,7 +428,8 @@ export const CATEGORIES = [
     measure: "sqft",
     sourceRef: "index.html:5198",
     gatingRef: "index.html:5317-5318 (HOME_ONLY/BUSINESS_ONLY), index.html:17656-17664 (PROP_HAVE/allowedFor)",
-    requires: {"all":[{"attr":"property_type","in":["single_family","condo","multi_family","commercial"]},{"any":[{"attr":"basement_present","equals":true},{"attr":"shed_present","equals":true}]}]},
+    requires: {"all":[{"attr":"property_type","in":["single_family","condo","multi_family","commercial"]},{"any":[{"attr":"basement_present","equals":true,"ownerOnly":true},{"attr":"shed_present","equals":true,"ownerOnly":true}]}]},
+    evidence: {"class":"owner","ownerKeys":["basement_present","shed_present"],"question":"Do you have a basement or shed you could rent for storage?"},
   },
   {
     key: "warehouse_storage",
@@ -405,7 +446,8 @@ export const CATEGORIES = [
     measure: "sqft",
     sourceRef: "index.html:5200",
     gatingRef: "index.html:5317-5318 (HOME_ONLY/BUSINESS_ONLY), index.html:17656-17664 (PROP_HAVE/allowedFor)",
-    requires: {"all":[{"attr":"property_type","in":["multi_family","commercial"]},{"attr":"building_footprint_sqft"}]},
+    requires: {"all":[{"attr":"property_type","in":["multi_family","commercial"]},{"attr":"warehouse_storage_available","equals":true,"ownerOnly":true}]},
+    evidence: {"class":"owner","ownerKeys":["warehouse_storage_available"],"question":"Do you have warehouse or large indoor space you could rent for storage?"},
   },
   {
     key: "garden_plot",
@@ -422,7 +464,8 @@ export const CATEGORIES = [
     measure: "sqft",
     sourceRef: "index.html:5204",
     gatingRef: "index.html:5317-5318 (HOME_ONLY/BUSINESS_ONLY), index.html:17656-17664 (PROP_HAVE/allowedFor)",
-    requires: {"all":[{"attr":"property_type","in":["single_family","multi_family","land","commercial"]},{"any":[{"attr":"yard_area_sqft"},{"attr":"lot_area_sqft"}]}]},
+    requires: {"all":[{"attr":"property_type","in":["single_family","multi_family","land","commercial"]},{"attr":"yard_area_sqft"}]},
+    evidence: {"class":"auto","attrs":["yard_area_sqft"]},
   },
   {
     key: "beehive_site",
@@ -439,7 +482,8 @@ export const CATEGORIES = [
     measure: "site",
     sourceRef: "index.html:5206",
     gatingRef: "index.html:5317-5318 (HOME_ONLY/BUSINESS_ONLY), index.html:17656-17664 (PROP_HAVE/allowedFor)",
-    requires: {"all":[{"attr":"property_type","in":["single_family","multi_family","commercial"]},{"any":[{"attr":"yard_area_sqft"},{"attr":"lot_area_sqft"}]}]},
+    requires: {"all":[{"attr":"property_type","in":["single_family","multi_family","commercial"]},{"attr":"beehive_site_available","equals":true,"ownerOnly":true}]},
+    evidence: {"class":"owner","ownerKeys":["beehive_site_available"],"question":"Would you allow a beekeeper to place hives on the property?"},
   },
   {
     key: "pasture",
@@ -456,7 +500,8 @@ export const CATEGORIES = [
     measure: "acre",
     sourceRef: "index.html:5208",
     gatingRef: "index.html:5317-5318 (HOME_ONLY/BUSINESS_ONLY), index.html:17656-17664 (PROP_HAVE/allowedFor)",
-    requires: {"all":[{"attr":"property_type","in":["single_family","multi_family","land","commercial"]},{"attr":"lot_area_sqft"}]},
+    requires: {"all":[{"attr":"property_type","in":["single_family","multi_family","land","commercial"]},{"attr":"pasture_available","equals":true,"ownerOnly":true}]},
+    evidence: {"class":"owner","ownerKeys":["pasture_available"],"question":"Do you have grazing land or pasture you could rent out?"},
   },
   {
     key: "rooftop_solar",
@@ -473,7 +518,8 @@ export const CATEGORIES = [
     measure: "sqft",
     sourceRef: "index.html:5212",
     gatingRef: "index.html:5317-5318 (HOME_ONLY/BUSINESS_ONLY), index.html:17656-17664 (PROP_HAVE/allowedFor)",
-    requires: {"all":[{"attr":"property_type","in":["single_family","multi_family","commercial"]},{"attr":"roof_area_sqft"}]},
+    requires: {"all":[{"attr":"property_type","in":["single_family","multi_family","commercial"]},{"any":[{"attr":"roof_area_sqft"},{"attr":"building_footprint_sqft"}]}]},
+    evidence: {"class":"auto","attrs":["building_footprint_sqft","roof_area_sqft"]},
   },
   {
     key: "battery_site",
@@ -490,7 +536,8 @@ export const CATEGORIES = [
     measure: "site",
     sourceRef: "index.html:5214",
     gatingRef: "index.html:5317-5318 (HOME_ONLY/BUSINESS_ONLY), index.html:17656-17664 (PROP_HAVE/allowedFor)",
-    requires: {"all":[{"attr":"property_type","in":["single_family","multi_family","commercial"]},{"attr":"building_footprint_sqft"}]},
+    requires: {"all":[{"attr":"property_type","in":["single_family","multi_family","commercial"]},{"attr":"battery_site_available","equals":true,"ownerOnly":true}]},
+    evidence: {"class":"owner","ownerKeys":["battery_site_available"],"question":"Would you host an energy-storage battery on the property?"},
   },
   {
     key: "charger_site",
@@ -507,7 +554,8 @@ export const CATEGORIES = [
     measure: "site",
     sourceRef: "index.html:5216",
     gatingRef: "index.html:5317-5318 (HOME_ONLY/BUSINESS_ONLY), index.html:17656-17664 (PROP_HAVE/allowedFor)",
-    requires: {"all":[{"attr":"property_type","in":["multi_family","commercial"]},{"attr":"parking_spaces"}]},
+    requires: {"all":[{"attr":"property_type","in":["multi_family","commercial"]},{"attr":"charger_site_available","equals":true,"ownerOnly":true}]},
+    evidence: {"class":"owner","ownerKeys":["charger_site_available"],"question":"Would you host public or shared EV chargers on the property?"},
   },
   {
     key: "telecom_site",
@@ -524,7 +572,8 @@ export const CATEGORIES = [
     measure: "site",
     sourceRef: "index.html:5218",
     gatingRef: "index.html:5317-5318 (HOME_ONLY/BUSINESS_ONLY), index.html:17656-17664 (PROP_HAVE/allowedFor)",
-    requires: {"all":[{"attr":"property_type","in":["single_family","multi_family","commercial"]},{"attr":"roof_area_sqft"}]},
+    requires: {"all":[{"attr":"property_type","in":["single_family","multi_family","commercial"]},{"attr":"telecom_site_available","equals":true,"ownerOnly":true}]},
+    evidence: {"class":"owner","ownerKeys":["telecom_site_available"],"question":"Would you lease roof or tower space to a telecom provider?"},
   },
   {
     key: "fleet_parking",
@@ -541,7 +590,8 @@ export const CATEGORIES = [
     measure: "spot",
     sourceRef: "index.html:5222",
     gatingRef: "index.html:5317-5318 (HOME_ONLY/BUSINESS_ONLY), index.html:17656-17664 (PROP_HAVE/allowedFor)",
-    requires: {"all":[{"attr":"property_type","in":["multi_family","commercial"]},{"any":[{"attr":"parking_spaces"},{"attr":"lot_area_sqft"}]}]},
+    requires: {"all":[{"attr":"property_type","in":["multi_family","commercial"]},{"attr":"fleet_parking_available","equals":true,"ownerOnly":true}]},
+    evidence: {"class":"owner","ownerKeys":["fleet_parking_available"],"question":"Could you rent parking space to a vehicle fleet (vans, trucks)?"},
   },
   {
     key: "signage",
@@ -558,7 +608,8 @@ export const CATEGORIES = [
     measure: "site",
     sourceRef: "index.html:5224",
     gatingRef: "index.html:5317-5318 (HOME_ONLY/BUSINESS_ONLY), index.html:17656-17664 (PROP_HAVE/allowedFor)",
-    requires: {"all":[{"attr":"property_type","in":["multi_family","commercial"]},{"attr":"lot_area_sqft"}]},
+    requires: {"all":[{"attr":"property_type","in":["multi_family","commercial"]},{"attr":"signage_available","equals":true,"ownerOnly":true}]},
+    evidence: {"class":"owner","ownerKeys":["signage_available"],"question":"Would you lease space on the property for signage or billboards?"},
   },
   {
     key: "parcel_locker",
@@ -575,7 +626,8 @@ export const CATEGORIES = [
     measure: "site",
     sourceRef: "index.html:5226",
     gatingRef: "index.html:5317-5318 (HOME_ONLY/BUSINESS_ONLY), index.html:17656-17664 (PROP_HAVE/allowedFor)",
-    requires: {"all":[{"attr":"property_type","in":["multi_family","commercial"]},{"attr":"building_footprint_sqft"}]},
+    requires: {"all":[{"attr":"property_type","in":["multi_family","commercial"]},{"attr":"parcel_locker_available","equals":true,"ownerOnly":true}]},
+    evidence: {"class":"owner","ownerKeys":["parcel_locker_available"],"question":"Would you host a parcel locker on the property?"},
   },
   {
     key: "atv",
@@ -592,7 +644,8 @@ export const CATEGORIES = [
     measure: "unit",
     sourceRef: "index.html:5230",
     gatingRef: "index.html:5317-5318 (HOME_ONLY/BUSINESS_ONLY), index.html:17656-17664 (PROP_HAVE/allowedFor)",
-    requires: {"all":[{"attr":"property_type","in":["single_family","multi_family","commercial"]},{"attr":"equipment_owned","includes":"atv"}]},
+    requires: {"all":[{"attr":"property_type","in":["single_family","multi_family","commercial"]},{"attr":"equipment_owned","includes":"atv","ownerOnly":true}]},
+    evidence: {"class":"owner","ownerKeys":["equipment_owned"],"question":"Do you own a ATV you could rent out?"},
   },
   {
     key: "snowmobile",
@@ -609,7 +662,8 @@ export const CATEGORIES = [
     measure: "unit",
     sourceRef: "index.html:5233",
     gatingRef: "index.html:5317-5318 (HOME_ONLY/BUSINESS_ONLY), index.html:17656-17664 (PROP_HAVE/allowedFor)",
-    requires: {"all":[{"attr":"property_type","in":["single_family","multi_family","commercial"]},{"attr":"equipment_owned","includes":"snowmobile"}]},
+    requires: {"all":[{"attr":"property_type","in":["single_family","multi_family","commercial"]},{"attr":"equipment_owned","includes":"snowmobile","ownerOnly":true}]},
+    evidence: {"class":"owner","ownerKeys":["equipment_owned"],"question":"Do you own a snowmobile you could rent out?"},
   },
   {
     key: "kayak",
@@ -626,7 +680,8 @@ export const CATEGORIES = [
     measure: "unit",
     sourceRef: "index.html:5236",
     gatingRef: "index.html:5317-5318 (HOME_ONLY/BUSINESS_ONLY), index.html:17656-17664 (PROP_HAVE/allowedFor)",
-    requires: {"all":[{"attr":"property_type","in":["single_family","multi_family","commercial"]},{"attr":"equipment_owned","includes":"kayak"}]},
+    requires: {"all":[{"attr":"property_type","in":["single_family","multi_family","commercial"]},{"attr":"equipment_owned","includes":"kayak","ownerOnly":true}]},
+    evidence: {"class":"owner","ownerKeys":["equipment_owned"],"question":"Do you own a kayak you could rent out?"},
   },
   {
     key: "boat",
@@ -643,7 +698,8 @@ export const CATEGORIES = [
     measure: "unit",
     sourceRef: "index.html:5238",
     gatingRef: "index.html:5317-5318 (HOME_ONLY/BUSINESS_ONLY), index.html:17656-17664 (PROP_HAVE/allowedFor)",
-    requires: {"all":[{"attr":"property_type","in":["single_family","multi_family","commercial"]},{"attr":"equipment_owned","includes":"boat"}]},
+    requires: {"all":[{"attr":"property_type","in":["single_family","multi_family","commercial"]},{"attr":"equipment_owned","includes":"boat","ownerOnly":true}]},
+    evidence: {"class":"owner","ownerKeys":["equipment_owned"],"question":"Do you own a boat you could rent out?"},
   },
   {
     key: "jet_ski",
@@ -660,7 +716,8 @@ export const CATEGORIES = [
     measure: "unit",
     sourceRef: "index.html:5241",
     gatingRef: "index.html:5317-5318 (HOME_ONLY/BUSINESS_ONLY), index.html:17656-17664 (PROP_HAVE/allowedFor)",
-    requires: {"all":[{"attr":"property_type","in":["single_family","multi_family","commercial"]},{"attr":"equipment_owned","includes":"jet_ski"}]},
+    requires: {"all":[{"attr":"property_type","in":["single_family","multi_family","commercial"]},{"attr":"equipment_owned","includes":"jet_ski","ownerOnly":true}]},
+    evidence: {"class":"owner","ownerKeys":["equipment_owned"],"question":"Do you own a jet ski you could rent out?"},
   },
   {
     key: "ebike",
@@ -677,7 +734,8 @@ export const CATEGORIES = [
     measure: "unit",
     sourceRef: "index.html:5244",
     gatingRef: "index.html:5317-5318 (HOME_ONLY/BUSINESS_ONLY), index.html:17656-17664 (PROP_HAVE/allowedFor)",
-    requires: {"all":[{"attr":"property_type","in":["single_family","multi_family","commercial"]},{"attr":"equipment_owned","includes":"ebike"}]},
+    requires: {"all":[{"attr":"property_type","in":["single_family","multi_family","commercial"]},{"attr":"equipment_owned","includes":"ebike","ownerOnly":true}]},
+    evidence: {"class":"owner","ownerKeys":["equipment_owned"],"question":"Do you own a e-bike you could rent out?"},
   },
   {
     key: "camper",
@@ -694,7 +752,8 @@ export const CATEGORIES = [
     measure: "unit",
     sourceRef: "index.html:5246",
     gatingRef: "index.html:5317-5318 (HOME_ONLY/BUSINESS_ONLY), index.html:17656-17664 (PROP_HAVE/allowedFor)",
-    requires: {"all":[{"attr":"property_type","in":["single_family","multi_family","commercial"]},{"attr":"equipment_owned","includes":"camper"}]},
+    requires: {"all":[{"attr":"property_type","in":["single_family","multi_family","commercial"]},{"attr":"equipment_owned","includes":"camper","ownerOnly":true}]},
+    evidence: {"class":"owner","ownerKeys":["equipment_owned"],"question":"Do you own a camper you could rent out?"},
   },
   {
     key: "building",
@@ -712,6 +771,7 @@ export const CATEGORIES = [
     sourceRef: "index.html:5250",
     gatingRef: "index.html:5317-5318 (HOME_ONLY/BUSINESS_ONLY), index.html:17656-17664 (PROP_HAVE/allowedFor)",
     requires: {"never":true},
+    evidence: {"class":"none"},
   },
 ];
 
