@@ -1,0 +1,57 @@
+{
+ "_fixture_note": "synthetic, shaped like the real response; not a recorded response; coordinates are invented",
+ "result": {
+  "input": {
+   "address": {
+    "address": "redacted"
+   },
+   "benchmark": {
+    "benchmarkName": "Public_AR_Current"
+   }
+  },
+  "addressMatches": [
+   {
+    "matchedAddress": "99999 VENICE BLVD, CULVER CITY, CA, 90230",
+    "coordinates": {
+     "x": -118.4199946,
+     "y": 34.030009
+    },
+    "tigerLine": {
+     "tigerLineId": "0",
+     "side": "L"
+    },
+    "addressComponents": {
+     "fromAddress": "99901",
+     "toAddress": "99999",
+     "preQualifier": "",
+     "preDirection": "",
+     "preType": "",
+     "streetName": "VENICE",
+     "suffixType": "BLVD",
+     "suffixDirection": "",
+     "suffixQualifier": "",
+     "city": "CULVER CITY",
+     "state": "CA",
+     "zip": "90034"
+    },
+    "geographies": {
+     "Counties": [
+      {
+       "GEOID": "06037",
+       "NAME": "Los Angeles County",
+       "STATE": "06",
+       "COUNTY": "037"
+      }
+     ],
+     "States": [
+      {
+       "GEOID": "06",
+       "STUSAB": "CA",
+       "NAME": "California"
+      }
+     ]
+    }
+   }
+  ]
+ }
+}

@@ -1,0 +1,8 @@
+{
+ "_fixture_note": "synthetic, shaped like the real response; not a recorded response; coordinates are invented",
+ "error": {
+  "code": 400,
+  "message": "Unable to complete operation.",
+  "details": []
+ }
+}

@@ -1,0 +1,90 @@
+{
+ "_fixture_note": "synthetic, shaped like the real response; not a recorded response; coordinates are invented",
+ "displayFieldName": "AIN",
+ "fieldAliases": {},
+ "geometryType": "esriGeometryPolygon",
+ "spatialReference": {
+  "wkid": 4326,
+  "latestWkid": 4326
+ },
+ "features": [
+  {
+   "attributes": {
+    "AIN": "9999-999-002",
+    "SitusFullAddress": "99999 VENICE BLVD LOS ANGELES CA 90034",
+    "UseCode": "0100",
+    "UseType": "Residential",
+    "UseDescription": "Single",
+    "SQFTmain1": 1450,
+    "Units1": 1,
+    "YearBuilt1": 1948,
+    "Bedrooms1": 3
+   },
+   "geometry": {
+    "rings": [
+     [
+      [
+       -118.4198591,
+       34.0301797
+      ],
+      [
+       -118.4195881,
+       34.0301797
+      ],
+      [
+       -118.4195881,
+       34.0298203
+      ],
+      [
+       -118.4198591,
+       34.0298203
+      ],
+      [
+       -118.4198591,
+       34.0301797
+      ]
+     ]
+    ]
+   }
+  },
+  {
+   "attributes": {
+    "AIN": "9999-999-003",
+    "SitusFullAddress": "99999 VENICE BLVD LOS ANGELES CA 90034",
+    "UseCode": "0100",
+    "UseType": "Residential",
+    "UseDescription": "Single",
+    "SQFTmain1": 1450,
+    "Units1": 1,
+    "YearBuilt1": 1948,
+    "Bedrooms1": 3
+   },
+   "geometry": {
+    "rings": [
+     [
+      [
+       -118.4195664,
+       34.0301797
+      ],
+      [
+       -118.4192954,
+       34.0301797
+      ],
+      [
+       -118.4192954,
+       34.0298203
+      ],
+      [
+       -118.4195664,
+       34.0298203
+      ],
+      [
+       -118.4195664,
+       34.0301797
+      ]
+     ]
+    ]
+   }
+  }
+ ]
+}

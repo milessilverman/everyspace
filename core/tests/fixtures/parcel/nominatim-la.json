@@ -1,0 +1,24 @@
+[
+ {
+  "_fixture_note": "synthetic, shaped like the real response; not a recorded response; coordinates are invented",
+  "place_id": 1,
+  "osm_type": "way",
+  "osm_id": 1,
+  "lat": "34.030009",
+  "lon": "-118.4199946",
+  "category": "building",
+  "type": "house",
+  "display_name": "99999, Venice Boulevard, Los Angeles, Los Angeles County, California, 90034, United States",
+  "address": {
+   "house_number": "99999",
+   "road": "Venice Boulevard",
+   "city": "Los Angeles",
+   "county": "Los Angeles County",
+   "state": "California",
+   "ISO3166-2-lvl4": "US-CA",
+   "postcode": "90034",
+   "country": "United States",
+   "country_code": "us"
+  }
+ }
+]

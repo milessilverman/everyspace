@@ -1,0 +1,11 @@
+{
+ "_fixture_note": "synthetic, shaped like the real response; not a recorded response; coordinates are invented",
+ "displayFieldName": "AIN",
+ "fieldAliases": {},
+ "geometryType": "esriGeometryPolygon",
+ "spatialReference": {
+  "wkid": 4326,
+  "latestWkid": 4326
+ },
+ "features": []
+}

@@ -1,0 +1,22 @@
+{
+ "_fixture_note": "synthetic, shaped like the real response; not a recorded response; coordinates are invented",
+ "result": {
+  "geographies": {
+   "Counties": [
+    {
+     "GEOID": "06037",
+     "NAME": "Los Angeles County",
+     "STATE": "06",
+     "COUNTY": "037"
+    }
+   ],
+   "States": [
+    {
+     "GEOID": "06",
+     "STUSAB": "CA",
+     "NAME": "California"
+    }
+   ]
+  }
+ }
+}
