@@ -1,0 +1,55 @@
+# Shared infrastructure audit: City Pretty (CP) and StreetForge (SF)
+
+Read-only audit, 2026-11-24. Paths: CP = `milessilverman/city-pretty`, SF = `streetforge`, ES = this repo. Planned or doc-only features are counted as not implemented. No data directories were read (`counties/` 1.1G, `app/data/` 47M, `national/` 13M, `data/` 22M). Not run: the tests, the Worker, or any network call.
+
+## Capability map
+
+| capability | source | status | evidence | coverage + licence | reuse |
+|---|---|---|---|---|---|
+| Address geocoding | CP | implemented (library only) | CP:workers/sources.ts:121 `geocodeAddress`, `:111` `addressMismatch`; tests/unit/geocoder.test.ts (county matching) | US-wide. Census geocoder, then Nominatim. Nominatim is ODbL with a usage policy. CP has no LICENSE file. | modify: copy the function. No HTTP route exposes it. ES already has its own, LA-only (ES:index.html:19402, `:19440`). |
+| Parcel by point | CP | implemented (library + browser) | CP:workers/parcels.ts:24 `parcelAt`; `app/data/parcel_services.json` registry; tests/unit/parcels.test.ts (5 tests, mocked fetch) | Per the README: 27 states plus DC statewide, plus about 8 counties. Each agency's own ArcGIS service. Every entry has a `terms` URL, which is not a licence grant. Fields vary by service. The registry's contents were not inspected. | keep, as the pattern: a county-first, then statewide registry that returns `ok:false` with a reason and never guesses. Replaces ES's single hard-coded LA query (ES:index.html:19399). SF already vendors a copy (SF:assets/parcel-services.json). |
+| Parcel API route | CP | missing | CP:workers/api-proxy.ts:208-210 has only `/api/ai`, `/api/streetview`, `/api/facts`; `/api/health` is open | n/a | build: `parcelAt` is used only by the AI advisor tools and the browser page. |
+| Building footprints | CP | partial | CP:workers/sources.ts:1147,1204 `osmNearby` (Overpass, 3 mirrors); roof input accepts `footprintSqft` + `footprintSource` | OSM building ways, ODbL ("© OpenStreetMap contributors", sources.ts:1227). Completeness varies by place. | modify: ES already does this from OSM (ES:index.html:19462). Add the ODbL credit. |
+| Footprints (ML) | SF | implemented (browser) | SF:streetforge2d.html:13597-13638 reads the Overture buildings file via HTTP range requests | ODbL, with Microsoft ML footprints (SF README). | modify: a useful fallback where OSM is empty. It is tangled into a 15k-line single file. |
+| Roof area | CP | implemented, weakly grounded | CP:src/engines/roofAreaEngine.js:1-176, UMD export. Its own header says default pitches are an "unsourced rule of thumb". | Pure function, no data licence. Tests are only indirect (via parcelHouseAuditor.test.ts and 3 other files); there is no roof-specific test. | do-not-reuse as truth. ES's `solarEstimate` is simpler and has the same weakness. Use the CP pitch-by-era idea only as a labelled estimate. |
+| Solar estimate | CP | partial | CP:workers/sources.ts:479 `pvwattsV8` (NREL, falls back to DEMO_KEY); `:711` `googleSolarBuildingInsights` (needs a Google key; terms limit use to "solar feasibility only, 30-day max cache"); src/engines/solarMicrogridEngine.js (ROI, 72 lines, no named test) | NREL PVWatts is US-wide. The Google Solar API is paid and restricted. | keep the idea: PVWatts replaces ES's fixed 1,650 kWh/kW (ES:index.html:8806). Do not cache Google Solar output. |
+| Zoning rules | CP | partial, thin | CP:src/engines/statutoryZoningEngine.js:1-211 (state housing statutes); tests/unit/zoningStandards.test.ts, stateLaws50.test.ts. Docs (DATA-AUDIT:454-476): local standards only for NYC R1-R5 and DC R-1A..R-3; "elsewhere zoning standards not on file". | Statutes, with a per-record verification status. | do-not-reuse for owner earnings (it covers housing by-right, not short-term rental, ADU or parking-rental rules). A zone label can come from the parcel service's use code. |
+| Transit / walkshed | CP | partial | CP:src/engines/gtfsWalkshedEngine.js (62 lines); OSM `transit_stops`/`rail_stations` (sources.ts:1149-1150); tests/unit/transitData.test.ts | The GTFS layers inside county bundles are not covered by a LICENSE. | modify: ES wants "distance to nearest stop". Use the OSM query, not the engine. |
+| Valuation | CP | implemented, withheld in many cases | CP:src/engines/propertyValuationEngine.js; tests countyValuation.test.ts, laValuation.test.ts. README and audit: the "back-test" was invented, so the figure is withheld where it cannot be right. | Assessor data plus FHFA HPI (sources.ts:836) | do-not-reuse. ES earns from rental income, not sale value. |
+| Demand / POI | CP | missing | CP has OSM parks, EV chargers and schools (NCES, sources.ts:634). It has no event or stadium data. | n/a | ES's own venue list (ES:index.html `geo.VENUES`, `:8852`) is more relevant. Keep it. |
+| Pool / driveway / yard | CP | missing | The OSM extract only lists `swimming_pool` as an amenity (pipeline/osm_extract.py:17). No parcel-minus-building yard or driveway code was found. | n/a | build in ES: a parcel polygon minus building polygons gives yard area, and a flag for OSM `leisure=swimming_pool` gives pool presence. Both are estimates, marked as such. |
+| Crash / tree data | CP | static files, offline pipeline | CP:pipeline/state_crashes.py, tests/unit/caCrashInvariant.test.ts, stateCrashCounts.test.ts. Tree data: Tree Equity, with "no data licence stated" (DATA-AUDIT:277). | CA crashes; trees US-wide; licence unclear | do-not-reuse: not an earnings input. |
+| Flood / hazard / HUD rent | CP | implemented (Worker library) | CP:workers/sources.ts:316 FEMA, `:360` NRI, `:245` HUD FMR | US-wide. FEMA terms say "planning purposes only". | keep as optional property context, with its provenance. |
+| Provenance wrapper | CP | implemented | CP:workers/sources.ts:15-25 `Sourced<T>` / `SourceRef` (`name, publisher, url, retrieved_at, vintage, license`); tests/unit/provenance.test.ts | n/a | keep: this is the closest match to the "profile with provenance" requirement. Copy the type. |
+| Address search | SF | implemented (browser) | SF:streetforge2d.html:13054 `geocodeUrl`, Mapbox Geocoding v6 with `permanent=false` | Mapbox public token. Temporary-geocoding terms bar storing the results. | do-not-reuse: storing the results into a profile would breach those terms. |
+| Auth / backend | SF | implemented, unverified | SF:streetforge2d.html:14789 (Supabase project, public publishable key); docs/SECURITY-REVIEW.md: RLS on, RPCs that check the owner, a hashed share-token. The review says real-account tests are still pending. | Supabase free plan | do-not-reuse: ES already has `platform/` on Supabase. |
+| Build / deploy | SF | implemented | SF:build.cjs, vercel.json, api/map-config.js (public token only) | Vercel | do-not-reuse: ES is on GitHub Pages. |
+
+## Duplication (point 3)
+- Parcel: ES calls the LA County Assessor directly (ES:index.html:19399-19445). CP's `parcelAt` is the more general and better-tested code: a registry, a statewide fallback, and 5 unit tests. ES's version has no test that I found. ES's field list (AIN, UseCode, SQFTmain1, YearBuilt1, Bedrooms1) is richer for LA than CP's generic labels.
+- Roof and solar: ES `solarEstimate` is at ES:index.html:8807 (pitch, facing, shape and shade factors; rent $12-30/kW/yr). CP's roof engine only estimates surface from footprint and pitch. CP's solar engine is ROI-only. ES is more complete for a leasing estimate. Neither engine has dedicated tests.
+- Geocode and buildings: both ES and CP use Nominatim and Overpass. ES's `geo/*` routes are tested in ES:tests/domain.test.mjs (parking). I did not verify whether `solarEstimate` has a test.
+
+## Interface options (point 4)
+| option | exists today | to build | coupling risk |
+|---|---|---|---|
+| (i) HTTP call to the CP Worker | `/api/facts?lat&lng` returns the Census geography, FEMA, USGS, ACS, HUD, NCES and others, each as `Sourced<>`. Deployed at `city-pretty-api-proxy.city-pretty.workers.dev` (CP:app/config.js:8). | The Worker has no `/api/parcel` or `/api/geocode` route and takes lat/lng, not an address. | High. The origin allow-list (CP:workers/api-proxy.ts:47-51) names `milessilverman.github.io`, which happens to include ES's host, so it would work today by accident. No auth. A 60-per-minute shared rate limit. CP could change or remove routes. Deploy status was not verified (needs a network call). |
+| (ii) Vendored pure functions | `parcels.ts`, `sources.ts`, the engines (UMD, `module.exports` + `window`). TS needs a strip-types step. | Copy the files and pin a commit. CP has a drift check for its own engine copies (tests/unit/engineCopies.test.ts). | Medium. CP's own audit shows its copies drifted. Pin the commit and record the source commit hash in the vendored header. Licence is unresolved. |
+| (iii) Static datasets | `counties/bundle_<FIPS>.json.gz`, 1.1G, 639 counties. Block-group scores for civic-improvement ideas, not parcel data. | Nothing useful for a per-parcel earnings estimate. | Not recommended. Large, and mixed licences. |
+
+Recommendation: option (ii) for `parcels.ts` + `Sourced<>` + the PVWatts and OSM queries, using ES's own host Worker or Supabase edge function for CORS and keys. Skip (i) and (iii) for now.
+
+## Hard constraints (point 5)
+- No LICENSE file in CP or SF. Both repos belong to the same GitHub owner as ES (`milessilverman`, per the README URL), so reuse is probably fine, but the licence is unstated. Resolve before vendoring code that others see.
+- Secrets or paid keys named in CP: Anthropic (advisor), Google Maps (Street View), Census API (optional), Google Solar API (paid, terms limit use), NREL PVWatts (falls back to the shared DEMO_KEY, which is rate-limited). SF uses Mapbox (public token via env), Supabase (public key), Anthropic (optional). No key values were read.
+- ODbL (OSM, Overture): attribution is required; sharing a derived database may trigger share-alike. Mapbox temporary geocoding must not be stored.
+- Coverage: the CP pipeline, zoning standards and rich bundles are LA/OC-first (pipeline/sources_oc.py); local zoning rules exist only for NYC and DC.
+- CP README warns that most earlier "verified" data was not, and the roof defaults are unsourced. Do not present CP outputs as verified. Parcel assessed value is not market value (parcels.ts:50 note).
+
+## Verified vs assumed
+- Verified (read the code): CP Worker routes, `parcelAt`, `Sourced<>`, roof-engine header, ES's parcel, Overpass and Nominatim constants and `solarEstimate`, SF's Supabase/Mapbox/Overture/parcel-services mentions.
+- Assumed: the Worker is deployed and answering. Only the config URL was read; no network call was made.
+- Not verified: the contents and licence terms of `parcel_services.json` (data directory, not opened); the states it lists come from the README only.
+- Not verified: whether the unit tests pass. Not run.
+- Not verified: ES test coverage for `solarEstimate` / `parcelAt`; SF's auth flows beyond its own security review.
+- Not found in either repo: a driveway, yard or pool detector, or event/demand data.

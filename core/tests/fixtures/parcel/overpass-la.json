@@ -1,0 +1,150 @@
+{
+ "_fixture_note": "synthetic, shaped like the real response; not a recorded response; coordinates are invented",
+ "version": 0.6,
+ "generator": "Overpass API (synthetic)",
+ "osm3s": {
+  "copyright": "The data included in this document is from www.openstreetmap.org. The data is made available under ODbL."
+ },
+ "elements": [
+  {
+   "type": "way",
+   "id": 1001,
+   "nodes": [],
+   "tags": {
+    "building": "house"
+   },
+   "geometry": [
+    {
+     "lat": 34.03,
+     "lon": -118.4200542
+    },
+    {
+     "lat": 34.03,
+     "lon": -118.4199458
+    },
+    {
+     "lat": 34.0301347,
+     "lon": -118.4199458
+    },
+    {
+     "lat": 34.0301347,
+     "lon": -118.4200542
+    },
+    {
+     "lat": 34.03,
+     "lon": -118.4200542
+    }
+   ]
+  },
+  {
+   "type": "way",
+   "id": 1002,
+   "nodes": [],
+   "tags": {
+    "building": "shed"
+   },
+   "geometry": [
+    {
+     "lat": 34.0298653,
+     "lon": -118.419935
+    },
+    {
+     "lat": 34.0298653,
+     "lon": -118.4198916
+    },
+    {
+     "lat": 34.0299012,
+     "lon": -118.4198916
+    },
+    {
+     "lat": 34.0299012,
+     "lon": -118.419935
+    },
+    {
+     "lat": 34.0298653,
+     "lon": -118.419935
+    }
+   ]
+  },
+  {
+   "type": "way",
+   "id": 1003,
+   "nodes": [],
+   "tags": {
+    "building": "garage"
+   },
+   "geometry": [
+    {
+     "lat": 34.03,
+     "lon": -118.4198266
+    },
+    {
+     "lat": 34.03,
+     "lon": -118.4197615
+    },
+    {
+     "lat": 34.0300539,
+     "lon": -118.4197615
+    },
+    {
+     "lat": 34.0300539,
+     "lon": -118.4198266
+    },
+    {
+     "lat": 34.03,
+     "lon": -118.4198266
+    }
+   ]
+  },
+  {
+   "type": "way",
+   "id": 1004,
+   "nodes": [],
+   "tags": {
+    "leisure": "swimming_pool"
+   },
+   "geometry": [
+    {
+     "lat": 34.0298922,
+     "lon": -118.4200542
+    },
+    {
+     "lat": 34.0298922,
+     "lon": -118.4199675
+    },
+    {
+     "lat": 34.0299281,
+     "lon": -118.4199675
+    },
+    {
+     "lat": 34.0299281,
+     "lon": -118.4200542
+    },
+    {
+     "lat": 34.0298922,
+     "lon": -118.4200542
+    }
+   ]
+  },
+  {
+   "type": "node",
+   "id": 2001,
+   "lat": 34.0308983,
+   "lon": -118.4172901,
+   "tags": {
+    "highway": "bus_stop",
+    "name": "Fictional Bus Stop"
+   }
+  },
+  {
+   "type": "node",
+   "id": 2002,
+   "lat": 34.0344916,
+   "lon": -118.4124124,
+   "tags": {
+    "railway": "station",
+    "name": "Fictional Station"
+   }
+  }
+ ]
+}

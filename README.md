@@ -33,13 +33,49 @@ Data sources, all queried from the visitor's browser: LA County Assessor parcels
 
 ## Backend (`platform/`)
 
-The real backend now lives in [`platform/`](platform/). It runs on Supabase's free plan in West US, launching in Los Angeles. It has:
+The real backend lives in [`platform/`](platform/). The live project runs on Supabase's free plan in West US, launching in Los Angeles. The live project has the first set of features:
 
 - **Two-way calendar sync** with Airbnb, Vrbo and others, every 15 minutes.
 - **No-double-booking rules:** one instant-book site per space; requests on other sites hold the dates, and are marked safe to accept only after the dates are proven closed everywhere; plus a guard that flags anything that slips.
 - **Revenue-share billing:** 10% of the extra money Everyspace brings in, until the fee reaches $30 in a month, then 3%.
 
+**New on this branch, NOT yet applied to the live project.** The code and migrations are tested only on a local staging database. Nothing from this branch has been applied to, or deployed to, the live project.
+
+- **Teams:** organizations, roles and memberships (invite and accept), so co-hosts and cleaners can have limited access.
+- **Lookup tables** for sites and space categories instead of fixed lists.
+- **Property profile:** parcels, buildings, attributes with their source and confidence, photos, rules, and revenue opportunities.
+- **Operations:** pricing rules, expenses, revenue entries, maintenance tasks and messages.
+- **Availability engine:** relations between spaces, shared resources, setup and cleanup time, and an exclusion constraint. Bookings are made, cancelled and moved only through database functions, and calendar sync writes through one locked call.
+- **Calendar sync health:** failure counts, last good sync and a `sync_health` view.
+- **Adapters:** iCal links and manual CSV import (`booking-import`). No other site connections exist.
+- **Safer fetching** of host-pasted calendar links (private addresses and unsafe redirects are refused).
+
+The edge functions in this branch need the new migrations. Apply the migrations first, then deploy the functions (see [`platform/README.md`](platform/README.md)).
+
 See [`platform/README.md`](platform/README.md) and the game plan in [`platform/docs/PLAN.md`](platform/docs/PLAN.md).
+
+## Income estimator (`estimate/`)
+
+[`estimate/`](estimate/) is a free page where anyone can type an address and see what the property could earn. It looks up the parcel in public records, lists the ways the space could earn, and shows a conservative, baseline and optimistic range for each. It will be served at `/everyspace/estimate/` once merged. The home page does not link to it yet.
+
+- **Where the numbers come from:** prices and bookings are Everyspace planning defaults, labelled as such, with no market source yet, so every estimate is low confidence. Enter your own price, bookings or costs and your numbers replace the defaults. Local rules (for example Los Angeles home-sharing) are marked unverified, because the official pages could not be read.
+- **Nothing is saved.** No sign-in, no account, nothing stored by Everyspace. Your address is sent to OpenStreetMap's Nominatim to find it, and the parcel lookup goes to the county's public service, only when you press the button.
+
+## Shared logic (`core/`)
+
+Plain JavaScript with no dependencies, used by the estimator and tests (and meant for edge functions). Money is whole cents; no module reads the clock.
+
+- `availability.js`: which bookings conflict (mirrors the database rules).
+- `geometry.js`: area and distance helpers for lots and roofs.
+- `opportunities.js`: which ways a property could earn, and what is still unknown.
+- `optimizer.js`: the best combination of opportunities (not a plain sum).
+- `parcel.js`: address to parcel to property profile.
+- `profile.js`: property profile that keeps every value and its history.
+- `provenance.js`: tags each value with its source and confidence; owner corrections win.
+- `regulatory.js`: whether a use is allowed, from rules kept as data.
+- `revenue.js`: conservative, baseline and optimistic earnings estimate.
+- `types.js`: the shared contracts.
+- `data/`: planning defaults, categories, platform fees, rules, parcel services and scenario spreads.
 
 ## What's in the app (`index.html`)
 
@@ -57,15 +93,27 @@ It links to the real [Host Console](host/) for running actual listings.
 
 ## Tests
 
-The core rules (pricing, the price rule, iCal sync, listing everywhere, privacy) have automated tests:
+Run these from the repository root unless noted. Counts are from 2026-11-24.
 
 ```bash
-node --test tests/*.test.mjs
+node --test tests/*.test.mjs core/tests/*.test.mjs
 ```
 
-They load the app's domain code straight from `index.html`, so the site stays a single file.
+This runs the core rules in the app (pricing, the price rule, iCal sync, listing everywhere, privacy; they load the app's domain code straight from `index.html`, so the site stays a single file) and the `core/` modules. 272 tests pass.
 
-The backend has its own 31 tests. From `platform/`:
+Two browser tests drive the pages with a mocked network (they never touch a real site or database):
+
+```bash
+node tests/estimate.e2e.mjs
+```
+
+```bash
+node tests/host.e2e.mjs
+```
+
+The estimator test runs 11 browser scenarios; the Host Console test runs 18 checks. They need Playwright with Chromium.
+
+The backend has its own tests. From `platform/`:
 
 ```bash
 npm install
@@ -74,6 +122,14 @@ npm install
 ```bash
 npm test
 ```
+
+231 tests pass, using an in-memory Postgres.
+
+```bash
+npm run test:staging
+```
+
+This runs 16 race and replay tests on a local Postgres 16 and needs a local Postgres 16 install. All 16 pass.
 
 ## What's needed before launch
 
@@ -86,3 +142,4 @@ The app is a complete, working front end with demo data. To take real bookings i
 5. **Verified fees.** Other sites' fees are estimates in one table (`PLATFORMS` in the code), labeled as estimates in the app until checked.
 6. **Legal and insurance.** Terms, privacy policy, host protection insurance, lease and infrastructure agreement templates, and local short-term-rental rules.
 7. **Photos.** Upload and storage for listing photos (the demo draws each space).
+8. **Marketplace wording.** The line about a marketplace with a 3% host fee, and the demo's marketplace screens, conflict with the management-first direction. They are left as they are until the owner decides.

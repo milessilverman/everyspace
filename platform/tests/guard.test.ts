@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseIcs, localDayToUtc } from '../supabase/functions/_shared/ical.ts';
-import { checkDoor, doorGaps, describeDates, describeDays, describeNights } from '../supabase/functions/_shared/guard.ts';
+import { checkDoor, doorGaps, describeDates, describeDays, describeNights, siteName, isVerifiableByCalendar, unreadableCalendarMessage } from '../supabase/functions/_shared/guard.ts';
+import { registerAdapter, unregisterAdapter } from '../supabase/functions/_shared/providers/index.ts';
 
 const LA = 'America/Los_Angeles';
 const cal = (...ev: string[]) => parseIcs(`BEGIN:VCALENDAR\n${ev.join('\n')}\nEND:VCALENDAR`, { defaultTimeZone: LA });
@@ -57,4 +58,28 @@ test('closing instructions name the nights, not the check-out day', () => {
 
 test('hourly bookings ask for the whole day to be closed on day-based sites', () => {
   assert.equal(describeDays('2026-12-20T21:00:00.000Z', '2026-12-21T00:00:00.000Z', LA), 'all of Dec 20');
+});
+
+test('site names and "can this calendar prove dates closed?" come from the provider adapters', () => {
+  assert.equal(siteName('airbnb'), 'Airbnb'); assert.equal(siteName('booking_com'), 'Booking.com'); assert.equal(siteName('furnished_finder'), 'Furnished Finder');
+  assert.equal(siteName('some_new_site'), 'some_new_site');
+  assert.equal(isVerifiableByCalendar('airbnb'), true); assert.equal(isVerifiableByCalendar('vrbo'), true);
+  assert.equal(isVerifiableByCalendar('booking_com'), false); assert.equal(isVerifiableByCalendar('some_new_site'), false);
+});
+
+test('a new provider changes the guard without touching guard code', () => {
+  registerAdapter({ key: 'fakebnb', label: 'FakeBnB', capabilities: { calendar: 'L1', booking: 'L0', listing: 'L0', pricing: 'L0', messaging: 'L0' }, limits: [],
+    importAvailability: async () => ({ events: [] }), verifyClosed: async () => ({ ok: true }) });
+  try { assert.equal(siteName('fakebnb'), 'FakeBnB'); assert.equal(isVerifiableByCalendar('fakebnb'), true); } finally { unregisterAdapter('fakebnb'); }
+  assert.equal(isVerifiableByCalendar('fakebnb'), false);
+});
+
+test('an unreadable calendar message says so plainly: "just now" when fresh, "recently" when stale', () => {
+  const now = '2026-11-24T12:00:00.000Z';
+  const fresh = unreadableCalendarMessage({ site: 'Airbnb', now, error: 'timed out', state: { lastOkAt: '2026-11-24T11:50:00.000Z', consecutiveFailures: 1 } });
+  assert.match(fresh, /just now \(timed out\)/); assert.match(fresh, /Don't accept yet/);
+  const stale = unreadableCalendarMessage({ site: 'Airbnb', now, state: { lastOkAt: '2026-11-24T06:00:00.000Z', consecutiveFailures: 1 } });
+  assert.match(stale, /could not read Airbnb's calendar recently/); assert.match(stale, /6 hours ago/);
+  assert.match(unreadableCalendarMessage({ site: 'Vrbo', now, state: { lastOkAt: null, consecutiveFailures: 0 } }), /never been read successfully/);
+  assert.match(unreadableCalendarMessage({ site: 'Vrbo', now, state: { lastOkAt: '2026-11-24T11:59:00.000Z', consecutiveFailures: 3 } }), /recently/);
 });

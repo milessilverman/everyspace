@@ -1,0 +1,54 @@
+{
+ "_fixture_note": "recorded 2026-11-24 from the live service for a public building (requested '200 N Spring St, Los Angeles, CA 90012'; the geocoder matched 200 S SPRING ST; the point is interpolated along the street, not inside any parcel)",
+ "result": {
+  "input": {
+   "address": {
+    "address": "200 N Spring St, Los Angeles, CA 90012"
+   }
+  },
+  "addressMatches": [
+   {
+    "matchedAddress": "200 S SPRING ST, LOS ANGELES, CA, 90012",
+    "coordinates": {
+     "x": -118.245593523439,
+     "y": 34.051622610747
+    },
+    "tigerLine": {
+     "side": "L",
+     "tigerLineId": "141618119"
+    },
+    "addressComponents": {
+     "zip": "90012",
+     "streetName": "SPRING",
+     "preType": "",
+     "city": "LOS ANGELES",
+     "preDirection": "S",
+     "suffixDirection": "",
+     "fromAddress": "200",
+     "state": "CA",
+     "suffixType": "ST",
+     "toAddress": "298",
+     "suffixQualifier": "",
+     "preQualifier": ""
+    },
+    "geographies": {
+     "Counties": [
+      {
+       "GEOID": "06037",
+       "NAME": "Los Angeles County",
+       "STATE": "06",
+       "COUNTY": "037"
+      }
+     ],
+     "States": [
+      {
+       "GEOID": "06",
+       "STUSAB": "CA",
+       "NAME": "California"
+      }
+     ]
+    }
+   }
+  ]
+ }
+}

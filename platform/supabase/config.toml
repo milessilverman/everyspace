@@ -10,3 +10,7 @@ verify_jwt = true
 
 [functions.booking-guard]
 verify_jwt = true
+
+# A host uploads a reservations CSV; the function calls import_reservations with the caller's own JWT.
+[functions.booking-import]
+verify_jwt = true

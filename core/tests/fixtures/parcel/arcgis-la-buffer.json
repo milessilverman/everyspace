@@ -1,0 +1,244 @@
+{
+ "_fixture_note": "synthetic, shaped like the recorded response; not a recorded response; coordinates are invented (buffered response: the geocoded point is in the street, not in any parcel; blank-situs parcels and a same-number different-street parcel are mixed in)",
+ "geometryType": "esriGeometryPolygon",
+ "spatialReference": {
+  "wkid": 4326,
+  "latestWkid": 4326
+ },
+ "features": [
+  {
+   "attributes": {
+    "AIN": "9999-999-001",
+    "SitusFullAddress": "99999 VENICE BLVD LOS ANGELES CA 90034",
+    "UseCode": "0100",
+    "UseType": "Residential",
+    "UseDescription": "Single",
+    "SQFTmain1": 1450,
+    "Units1": 1,
+    "YearBuilt1": 1948,
+    "Bedrooms1": 3
+   },
+   "geometry": {
+    "rings": [
+     [
+      [
+       -118.4201301,
+       34.0301797
+      ],
+      [
+       -118.4198591,
+       34.0301797
+      ],
+      [
+       -118.4198591,
+       34.0298203
+      ],
+      [
+       -118.4201301,
+       34.0298203
+      ],
+      [
+       -118.4201301,
+       34.0301797
+      ]
+     ]
+    ]
+   }
+  },
+  {
+   "attributes": {
+    "AIN": "9999-999-002",
+    "SitusFullAddress": "99997 VENICE BLVD LOS ANGELES CA 90034",
+    "UseCode": "0100",
+    "UseType": "Residential",
+    "UseDescription": "Single",
+    "SQFTmain1": 1450,
+    "Units1": 1,
+    "YearBuilt1": 1948,
+    "Bedrooms1": 3
+   },
+   "geometry": {
+    "rings": [
+     [
+      [
+       -118.41985869999999,
+       34.0301797
+      ],
+      [
+       -118.4195877,
+       34.0301797
+      ],
+      [
+       -118.4195877,
+       34.0298203
+      ],
+      [
+       -118.41985869999999,
+       34.0298203
+      ],
+      [
+       -118.41985869999999,
+       34.0301797
+      ]
+     ]
+    ]
+   }
+  },
+  {
+   "attributes": {
+    "AIN": "9999-999-004",
+    "SitusFullAddress": "100001 VENICE BLVD LOS ANGELES CA 90034",
+    "UseCode": "0100",
+    "UseType": "Residential",
+    "UseDescription": "Single",
+    "SQFTmain1": 1450,
+    "Units1": 1,
+    "YearBuilt1": 1948,
+    "Bedrooms1": 3
+   },
+   "geometry": {
+    "rings": [
+     [
+      [
+       -118.4204015,
+       34.0301797
+      ],
+      [
+       -118.4201305,
+       34.0301797
+      ],
+      [
+       -118.4201305,
+       34.0298203
+      ],
+      [
+       -118.4204015,
+       34.0298203
+      ],
+      [
+       -118.4204015,
+       34.0301797
+      ]
+     ]
+    ]
+   }
+  },
+  {
+   "attributes": {
+    "AIN": "9999-999-005",
+    "SitusFullAddress": "99999 W WASHINGTON BLVD LOS ANGELES CA 90034",
+    "UseCode": "0100",
+    "UseType": "Residential",
+    "UseDescription": "Single",
+    "SQFTmain1": 1450,
+    "Units1": 1,
+    "YearBuilt1": 1948,
+    "Bedrooms1": 3
+   },
+   "geometry": {
+    "rings": [
+     [
+      [
+       -118.4201301,
+       34.0305797
+      ],
+      [
+       -118.4198591,
+       34.0305797
+      ],
+      [
+       -118.4198591,
+       34.030220299999996
+      ],
+      [
+       -118.4201301,
+       34.030220299999996
+      ],
+      [
+       -118.4201301,
+       34.0305797
+      ]
+     ]
+    ]
+   }
+  },
+  {
+   "attributes": {
+    "AIN": "9999-999-006",
+    "SitusFullAddress": "",
+    "UseCode": "2700",
+    "UseType": "Commercial",
+    "UseDescription": "Parking Lots (Commercial Use Properties)",
+    "SQFTmain1": null,
+    "Units1": null,
+    "YearBuilt1": null,
+    "Bedrooms1": null
+   },
+   "geometry": {
+    "rings": [
+     [
+      [
+       -118.4201301,
+       34.030979699999996
+      ],
+      [
+       -118.4198591,
+       34.030979699999996
+      ],
+      [
+       -118.4198591,
+       34.030620299999995
+      ],
+      [
+       -118.4201301,
+       34.030620299999995
+      ],
+      [
+       -118.4201301,
+       34.030979699999996
+      ]
+     ]
+    ]
+   }
+  },
+  {
+   "attributes": {
+    "AIN": "9999-999-007",
+    "SitusFullAddress": "",
+    "UseCode": "2700",
+    "UseType": "Commercial",
+    "UseDescription": "Parking Lots (Commercial Use Properties)",
+    "SQFTmain1": null,
+    "Units1": null,
+    "YearBuilt1": null,
+    "Bedrooms1": null
+   },
+   "geometry": {
+    "rings": [
+     [
+      [
+       -118.4201301,
+       34.031379699999995
+      ],
+      [
+       -118.4198591,
+       34.031379699999995
+      ],
+      [
+       -118.4198591,
+       34.031020299999994
+      ],
+      [
+       -118.4201301,
+       34.031020299999994
+      ],
+      [
+       -118.4201301,
+       34.031379699999995
+      ]
+     ]
+    ]
+   }
+  }
+ ]
+}
