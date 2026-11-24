@@ -78,7 +78,7 @@ const TENANT = {
     insert: () => `insert into public.revenue_entries (org_id, property_id, gross_cents, earned_on) values ('${F.org}', '${F.prop}', 100, '2026-11-01')` },
   maintenance_tasks: { where: () => `id = '${F.task}'`, viewer: true, owner: true, set: `status = 'done'`,
     insert: () => `insert into public.maintenance_tasks (property_id, kind) values ('${F.prop}', 'repair')` },
-  space_relations: { where: () => `id = '${F.relation}'`, viewer: true, owner: true, set: `symmetric = true`,
+  space_relations: { where: () => `id = '${F.relation}'`, viewer: true, owner: true, set: `note = 'pwned'`,
     insert: () => `insert into public.space_relations (space_id, blocks_space_id) values ('${F.space2}', '${F.space}')` },
   resources: { where: () => `id = '${F.resource}'`, viewer: true, owner: true, set: `capacity = 99`,
     insert: () => `insert into public.resources (property_id, name, capacity) values ('${F.prop}', 'Intruder', 1)` },

@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Everyspace income estimator</title>
+<meta name="description" content="Free planning estimate of what your property could earn from rentable space. No sign-up. Nothing you enter is saved.">
+<link rel="stylesheet" href="./app.css">
+</head>
+<body>
+<a class="skip" href="#address">Skip to the address box</a>
+<header class="top">
+  <div class="wrap">
+    <div class="logo"><i aria-hidden="true"></i>Everyspace <span>Income estimator</span></div>
+    <a class="console" href="../host/">Host Console</a>
+  </div>
+</header>
+
+<main class="wrap" id="main">
+  <section class="card" aria-labelledby="h-address">
+    <div class="section-title"><h1 id="h-address">What could your property earn?</h1></div>
+    <p class="muted">Type your address and we will look up your parcel in public records, list the ways the property could earn, and show a range for each. Free, no sign-up. Nothing you enter here is saved.</p>
+    <form id="address-form" class="stack" autocomplete="off" novalidate>
+      <label class="f" for="address">Property address
+        <input id="address" name="q" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="123 Main St, Los Angeles, CA 90001" aria-describedby="address-help">
+      </label>
+      <p id="address-help" class="tiny muted">We search only when you press the button. Your address is sent to OpenStreetMap Nominatim and, for the parcel, to the county's public parcel service.</p>
+      <div class="row">
+        <button class="btn primary" id="address-submit" type="submit">Find my property</button>
+        <button class="btn ghost" id="manual-start" type="button">Skip the lookup and enter details myself</button>
+      </div>
+    </form>
+    <p id="status" class="status" role="status" aria-live="polite" aria-atomic="true"></p>
+  </section>
+
+  <div id="lookup"></div>
+  <div id="results"></div>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p>Address search © OpenStreetMap contributors (ODbL) via Nominatim. Parcel data: county assessor public services. Buildings and pools: © OpenStreetMap contributors.</p>
+    <p>Nothing you enter here is saved.</p>
+    <p><a href="../host/">Already renting? Manage your spaces in the Host Console</a></p>
+  </div>
+</footer>
+<script type="module" src="./app.js"></script>
+</body>
+</html>
