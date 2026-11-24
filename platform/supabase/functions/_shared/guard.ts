@@ -8,69 +8,35 @@
 //      and only then says "safe to accept".
 //   3. A guard re-checks every 15 minutes that the instant site still shows every other booking as closed.
 // Pure functions (no network, no database) so they are tested directly.
-import { type CalendarEvent, localDayToUtc } from './ical.ts';
+//
+// Per-site facts (display names, whether a site's calendar can tell a guest's booking from dates the host closed) are
+// not written here: they live in the provider adapters (providers/ical.ts) and are read through the registry.
+import { canVerifyClosed, labelOf } from './providers/index.ts';
+import { isStale, type HealthState } from './sync.ts';
 
-export const SITE_NAMES: Record<string, string> = {
-  everyspace: 'Everyspace', airbnb: 'Airbnb', vrbo: 'Vrbo', booking_com: 'Booking.com', expedia: 'Expedia',
-  furnished_finder: 'Furnished Finder', swimply: 'Swimply', peerspace: 'Peerspace', neighbor: 'Neighbor', spothero: 'SpotHero',
-  sniffspot: 'Sniffspot', hipcamp: 'Hipcamp', getmyboat: 'GetMyBoat', outdoorsy: 'Outdoorsy', rvshare: 'RVshare',
-  craigslist: 'Craigslist', facebook: 'Facebook', direct: 'Direct', other: 'the other site',
-};
-export const siteName = (c: string) => SITE_NAMES[c] ?? c;
+export { checkDoor, doorGaps, type DoorCheck } from './door.ts';
+
+/** A site's display name, from its adapter. Unknown sites show their key. */
+export const siteName = (c: string): string => labelOf(c);
 
 /**
- * Sites whose calendar export tells a guest's booking apart from a date the host closed (Airbnb: "Reserved" vs
- * "Airbnb (Not available)"; Vrbo: "Reserved" vs "Blocked"). Only these can be checked by calendar link. Booking.com's
- * export marks both as "CLOSED - Not available", so it needs its direct (API) connection before it can be checked.
+ * Can this site's calendar link prove that dates are closed? Only when its adapter can tell a guest's booking apart
+ * from a date the host closed (Airbnb: "Reserved" vs "Airbnb (Not available)"; Vrbo: "Reserved" vs "Blocked").
+ * Booking.com's export marks both as "CLOSED - Not available", so its adapter has no `verifyClosed`.
  */
-export const VERIFIABLE_BY_CALENDAR = new Set(['airbnb', 'vrbo']);
+export const isVerifiableByCalendar = (c: string): boolean => canVerifyClosed(c);
 
-type Range = [number, number];
-const range = (e: CalendarEvent, timeZone: string): Range => (e.allDay
-  ? [Date.parse(localDayToUtc(e.start, timeZone)), Date.parse(localDayToUtc(e.end, timeZone))]
-  : [Date.parse(e.start), Date.parse(e.end)]);
-
-/** The first stretch of [start, end) that none of the ranges cover, or null if fully covered. */
-function firstGap(start: number, end: number, ranges: Range[]): Range | null {
-  let at = start;
-  for (const [s, e] of [...ranges].sort((a, b) => a[0] - b[0])) {
-    if (s > at) break;
-    if (e > at) at = e;
-    if (at >= end) return null;
+/**
+ * Why the instant site's calendar can't be trusted right now, in words for the host. `state` is the import's health
+ * (from calendar_imports); `error` is what went wrong on the live read just attempted.
+ */
+export function unreadableCalendarMessage({ site, state, now, error }:
+  { site: string; state: HealthState; now: string; error?: string }): string {
+  if (isStale(state, now)) {
+    const when = state.lastOkAt ? `the last good read was ${Math.max(0, Math.round((Date.parse(now) - Date.parse(state.lastOkAt)) / 3_600_000))} hours ago` : 'it has never been read successfully';
+    return `Everyspace could not read ${site}'s calendar recently (${when}). Don't accept yet: check that the calendar link still works, then try again.`;
   }
-  return at >= end ? null : [at, Math.min(end, ranges.filter(([s]) => s > at).map(([s]) => s).sort((a, b) => a - b)[0] ?? end)];
-}
-
-export type DoorCheck =
-  | { ok: true }
-  | { ok: false; reason: 'taken'; uid: string }
-  | { ok: false; reason: 'not_closed'; gapStart: string; gapEnd: string };
-
-/**
- * Is a held stretch of time safely closed on the instant site? Reads that site's live calendar:
- * - a guest booking overlapping it there means the instant site sold it first: decline the request;
- * - otherwise the whole stretch must be covered by dates the host closed there.
- */
-export function checkDoor({ hold, doorEvents, timeZone }:
-  { hold: { starts_at: string; ends_at: string }; doorEvents: CalendarEvent[]; timeZone: string }): DoorCheck {
-  const s = Date.parse(hold.starts_at); const e = Date.parse(hold.ends_at);
-  const live = doorEvents.filter((ev) => !ev.cancelled);
-  for (const ev of live) {
-    const [a, b] = range(ev, timeZone);
-    if (ev.kind === 'booking' && a < e && b > s) return { ok: false, reason: 'taken', uid: ev.uid };
-  }
-  const gap = firstGap(s, e, live.filter((ev) => ev.kind === 'block').map((ev) => range(ev, timeZone)));
-  return gap ? { ok: false, reason: 'not_closed', gapStart: new Date(gap[0]).toISOString(), gapEnd: new Date(gap[1]).toISOString() } : { ok: true };
-}
-
-/**
- * Guard: which bookings (and safe holds) from other sites are not shown as busy on the instant site right now?
- * Any busy event counts here; a guest booking on top of another booking is caught separately as a double booking.
- */
-export function doorGaps({ required, doorEvents, timeZone }:
-  { required: { id: string; starts_at: string; ends_at: string }[]; doorEvents: CalendarEvent[]; timeZone: string }): string[] {
-  const busy = doorEvents.filter((ev) => !ev.cancelled).map((ev) => range(ev, timeZone));
-  return required.filter((r) => firstGap(Date.parse(r.starts_at), Date.parse(r.ends_at), busy) !== null).map((r) => r.id);
+  return `Couldn't read ${site}'s calendar just now (${error ?? 'error'}). Don't accept yet; try again in a minute.`;
 }
 
 /** "Dec 1 – Dec 4" (all-day, end exclusive shown as checkout day) or "Dec 1, 2:00 PM – 5:00 PM" in the property's zone. */

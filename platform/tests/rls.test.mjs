@@ -41,7 +41,8 @@ const TENANT = {
     insert: () => `insert into public.calendar_imports (space_id, channel, url) values ('${F.space2}', 'vrbo', 'https://evil.test/x')` },
   calendar_feeds: { where: () => `id = '${F.feed}'`, viewer: false, owner: true, set: `last_fetched_at = now()`,
     insert: () => `insert into public.calendar_feeds (space_id, for_channel) values ('${F.space2}', 'vrbo')` },
-  reservations: { where: () => `id = '${F.res1}'`, viewer: true, owner: true, set: `status = 'cancelled'`,
+  // Direct writes are revoked from signed-in users (M5): bookings go through create_booking / import_reservations.
+  reservations: { where: () => `id = '${F.res1}'`, viewer: true, owner: false, set: `status = 'cancelled'`,
     insert: () => `insert into public.reservations (space_id, channel, external_uid, source, starts_at, ends_at) values ('${F.space2}', 'direct', 'X-${uuid()}', 'manual', '2027-05-01', '2027-05-02')` },
   conflicts: { where: () => `id = '${F.conflict}'`, viewer: true, owner: false, set: `resolved_at = now()`,
     insert: () => `insert into public.conflicts (space_id, a_reservation_id, b_reservation_id) values ('${F.space}', '${F.res2}', '${F.res1}')` },
@@ -77,6 +78,12 @@ const TENANT = {
     insert: () => `insert into public.revenue_entries (org_id, property_id, gross_cents, earned_on) values ('${F.org}', '${F.prop}', 100, '2026-11-01')` },
   maintenance_tasks: { where: () => `id = '${F.task}'`, viewer: true, owner: true, set: `status = 'done'`,
     insert: () => `insert into public.maintenance_tasks (property_id, kind) values ('${F.prop}', 'repair')` },
+  space_relations: { where: () => `id = '${F.relation}'`, viewer: true, owner: true, set: `symmetric = true`,
+    insert: () => `insert into public.space_relations (space_id, blocks_space_id) values ('${F.space2}', '${F.space}')` },
+  resources: { where: () => `id = '${F.resource}'`, viewer: true, owner: true, set: `capacity = 99`,
+    insert: () => `insert into public.resources (property_id, name, capacity) values ('${F.prop}', 'Intruder', 1)` },
+  space_resources: { where: () => `space_id = '${F.space}' and resource_id = '${F.resource}'`, viewer: true, owner: true, set: `units = 9`,
+    insert: () => `insert into public.space_resources (space_id, resource_id) values ('${F.space2}', '${F.resource}')` },
   communications: { where: () => `id = '${F.comm}'`, viewer: true, owner: true, set: `body = 'pwned'`,
     insert: () => `insert into public.communications (org_id, space_id, direction, body) values ('${F.org}', '${F.space}', 'note', 'x')` },
 };
@@ -127,6 +134,9 @@ before(async () => {
   F.expense = await ins(`insert into public.expenses (property_id, category, amount_cents, incurred_on) values ($1, 'cleaning', 5000, '2026-11-01')`, [F.prop]);
   F.revenue = await ins(`insert into public.revenue_entries (property_id, reservation_id, gross_cents, earned_on) values ($1, $2, 1000, '2027-01-03')`, [F.prop, F.res1]);
   F.task = await ins(`insert into public.maintenance_tasks (property_id, space_id, kind) values ($1, $2, 'cleaning')`, [F.prop, F.space]);
+  F.relation = await ins(`insert into public.space_relations (space_id, blocks_space_id) values ($1, $2)`, [F.space, F.space2]);
+  F.resource = await ins(`insert into public.resources (property_id, name, capacity) values ($1, 'Parking', 2)`, [F.prop]);
+  await db.query(`insert into public.space_resources (space_id, resource_id) values ($1, $2)`, [F.space, F.resource]);
   F.comm = await ins(`insert into public.communications (space_id, direction, body) values ($1, 'inbound', 'Hi')`, [F.space]);
   // Sam's own data, so "0 rows" means isolation rather than an empty database.
   const sp = await ins(`insert into public.properties (host_id, title) values ($1, 'Sam place')`, [SAM]);
