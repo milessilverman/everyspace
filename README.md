@@ -56,9 +56,9 @@ See [`platform/README.md`](platform/README.md) and the game plan in [`platform/d
 
 ## Income estimator (`estimate/`)
 
-[`estimate/`](estimate/) is a free page where anyone can type an address and see what the property could earn. It looks up the parcel in public records, lists the ways the space could earn, and shows a low, middle and high range for each. It will be served at `/everyspace/estimate/` once merged. The home page does not link to it yet.
+[`estimate/`](estimate/) is a free page where anyone can type an address and see what the property could earn. It looks up the parcel in public records, lists the ways the space could earn, and shows a conservative, baseline and optimistic range for each. It will be served at `/everyspace/estimate/` once merged. The home page does not link to it yet.
 
-- **Where the numbers come from:** prices and bookings are Everyspace planning defaults, labelled as such, with no market source yet, so every estimate is low confidence. Enter your own price, bookings or costs and your numbers replace the defaults. Rules for places other than the ones listed are marked unverified.
+- **Where the numbers come from:** prices and bookings are Everyspace planning defaults, labelled as such, with no market source yet, so every estimate is low confidence. Enter your own price, bookings or costs and your numbers replace the defaults. Local rules (for example Los Angeles home-sharing) are marked unverified, because the official pages could not be read.
 - **Nothing is saved.** No sign-in, no account, nothing stored by Everyspace. Your address is sent to OpenStreetMap's Nominatim to find it, and the parcel lookup goes to the county's public service, only when you press the button.
 
 ## Shared logic (`core/`)
@@ -73,7 +73,7 @@ Plain JavaScript with no dependencies, used by the estimator and tests (and mean
 - `profile.js`: property profile that keeps every value and its history.
 - `provenance.js`: tags each value with its source and confidence; owner corrections win.
 - `regulatory.js`: whether a use is allowed, from rules kept as data.
-- `revenue.js`: low, middle and high earnings estimate.
+- `revenue.js`: conservative, baseline and optimistic earnings estimate.
 - `types.js`: the shared contracts.
 - `data/`: planning defaults, categories, platform fees, rules, parcel services and scenario spreads.
 

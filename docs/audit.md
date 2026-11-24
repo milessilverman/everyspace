@@ -51,3 +51,16 @@ Consolidated from [frontend](audit/frontend.md), [database](audit/database.md), 
 - Fix SSRF and sync-staleness before any adapter work.
 - Source or label every estimator constant; keep the estimator free.
 - Re-run platform and data research once hosts are allowed.
+
+## State after this run
+The table above is the starting audit and is unchanged. Nothing below is applied to the live project.
+
+| area | built | verified by |
+|---|---|---|
+| database | orgs/roles, catalog, property profile, operations, availability engine (M1-M5) | `cd platform && npm test` 231 pass; `npm run test:staging` 16 pass (local Postgres 16) |
+| review fixes | 2 high, 8 medium, 3 low findings fixed | regression tests in `review_fixes`, `review_race`, `handlers`, `fetch` and `core/tests` |
+| edge functions | provider adapters (iCal, manual CSV), `booking-import`, locked sync, safer fetch | `platform/tests/*.test.ts` (in the 231) |
+| shared logic | `core/` modules (availability, parcel, profile, regulatory, revenue, optimizer) | `node --test tests/*.test.mjs core/tests/*.test.mjs` 272 pass |
+| estimator | public `estimate/` page, nothing stored | `node tests/estimate.e2e.mjs` 11 scenarios pass (recorded fixtures) |
+| Host Console | existing page, mocked backend | `node tests/host.e2e.mjs` 18 checks pass |
+| not verified | LA rules, Overpass live, live LA parcel single-match, token hashing not built | see [security](security.md), [risks](risks.md) |
