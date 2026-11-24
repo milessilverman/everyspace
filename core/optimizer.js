@@ -55,9 +55,6 @@ export function optimize(opportunities, estimatesById, options) {
   /** @param {string} id */
   const result = (id) => /** @type {NonNullable<OpportunityEstimate['scenarios']>} */ (est(id)?.scenarios)[scenario];
 
-  let naive = 0;
-  for (const o of opps) { const e = est(o.id); if (e?.available && e.scenarios) naive += e.scenarios[scenario].noiCentsPerYear; }
-
   const capacity = c.resourceCapacity ?? {};
   const preferred = new Set(c.preferredCategories ?? []);
   const excluded = new Set(c.excludedCategories ?? []);
@@ -102,13 +99,32 @@ export function optimize(opportunities, estimatesById, options) {
       if (o.privacyImpact > PRIVACY_MAX_IMPACT) return `Privacy impact ${o.privacyImpact} is above ${PRIVACY_MAX_IMPACT} for the privacy goal`;
       if (o.strangersInHome) return 'Brings strangers into the home (privacy goal)';
     }
-    if (needsUpfront && e.inputs.upfrontCents.tag === 'unavailable') return 'Start-up cost is unknown, so it cannot be checked against the upfront goal or limit';
+    const upfrontUnknown = e.inputs.upfrontCents.tag === 'unavailable';
+    if (c.maxUpfrontCents !== undefined && upfrontUnknown) return 'Start-up cost unknown: enter it to include this under your budget';
+    if (needsUpfront && upfrontUnknown) return 'Start-up cost is unknown, so it cannot be checked against the upfront goal or limit';
     const r = e.scenarios[scenario];
+    // A single opportunity above the budget can never be part of an answer. The budget on the COMBINED start-up
+    // cost is enforced in evaluate().
     if (c.maxUpfrontCents !== undefined && r.upfrontCents > c.maxUpfrontCents) return `Start-up cost ${r.upfrontCents} cents is above your limit of ${c.maxUpfrontCents} cents`;
-    for (const [res, n] of Object.entries(o.resourceUse ?? {})) {
-      if (Object.prototype.hasOwnProperty.call(capacity, res) && n > capacity[res]) return `Needs ${n} ${res} but only ${capacity[res]} available`;
-    }
     return null;
+  }
+
+  // Eligible = passes every filter of the owner and of the rules, before conflicts and shared-resource capacity
+  // are applied. The naive sum covers exactly this set, so naive - selected is explained by conflicts, capacity
+  // and the combined budget only.
+  const eligibleIds = candidates.map((o) => o.id);
+  let naive = 0;
+  for (const o of candidates) naive += result(o.id).noiCentsPerYear;
+  // An opportunity that alone needs more of a shared resource than exists is eligible but can never fit.
+  for (let i = candidates.length - 1; i >= 0; i--) {
+    const o = candidates[i];
+    for (const [res, n] of Object.entries(o.resourceUse ?? {})) {
+      if (Object.prototype.hasOwnProperty.call(capacity, res) && n > capacity[res]) {
+        rejected.push({ id: o.id, reason: `Needs ${n} ${res} but only ${capacity[res]} available` });
+        candidates.splice(i, 1);
+        break;
+      }
+    }
   }
 
   if (candidates.length > MAX_SELECTABLE) {
@@ -140,6 +156,7 @@ export function optimize(opportunities, estimatesById, options) {
       noi += d.noi; upfront += d.upfront; conf = Math.min(conf, d.conf); pref += d.pref; count++;
     }
     for (const res of resources) if ((used[res] ?? 0) > capacity[res]) return null;
+    if (c.maxUpfrontCents !== undefined && upfront > c.maxUpfrontCents) return null;
     if (!count) conf = 0;
     return { mask, noi, upfront, conf, pref, count };
   }
@@ -193,6 +210,11 @@ export function optimize(opportunities, estimatesById, options) {
         return `Not enough ${res}: ${capacity[res]} available and the selected ${usedBy.filter((x) => x.o.resourceUse?.[res]).map((x) => x.o.id).join(', ')} use ${usedAmt}`;
       }
     }
+    if (c.maxUpfrontCents !== undefined) {
+      const sel = data.filter((x) => selSet.has(x.o.id));
+      const total = sel.reduce((t, x) => t + x.upfront, 0) + d.upfront;
+      if (total > c.maxUpfrontCents) return `Would take the combined start-up cost to ${total} cents, above your limit of ${c.maxUpfrontCents} cents`;
+    }
     if (d.noi <= 0) return `Net income is not positive in the ${scenario} scenario`;
     return `Not part of the best combination for ${goal}`;
   }
@@ -220,6 +242,7 @@ export function optimize(opportunities, estimatesById, options) {
     },
     investments: [...investments].sort(cmpStr),
     naiveSumNoiCentsPerYear: naive,
+    eligibleIds: [...eligibleIds].sort(cmpStr),
     confidence: chosen.length ? Math.min(...chosen.map((d) => d.conf)) : 0,
   };
 }

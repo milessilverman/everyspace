@@ -17,7 +17,7 @@ import { PARCEL_SERVICES } from './data/parcel-services.js';
  * @property {(url:string, init?:any)=>Promise<any>} fetch  injected, fetch-compatible
  * @property {string} [now]            ISO time stamped on retrieved values
  * @property {number} [timeoutMs]      per-request timeout (default 12000)
- * @property {string} [userAgent]      descriptive client id; no personal data
+ * @property {string} [userAgent]      server-side only: descriptive client id (no personal data). Omitted by default, because a custom header forces a CORS preflight in a browser
  * @property {ParcelService[]} [services]
  * @property {string[]} [overpassEndpoints]
  * @property {{state?:string, countyFips?:string, county?:string}} [jurisdiction]
@@ -31,7 +31,6 @@ import { PARCEL_SERVICES } from './data/parcel-services.js';
  */
 
 const NOT_VERIFIED = 'not verified 2026-11-24';
-const UA = 'Everyspace-property-intel/1.0 (open-source property planning tool)';
 const CENSUS = 'https://geocoding.geo.census.gov/geocoder';
 const NOMINATIM = 'https://nominatim.openstreetmap.org/search';
 const OVERPASS = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'];
@@ -71,7 +70,7 @@ async function fetchJson(url, deps, init = {}) {
   try {
     const res = await deps.fetch(url, {
       ...init, signal: ctl.signal,
-      headers: { Accept: 'application/json', 'User-Agent': deps.userAgent ?? UA, ...(init.headers ?? {}) },
+      headers: { Accept: 'application/json', ...(deps.userAgent ? { 'User-Agent': deps.userAgent } : {}), ...(init.headers ?? {}) },
     });
     if (!res || !res.ok) return { ok: false, reason: `HTTP ${res?.status ?? 'error'}` };
     try {

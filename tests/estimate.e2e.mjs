@@ -244,10 +244,11 @@ await scenario('combination: caution by default, naive-vs-real sentence, goal ch
   const byId = Object.fromEntries(core.opps.map((o) => [o.id, o]));
   assert.deepEqual(await sel(), labelsOf(core.opt, byId), 'default goal matches core');
   // sentence from core numbers
-  assert.match(await text(page, '#combo-naive'), /^Adding everything up would give \$[\d,]+, but these uses share the same space, so the realistic total is \$[\d,]+\./);
+  assert.match(await text(page, '#combo-naive'), /^Adding everything up would give \$[\d,]+, but some of these cannot run together .*, so the realistic total is \$[\d,]+\./);
   assert.equal(Number(await page.locator('#combo-naive [data-naive-cents]').getAttribute('data-naive-cents')), core.opt.naiveSumNoiCentsPerYear);
   assert.equal(Number(await page.locator('#combo-naive [data-real-cents]').getAttribute('data-real-cents')), core.opt.totals.noiCentsPerYear);
   assert.ok(core.opt.totals.noiCentsPerYear < core.opt.naiveSumNoiCentsPerYear);
+  assert.ok(core.opt.eligibleIds.length > core.opt.selected.length, 'sentence only appears when something eligible was left out');
   assert.equal(await cents(page, '#combo-totals [data-scenario="baseline"][data-period="year"]'), core.opt.totals.noiCentsPerYear);
   assert.equal(await page.locator('#combo-totals thead th').count(), 4);
   assert.match(await text(page, '#combo-rejected'), /Conflicts with/);
@@ -261,6 +262,10 @@ await scenario('combination: caution by default, naive-vs-real sentence, goal ch
     const c = corePipeline(r.profile, { goal });
     await page.waitForFunction((g) => document.querySelector('#goal').value === g, goal);
     assert.deepEqual(await sel(), labelsOf(c.opt, byId), `goal ${goal} matches core`);
+    // the "adding everything up" sentence appears only when something eligible was left out, and shows core's numbers
+    const left = c.opt.eligibleIds.some((id) => !c.opt.selected.includes(id));
+    assert.equal(await page.locator('#combo-naive').count(), left && c.opt.selected.length ? 1 : 0, `goal ${goal}: sentence presence`);
+    if (left && c.opt.selected.length) assert.equal(Number(await page.locator('#combo-naive [data-naive-cents]').getAttribute('data-naive-cents')), c.opt.naiveSumNoiCentsPerYear);
     if (JSON.stringify(await sel()) !== JSON.stringify(before)) changed = true;
   }
   assert.ok(changed, 'at least one goal selects a different set than the default');
@@ -274,7 +279,7 @@ await scenario('combination: caution by default, naive-vs-real sentence, goal ch
   // max upfront: unknown start-up costs are listed as left out, not guessed
   await page.fill('#max-upfront', '100');
   await page.locator('#max-upfront').blur();
-  await page.waitForFunction(() => document.querySelector('#combo-rejected')?.innerText.includes('Start-up cost is unknown'));
+  await page.waitForFunction(() => document.querySelector('#combo-rejected')?.innerText.includes('Start-up cost unknown: enter it to include this under your budget'));
   await page.fill('#max-upfront', '');
   await page.locator('#max-upfront').blur();
   // only rules on file -> caution goes away; nothing is selected because no rules are on file for these uses

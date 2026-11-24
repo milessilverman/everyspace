@@ -44,7 +44,7 @@ test('defaultInputs: price and volume copied from TYPICAL / estimateItem, tagged
   assert.equal(i.capacityUnitsPerMonth.value, 30.4);
   assert.equal(i.capacityUnitsPerMonth.tag, 'measured');
   assert.equal(i.platformFeeRate.value, 0.155); // airbnb host fee
-  assert.equal(i.platformFeeRate.confidence, 0.3);
+  assert.equal(i.platformFeeRate.confidence, 0.2);
   assert.deepEqual(i.seasonality.value, Array(12).fill(1));
   assert.equal(i.seasonality.confidence, 0.1);
 });
@@ -257,8 +257,12 @@ test('owner overrides: tag/source/confidence/retrievedAt, owner-history spread s
   assert.ok(before.assumptions.some((a) => a.key === 'scenario.conservative' && /uncalibrated/.test(a.text)));
   assert.ok(after.assumptions.some((a) => a.key === 'scenario.conservative' && /owner-history/.test(a.text) && /x0\.95/.test(a.text)));
   assert.equal(before.confidence, 0.15);
-  assert.equal(after.confidence, 0.8); // min(0.9, 0.9, evidence 0.8, feasibility 0.9); no cost missing
-  assert.equal(after.confidenceLabel, 'high');
+  // min(0.9, 0.9, evidence 0.8, feasibility 0.9) = 0.8, but a nightly category with the flat default seasonality is capped at 0.6
+  assert.equal(after.confidence, 0.6);
+  assert.equal(after.confidenceLabel, 'medium');
+  const seasonal = estimateOpportunity(home(), fullInputs({ seasonality: [0.8, 0.8, 0.9, 1, 1.1, 1.2, 1.3, 1.3, 1.1, 1, 0.8, 0.7] }));
+  assert.equal(seasonal.confidence, 0.8, 'every revenue-driving input is confirmed');
+  assert.equal(seasonal.confidenceLabel, 'high');
 });
 
 test('only price owner-confirmed => still the uncalibrated spread set', () => {
@@ -318,4 +322,64 @@ test('summarize: combined totals for a selection in one scenario', () => {
   assert.equal(s.confidence, 0.15);
   assert.equal(summarize([], [], 'baseline').confidence, 0);
   assert.throws(() => summarize([], [], 'best'), /scenario/);
+});
+
+// ---------- review-gate #9: owner cleaning cost without a booking count ----------
+test('cleaning cost entered while bookings per month is unknown is reported as not included, never silently dropped', () => {
+  const base = defaultInputs(home(), null);
+  const i = withOverrides(base, { priceCents: 10000, unitsPerMonth: 20, cleaningCentsPerBooking: 8000 }, NOW);
+  const e = estimateOpportunity(home(), i);
+  assert.equal(e.scenarios.baseline.cleaningCentsPerMonth, 0);
+  assert.ok(e.missing.includes('bookingsPerMonth'));
+  assert.deepEqual(e.notIncluded.map((x) => x.key), ['cleaningCentsPerBooking']);
+  assert.match(e.notIncluded[0].reason, /cleaning cost entered but number of bookings unknown, so cleaning is not included/);
+  assert.match(e.inputs.bookingsPerMonth.note, /cleaning is not included/);
+  assert.ok(e.assumptions.some((a) => a.key === 'cleaningCentsPerBooking' && /^Not included: cleaning cost entered/.test(a.text)));
+  assert.ok(e.confidence <= 0.3, 'missing-cost cap stays');
+  assert.equal(i.bookingsPerMonth.value, null, 'no booking count is guessed');
+  // with a booking count the cleaning is included and the flag is empty
+  const ok = estimateOpportunity(home(), withOverrides(i, { bookingsPerMonth: 5 }, NOW));
+  assert.deepEqual(ok.notIncluded, []);
+  assert.ok(ok.scenarios.baseline.cleaningCentsPerMonth > 0);
+  // no cleaning entered: nothing to flag
+  assert.deepEqual(estimateOpportunity(home(), withOverrides(base, { priceCents: 10000, unitsPerMonth: 20 }, NOW)).notIncluded, []);
+});
+
+// ---------- review-gate #10: confidence with default fee / seasonality ----------
+test('confidence is capped at medium (0.6) while the platform fee is not confirmed or verified', () => {
+  const all = { priceCents: 10000, unitsPerMonth: 20, bookingsPerMonth: 5, cleaningCentsPerBooking: 5000, utilitiesCentsPerMonth: 1000,
+    insuranceCentsPerMonth: 1000, taxRate: 0.1, permitCentsPerYear: 0, upfrontCents: 0 };
+  const season = [0.8, 0.8, 0.9, 1, 1.1, 1.2, 1.3, 1.3, 1.1, 1, 0.8, 0.7];
+  const withDefaultFee = estimateOpportunity(home(), withOverrides(defaultInputs(home(), null), { ...all, seasonality: season }, NOW));
+  assert.equal(withDefaultFee.inputs.platformFeeRate.tag, 'estimated');
+  assert.equal(withDefaultFee.confidence, 0.6);
+  assert.equal(withDefaultFee.confidenceLabel, 'medium');
+  // fee confirmed but seasonality is the flat default, nightly category
+  const flat = estimateOpportunity(home(), withOverrides(defaultInputs(home(), null), { ...all, platformFeeRate: 0.155 }, NOW));
+  assert.equal(flat.confidence, 0.6);
+  assert.equal(flat.confidenceLabel, 'medium');
+  // every revenue-driving input confirmed: high is reachable
+  const full = estimateOpportunity(home(), withOverrides(defaultInputs(home(), null), { ...all, platformFeeRate: 0.155, seasonality: season }, NOW));
+  assert.equal(full.confidence, 0.8);
+  assert.equal(full.confidenceLabel, 'high');
+  // a daily/monthly category is not capped by the flat seasonality
+  const monthly = (over) => ({ id: 'dp', categoryKey: 'driveway_parking', label: 'Driveway', basis: 'existing', unit: 'month', evidence: [], evidenceConfidence: 0.9,
+    feasibility: { status: 'feasible', rules: [{ ruleId: 'r', summary: 's', effect: 'allow', verified: true }], confidence: 0.8, requirements: [] },
+    conflictsWith: [], resourceUse: {}, effort: 1, privacyImpact: 0, strangersInHome: false, notes: [], ...over });
+  const mo = monthly({});
+  const mi = defaultInputs(mo, null);
+  if (mi.priceCents.tag !== 'unavailable') {
+    const e = estimateOpportunity(mo, withOverrides(mi, { ...all, platformFeeRate: 0.1 }, NOW));
+    assert.equal(e.confidence, 0.8);
+  }
+});
+
+// ---------- unknown local rules: cap, not zero ----------
+test('unknown feasibility caps confidence at 0.3 instead of forcing 0 when price and volume are the owner\'s', () => {
+  const unknown = home({ feasibility: { status: 'unknown', rules: [], confidence: 0, requirements: [] } });
+  const e = estimateOpportunity(unknown, fullInputs());
+  assert.equal(e.confidence, 0.3);
+  assert.equal(e.confidenceLabel, 'low');
+  // still no better than the default-input estimate when nothing is the owner's
+  assert.ok(estimateOpportunity(unknown, defaultInputs(unknown, null)).confidence <= 0.15);
 });

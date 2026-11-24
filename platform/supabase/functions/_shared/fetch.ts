@@ -90,6 +90,8 @@ function blockedIPv6(g: number[]): boolean {
   if ((g[0] & 0xffc0) === 0xfe80 || (g[0] & 0xffc0) === 0xfec0) return true; // link-local, site-local
   if ((g[0] & 0xff00) === 0xff00) return true; // multicast
   if (g[0] === 0x2001 && (g[1] === 0x0db8 || g[1] === 0)) return true; // documentation, Teredo
+  if (g[0] === 0x2001 && (g[1] & 0xfff0) === 0x0010) return true; // ORCHID (2001:10::/28), not routable
+  if (g[0] === 0x0100 && g[1] === 0 && g[2] === 0 && g[3] === 0) return true; // discard-only 100::/64
   if (g[0] === 0x2002) return blockedIPv4(v4(g[1], g[2])); // 6to4 embeds an IPv4 address
   return false;
 }
@@ -107,7 +109,7 @@ const isIpLiteral = (host: string) => parseIPv4(host) !== null || host.includes(
 const BLOCKED_SUFFIXES = ['.localhost', '.local', '.internal', '.lan', '.home.arpa'];
 
 function blockedName(host: string): boolean {
-  return host === 'localhost' || !host.includes('.') || BLOCKED_SUFFIXES.some((s) => host.endsWith(s));
+  return host === 'localhost' || !host.includes('.') || host.split('.').some((l) => l === '') || BLOCKED_SUFFIXES.some((s) => host.endsWith(s));
 }
 
 /** Checks everything about a URL that does not need the network. Returns the parsed URL or throws ProviderError('blocked_url'). */
@@ -119,7 +121,7 @@ export function assertSafeCalendarUrl(raw: string): URL {
   if (u.protocol !== 'https:') throw bad('Calendar links must start with https://');
   if (u.username || u.password) throw bad('Calendar links cannot contain a user name or password.');
   if (u.port !== '') throw bad('Calendar links must use the standard secure port.');
-  const host = u.hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+  const host = u.hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.+$/, '');
   if (isIpLiteral(host) ? isPrivateAddress(host) : blockedName(host)) throw bad("Everyspace can't read calendars from that address.");
   return u;
 }
@@ -131,15 +133,24 @@ export const defaultResolver: Resolver = async (host) => {
   // deno-lint-ignore no-explicit-any
   const d = (globalThis as any).Deno;
   if (!d || typeof d.resolveDns !== 'function') return null;
-  const out: string[] = []; let unsupported = false;
+  const out: string[] = [];
+  let unsupported = 0; let answered = 0;
   for (const type of ['A', 'AAAA']) {
-    try { out.push(...(await d.resolveDns(host, type)) as string[]); } catch (e) {
+    try {
+      out.push(...(await d.resolveDns(host, type)) as string[]);
+      answered++;
+    } catch (e) {
       const text = `${(e as Error)?.name ?? ''} ${(e as Error)?.message ?? ''}`;
-      if (/NotSupported|not (yet )?(implemented|supported)|unsupported/i.test(text)) unsupported = true;
+      if (/NotSupported|not (yet )?(implemented|supported)|unsupported/i.test(text)) { unsupported++; continue; }
+      // "No records of this type" is a valid answer; any other failure (timeout, SERVFAIL, ...) is not, and the
+      // runtime's own lookup might still return a private address: fail closed.
+      if (/NotFound|no (such )?(record|data|address)|NXDOMAIN|not found/i.test(text)) { answered++; continue; }
+      throw new Error(`DNS lookup failed (${type})`);
     }
   }
-  if (out.length) return out;
-  if (unsupported) return null;
+  if (unsupported === 2) return null; // this runtime cannot resolve at all: documented fail-open
+  if (unsupported > 0) throw new Error('DNS lookup incomplete'); // one type unsupported: partial answer, fail closed
+  if (out.length && answered > 0) return out;
   throw new Error('no addresses');
 };
 
@@ -153,7 +164,7 @@ function raceAbort<T>(p: Promise<T>, signal: AbortSignal): Promise<T> {
 }
 
 async function assertPublicHost(u: URL, resolve: Resolver | null, signal: AbortSignal): Promise<void> {
-  const host = u.hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+  const host = u.hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.+$/, '');
   if (isIpLiteral(host) || !resolve) return;
   let addrs: string[] | null;
   try { addrs = await raceAbort(resolve(host), signal); } catch (e) {

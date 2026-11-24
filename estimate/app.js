@@ -32,12 +32,6 @@ const dateText = (iso) => {
   return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' });
 };
 
-/**
- * fetch handed to the core resolver. The core adds a custom `User-Agent` header, which a browser cannot send
- * cross-origin without a failing CORS preflight; only the safelisted `Accept` header is kept.
- */
-const browserFetch = (url, init = {}) => fetch(url, { ...init, headers: { Accept: 'application/json' } });
-
 // ---------------------------------------------------------------------------------------------------------------
 // vocabulary
 // ---------------------------------------------------------------------------------------------------------------
@@ -146,7 +140,7 @@ async function lookup(extra = {}) {
   let res;
   try {
     res = await resolveAddress(S.address, {
-      fetch: browserFetch, now: nowIso(), geocoders: BROWSER_GEOCODERS, nowMs: () => Date.now(), nominatimLimiter: S.limiter, ...extra,
+      fetch: (url, init) => fetch(url, init), now: nowIso(), geocoders: BROWSER_GEOCODERS, nowMs: () => Date.now(), nominatimLimiter: S.limiter, ...extra,
     });
   } catch (e) {
     res = { ok: false, profile: createProfile(), steps: [{ step: 'geocode', ok: false, reason: e instanceof Error ? e.message : String(e), source: 'lookup' }] };
@@ -441,6 +435,10 @@ function whyConfidence(o, e) {
   else if (f.rules.some((r) => !r.verified)) reasons.push('the local rule text is not yet verified');
   const costMissing = e.missing.filter((k) => !NEEDED_KEYS.includes(k) && k !== 'seasonality');
   if (costMissing.length) reasons.push('some costs are not included');
+  for (const n of e.notIncluded ?? []) reasons.push(n.reason);
+  const fee = e.inputs.platformFeeRate;
+  if (fee.tag === 'estimated') reasons.push('the listing-site fee is an unverified estimate');
+  if ((o.unit === 'night' || o.unit === 'hour') && e.inputs.seasonality.tag === 'estimated') reasons.push('busy and quiet months are not set (flat year assumed)');
   if (o.evidenceConfidence < 0.4) reasons.push('the property details behind it are estimated');
   if (!reasons.length) return `${CONF_WORDS[e.confidenceLabel]}: you entered your own price and bookings and the local rules are on file.`;
   return `${CONF_WORDS[e.confidenceLabel]}: ${reasons.join(', and ')}.`;
@@ -586,17 +584,16 @@ function comboHtml(view) {
     const shown = (f, t) => (f === 'upfrontCents' && t.upfrontUnknownIds.length ? (t[f] === 0 ? 'Unknown' : `${money(t[f])} + unknown`) : money(t[f]));
     const row = (title, f, cls = '', attr = '') => `<tr><th scope="row">${title}</th>${totals.map(({ s, t }) => `<td class="${cls}" ${attr ? `data-scenario="${s}" data-period="${attr}" data-cents="${t[f]}"` : ''}>${shown(f, t)}</td>`).join('')}</tr>`;
     const sel = opt.selected.map((id) => `<li><strong>${esc(label(id))}</strong> <span class="muted small">(${esc(BASIS_WORDS[byId[id]?.basis] ?? '')}, baseline ${money(estimates[id].scenarios.baseline.noiCentsPerYear)} a year on its own)</span></li>`).join('');
-    const same = opt.naiveSumNoiCentsPerYear === opt.totals.noiCentsPerYear;
+    // Only compare the two totals when something eligible was left out; the naive sum covers exactly `eligibleIds`.
+    const sameSet = opt.eligibleIds.length === opt.selected.length && opt.eligibleIds.every((id) => opt.selected.includes(id));
     result = `<div style="margin-top:14px"><h3>Best combination for you</h3>
       <ul class="plain" id="combo-selected">${sel}</ul>
       <div class="tablewrap" style="margin-top:10px"><table class="scen" id="combo-totals"><caption class="sr-only">Combined net income of the best combination</caption>
         <thead><tr><th scope="col">Combined</th>${head}</tr></thead><tbody>
         ${row('Net income per month', 'noiCentsPerMonth', '', 'month')}${row('Net income per year', 'noiCentsPerYear', 'big', 'year')}
         ${row('Gross income per year', 'grossCentsPerYear')}${row('Start-up cost', 'upfrontCents')}</tbody></table></div>
-      <p class="why" id="combo-naive" style="margin-top:10px">${same
-    ? `Adding everything up gives <strong data-cents="${opt.naiveSumNoiCentsPerYear}">${money(opt.naiveSumNoiCentsPerYear)}</strong> a year, the same as the realistic total, because none of the options left out would add income here.`
-    : `Adding everything up would give <strong data-naive-cents="${opt.naiveSumNoiCentsPerYear}">${money(opt.naiveSumNoiCentsPerYear)}</strong>, but these uses share the same space, so the realistic total is <strong data-real-cents="${opt.totals.noiCentsPerYear}">${money(opt.totals.noiCentsPerYear)}</strong>.`}
-        <span class="muted small">Baseline net income per year.</span></p>
+      ${sameSet ? '' : `<p class="why" id="combo-naive" style="margin-top:10px">Adding everything up would give <strong data-naive-cents="${opt.naiveSumNoiCentsPerYear}">${money(opt.naiveSumNoiCentsPerYear)}</strong>, but some of these cannot run together (they share the same space or resources, or would go over your start-up budget), so the realistic total is <strong data-real-cents="${opt.totals.noiCentsPerYear}">${money(opt.totals.noiCentsPerYear)}</strong>.
+        <span class="muted small">Baseline net income per year.</span></p>`}
       <p class="small muted">Confidence: ${esc(CONF_WORDS[totals[1].t.confidenceLabel])}. ${totals[1].t.upfrontUnknownIds.length ? 'Start-up cost is unknown for some of these.' : ''}</p></div>`;
   }
   const rejected = opt.rejected.filter((r) => !opt.investments.includes(r.id));

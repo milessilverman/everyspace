@@ -1,7 +1,7 @@
 // @ts-check
 // Host-side marketplace fees, copied from index.html PLATFORMS (lines 5978-6001). That table's own header
 // (index.html:5947-5949, 5974-5977) says these are ASSUMPTIONS to verify before launch; `verified` is preserved
-// exactly. NOT market data verified by Everyspace. Default confidence 0.3 per docs/revenue-method.md §2.
+// exactly. NOT market data verified by Everyspace. Default confidence 0.2: an uncited, unverified number (docs/STATE.md hard rule).
 //
 // Only `hostFeePct` is used by the revenue model (EstimateInputs.platformFeeRate is a fraction of gross that the
 // host pays). `perBookingFee` (dollars) is kept for display; the model has no per-booking fee input, so it is
@@ -17,7 +17,7 @@
  */
 
 export const FEE_SOURCE = 'index.html PLATFORMS fee table (estimates, verified:false unless stated)';
-export const FEE_CONFIDENCE = 0.3;
+export const FEE_CONFIDENCE = 0.2;
 
 /** @type {Readonly<Record<string, Readonly<PlatformFee>>>} */
 export const PLATFORM_FEES = Object.freeze({

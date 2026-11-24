@@ -35,6 +35,7 @@ const TAGS = Object.freeze(['measured', 'estimated', 'owner-confirmed', 'unavail
 export const DAYS_PER_MONTH = 30.4; // docs/revenue-method.md §2 (calendar arithmetic)
 export const MISSING_COST_CAP = 0.3; // §5
 export const REGULATORY_CAP = 0.3; // §5
+export const DEFAULT_INPUT_CAP = 0.6; // §6: "medium" at most while a revenue-driving input is a planning default
 export const OWNER_CONFIDENCE = 0.9; // §2
 export const SEASONALITY_CONFIDENCE = 0.1; // §2
 export const UPFRONT_EXISTING_CONFIDENCE = 0.2;
@@ -143,6 +144,7 @@ export function defaultInputs(opportunity, _profile, opts = {}) {
   const ch = defaultChannelFor(cat, unit);
   const platformFeeRate = ch
     ? mk(ch.fee.hostFeeRate, 'fraction', {
+      tag: ch.fee.verified ? 'measured' : 'estimated',
       source: FEE_SOURCE,
       confidence: FEE_CONFIDENCE,
       method: `${ch.fee.name} host fee (${ch.fee.sourceRef}); default channel from ${ch.ruleRef}; verified:${ch.fee.verified}`,
@@ -313,6 +315,20 @@ function regulatoryCapApplies(o) {
 }
 
 /**
+ * §6: "high" needs every revenue-driving input to be owner-confirmed or verified. True when an input that moves the
+ * result is still a planning default: the platform fee, tax and permit rates, the capacity ceiling, and (for nightly
+ * and hourly categories, where months differ) the flat seasonality.
+ * @param {Opportunity} o @param {EstimateInputs} used
+ */
+function usesPlanningDefaults(o, used) {
+  const confirmed = (/** @type {keyof EstimateInputs} */ k) => used[k].tag === 'owner-confirmed' || used[k].tag === 'measured';
+  for (const k of /** @type {Array<keyof EstimateInputs>} */ (['platformFeeRate', 'taxRate', 'permitCentsPerYear', 'capacityUnitsPerMonth'])) {
+    if (used[k].tag !== 'unavailable' && !confirmed(k)) return true;
+  }
+  return (o.unit === 'night' || o.unit === 'hour') && !confirmed('seasonality');
+}
+
+/**
  * Estimate one opportunity in all three scenarios.
  * @param {Opportunity} opportunity
  * @param {EstimateInputs} inputs
@@ -340,6 +356,15 @@ export function estimateOpportunity(opportunity, inputs) {
     const text = [s.method, s.note].filter(Boolean).join('. ') || `${key} default`;
     assumptions.push({ key, text, source: s.source });
   }
+  /** @type {Array<{key:string, reason:string}>} */
+  const notIncluded = [];
+  // An owner-entered cleaning cost cannot be used without a booking count, and no count is ever guessed: say so.
+  if (used.cleaningCentsPerBooking.tag !== 'unavailable' && used.bookingsPerMonth.tag === 'unavailable') {
+    const reason = 'cleaning cost entered but number of bookings unknown, so cleaning is not included';
+    used.bookingsPerMonth.note = reason;
+    notIncluded.push({ key: 'cleaningCentsPerBooking', reason });
+    assumptions.push({ key: 'cleaningCentsPerBooking', text: `Not included: ${reason}`, source: 'none' });
+  }
   for (const k of missing) {
     if (COST_KEYS.includes(k)) assumptions.push({ key: k, text: `Not included: ${used[k].note ?? 'unavailable'}`, source: 'none' });
   }
@@ -357,10 +382,14 @@ export function estimateOpportunity(opportunity, inputs) {
     scenarios = /** @type {any} */ ({});
     for (const name of SCENARIO_NAMES) /** @type {any} */ (scenarios)[name] = computeScenario(used, set[name]);
     const ev = typeof opportunity.evidenceConfidence === 'number' ? opportunity.evidenceConfidence : 0;
-    const fe = typeof opportunity.feasibility?.confidence === 'number' ? opportunity.feasibility.confidence : 0;
-    confidence = Math.min(used.priceCents.confidence, used.unitsPerMonth.confidence, ev, fe);
+    confidence = Math.min(used.priceCents.confidence, used.unitsPerMonth.confidence, ev);
+    // Unknown local rules are not "zero confidence in the owner's numbers": the regulatory cap below applies instead.
+    if (opportunity.feasibility && opportunity.feasibility.status !== 'unknown' && typeof opportunity.feasibility.confidence === 'number') {
+      confidence = Math.min(confidence, opportunity.feasibility.confidence);
+    }
     if (missing.some((k) => COST_KEYS.includes(k))) confidence = Math.min(confidence, MISSING_COST_CAP);
     if (regulatoryCapApplies(opportunity)) confidence = Math.min(confidence, REGULATORY_CAP);
+    if (usesPlanningDefaults(opportunity, used)) confidence = Math.min(confidence, DEFAULT_INPUT_CAP);
   }
 
   return {
@@ -372,6 +401,7 @@ export function estimateOpportunity(opportunity, inputs) {
     inputs: used,
     assumptions,
     missing: [...missing],
+    notIncluded,
   };
 }
 

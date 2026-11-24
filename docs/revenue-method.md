@@ -12,7 +12,7 @@ One estimate per opportunity (a category on a specific property), then one optim
 | units sold per month | occupancy assumptions already in `index.html:17744-17790` (no citation) | estimated / 0.15 | yes |
 | capacity units per month | arithmetic from the unit (30.4 nights; owner-set hours x days) | measured for nights/months; estimated for hourly | yes |
 | bookings per month | units / typical booking length (assumption) | estimated / 0.15 | yes |
-| platform fee | `PLATFORMS` table in `index.html:5978` (`verified:false`) | estimated / 0.3 | yes |
+| platform fee | `PLATFORMS` table in `index.html:5978` (`verified:false`) | estimated / 0.2 | yes |
 | cleaning, utilities, insurance | none | unavailable | yes |
 | occupancy tax rate, permit cost | `core/data/jurisdictions.js` (unverified until official pages are fetched) | estimated / 0.2, or unavailable | yes |
 | upfront cost | none | unavailable (0 only for `existing` basis with a note) | yes |
@@ -45,13 +45,20 @@ No comparable market data source is licensed or verified yet (`docs/data-availab
 |---|---|
 | price or volume unavailable | estimate is `available: false`, no number shown, the input is listed under `missing` |
 | a cost input unavailable | excluded from the math, listed as "not included", confidence capped at 0.3 |
-| regulatory status unknown or rule unverified | shown as "check local rules"; not selected by the optimizer unless the owner allows it; confidence capped at 0.3 |
+| cleaning cost entered but bookings per month unavailable | the cleaning cost cannot be applied and no booking count is ever guessed. `bookingsPerMonth` stays in `missing` with the note "cleaning cost entered but number of bookings unknown, so cleaning is not included"; the estimate carries `notIncluded: [{key: 'cleaningCentsPerBooking', reason}]` for the page to show; confidence stays capped at 0.3 |
+| regulatory status unknown or rule unverified | shown as "check local rules"; not selected by the optimizer unless the owner allows it; confidence capped at 0.3 (a cap, not zero: the owner's own price and volume still count) |
 
 ## 6. Confidence
-`confidence = min(price, volume, evidence, feasibility)`, then the caps above. Labels: low < 0.4 <= medium < 0.75 <= high.
+`confidence = min(price, volume, evidence, feasibility)`, then the caps:
+- A feasibility status of `unknown` does not enter the minimum (it is not zero confidence in the owner's numbers); the 0.3 regulatory cap in §5 applies instead. A known status contributes its own confidence.
+- Missing cost inputs and unknown or unverified local rules cap at **0.3** (§5).
+- Capped at **0.6** ("medium") while any revenue-driving input is still a planning default: the platform fee, occupancy-tax rate, permit cost or capacity ceiling not owner-confirmed or verified, or, for nightly and hourly categories, seasonality that is still the flat default.
+- **"High" requires every revenue-driving input to be owner-confirmed or verified** (and price, volume, evidence and feasibility at or above 0.75).
+
+Labels: low < 0.4 <= medium < 0.75 <= high.
 
 ## 7. Optimization (most profitable feasible combination, not a sum)
-Exhaustive search over subsets (max 20 opportunities). A subset is feasible when: no pair is in `conflictsWith`; summed `resourceUse` fits `resourceCapacity`; every member passes the owner constraints (upfront cap, effort, privacy, no strangers in home, excluded categories, regulatory status). Ties break on higher confidence, then fewer opportunities, then ids alphabetically.
+Exhaustive search over subsets (max 20 opportunities). A subset is feasible when: no pair is in `conflictsWith`; summed `resourceUse` fits `resourceCapacity`; every member passes the owner constraints (effort, privacy, no strangers in home, excluded categories, regulatory status); and the **combined** start-up cost of the whole set is at most the owner's `maxUpfrontCents`. An opportunity whose start-up cost is unknown is left out when a maximum is set ("Start-up cost unknown: enter it to include this under your budget"). Ties break on higher confidence, then fewer opportunities, then ids alphabetically.
 | goal | objective |
 |---|---|
 | max_net_income | highest NOI per year |
@@ -59,7 +66,7 @@ Exhaustive search over subsets (max 20 opportunities). A subset is feasible when
 | min_effort | only opportunities with effort <= 2 (or `maxEffort`), then highest NOI |
 | privacy | only privacy impact <= 1 and no strangers in the home, then highest NOI |
 | fastest_payback | lowest combined payback months, then highest NOI |
-The result always reports `naiveSumNoiCentsPerYear` next to the optimized total so the owner sees why they differ.
+The result reports `eligibleIds` (opportunities that passed every owner, rule and investment filter, before conflicts, shared-resource capacity and the combined budget) and `naiveSumNoiCentsPerYear`, the sum over exactly that set. The two totals therefore differ only because of conflicts, capacity and budget. When the eligible set equals the selected set the page shows no "adding everything up" sentence.
 
 ## 8. Communication rules (estimator UI)
 Show three scenarios side by side; show every input with its source tag and an edit control; show what is not included; show confidence in words; never show a single headline number without its range; never say "you will earn".

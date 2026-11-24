@@ -271,8 +271,10 @@ test('(viii) an owner price+volume override raises confidence and narrows the sc
     assert.ok(a.assumptions.every((x) => x.key !== 'priceCents' && x.key !== 'unitsPerMonth'), 'owner values are not listed as assumptions');
   }
   assert.ok(after.estimates.entire_home.confidence > base.estimates.entire_home.confidence, 'confidence rises where a rule is on file');
-  // honest limit: where local rules are unknown, feasibility confidence is 0, so the owner's own numbers cannot lift the label
+  // honest limit: where local rules are unknown, confidence is capped at 0.3 (the regulatory cap), not forced to 0
   assert.equal(after.opps.find((x) => x.id === 'pool').feasibility.status, 'unknown');
   assert.equal(after.estimates.pool.confidenceLabel, 'low');
+  assert.equal(after.estimates.pool.confidence, 0.3);
+  assert.ok(after.estimates.pool.confidence > base.estimates.pool.confidence, 'the owner\'s own price and volume count even where rules are unknown');
   assert.equal(after.estimates.pool.scenarios.baseline.grossCentsPerYear, 4000 * 20 * 12);
 });

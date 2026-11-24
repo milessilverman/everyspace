@@ -195,7 +195,9 @@ test('investments (permit/construction) are separated unless includeInvestments'
   assert.deepEqual(r.selected, ['now']);
   assert.deepEqual(r.investments, ['adu', 'str']);
   assert.match(reasonOf(r, 'adu'), /Investment \(construction\)/);
-  assert.equal(r.naiveSumNoiCentsPerYear, 9600);
+  // naive sum covers only what was eligible: the investments are reported separately, so they are not in it
+  assert.equal(r.naiveSumNoiCentsPerYear, 100);
+  assert.deepEqual(r.eligibleIds, ['now']);
   const all = optimize(opps, ests, { goal: 'max_net_income', constraints: { includeInvestments: true } });
   assert.deepEqual(all.selected, ['adu', 'now', 'str']);
   assert.deepEqual(all.investments, []);
@@ -216,11 +218,14 @@ test('unknown upfront: allowed for max_net_income, rejected for min_upfront / fa
   const m = optimize(opps, ests, { goal: 'max_net_income' });
   assert.deepEqual(m.selected, ['u']);
   assert.equal(m.totals.paybackMonths, null);
-  for (const args of [{ goal: 'min_upfront' }, { goal: 'fastest_payback' }, { goal: 'max_net_income', constraints: { maxUpfrontCents: 5 } }]) {
+  for (const args of [{ goal: 'min_upfront' }, { goal: 'fastest_payback' }]) {
     const r = optimize(opps, ests, args);
     assert.deepEqual(r.selected, []);
     assert.match(reasonOf(r, 'u'), /Start-up cost is unknown/);
   }
+  const capped = optimize(opps, ests, { goal: 'max_net_income', constraints: { maxUpfrontCents: 5 } });
+  assert.deepEqual(capped.selected, []);
+  assert.equal(reasonOf(capped, 'u'), 'Start-up cost unknown: enter it to include this under your budget');
 });
 
 test('negative-NOI opportunity is left out with a reason', () => {
@@ -373,4 +378,45 @@ test('end to end: real estimates, conflicting stay vs pool, parking capacity', (
   assert.match(reasonOf(r, 'pool_by_day'), /Estimate unavailable/);
   assert.equal(r.naiveSumNoiCentsPerYear, (243360 + 9272 + 54400) * 12);
   assert.equal(r.confidence, 0.15);
+});
+
+// ---------- review-gate #11: the budget applies to the COMBINED start-up cost ----------
+test('maxUpfrontCents applies to the combined start-up cost of the selection, not each opportunity', () => {
+  const opps = [o('a'), o('b')];
+  const ests = byId([est('a', { noi: 1000, up: 4000 }), est('b', { noi: 900, up: 4000 })]);
+  const r = optimize(opps, ests, { goal: 'max_net_income', constraints: { maxUpfrontCents: 5000 } });
+  assert.deepEqual(r.selected, ['a']);
+  assert.ok(r.totals.upfrontCents <= 5000);
+  assert.match(reasonOf(r, 'b'), /combined start-up cost/);
+  // a budget that fits both keeps both
+  const ok = optimize(opps, ests, { goal: 'max_net_income', constraints: { maxUpfrontCents: 8000 } });
+  assert.deepEqual(ok.selected, ['a', 'b']);
+  // the optimizer picks the best SET under the budget, not a greedy one
+  const r2 = optimize([o('x'), o('y'), o('z')], byId([est('x', { noi: 1000, up: 6000 }), est('y', { noi: 700, up: 3000 }), est('z', { noi: 600, up: 3000 })]),
+    { goal: 'max_net_income', constraints: { maxUpfrontCents: 6000 } });
+  assert.deepEqual(r2.selected, ['y', 'z']);
+  assert.ok(r2.totals.upfrontCents <= 6000);
+});
+
+// ---------- review-gate (naive sum): same set on both sides ----------
+test('naive sum and eligibleIds cover exactly the eligible set; the gap comes only from conflicts/capacity', () => {
+  const opps = [o('a', { conflictsWith: ['b'] }), o('b'), o('inv', { basis: 'construction' }), o('ban', { feasibility: { status: 'prohibited', rules: [], confidence: 0.9, requirements: [] } }), o('na'), o('big', { effort: 5 })];
+  const ests = byId([est('a', { noi: 1000 }), est('b', { noi: 800 }), est('inv', { noi: 29203 }), est('ban', { noi: 777 }), unavailableEst('na'), est('big', { noi: 5555 })]);
+  const r = optimize(opps, ests, { goal: 'max_net_income', constraints: { maxEffort: 3 } });
+  assert.deepEqual(r.eligibleIds, ['a', 'b']);
+  assert.equal(r.naiveSumNoiCentsPerYear, 1800);
+  assert.deepEqual(r.selected, ['a']);
+  assert.equal(r.totals.noiCentsPerYear, 1000);
+  // nothing in conflict: eligible set equals selected set and the two numbers are equal
+  const calm = optimize([o('a'), o('b')], byId([est('a', { noi: 1000 }), est('b', { noi: 800 })]), { goal: 'max_net_income' });
+  assert.deepEqual(calm.eligibleIds, calm.selected);
+  assert.equal(calm.naiveSumNoiCentsPerYear, calm.totals.noiCentsPerYear);
+});
+
+test('an opportunity needing more of a shared resource than exists is eligible but rejected for capacity', () => {
+  const r = optimize([o('p', { resourceUse: { parking: 3 } }), o('q')], byId([est('p', { noi: 500 }), est('q', { noi: 100 })]), { goal: 'max_net_income', constraints: { resourceCapacity: { parking: 2 } } });
+  assert.deepEqual(r.eligibleIds, ['p', 'q']);
+  assert.equal(r.naiveSumNoiCentsPerYear, 600);
+  assert.deepEqual(r.selected, ['q']);
+  assert.match(reasonOf(r, 'p'), /Needs 3 parking/);
 });

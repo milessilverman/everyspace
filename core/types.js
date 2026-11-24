@@ -141,6 +141,7 @@
  * @property {EstimateInputs} inputs        exactly what was used, for display
  * @property {Array<{key:string, text:string, source:string}>} assumptions
  * @property {string[]} missing             input names that were unavailable
+ * @property {Array<{key:string, reason:string}>} [notIncluded]  inputs the owner gave that could not be used (e.g. cleaning without a booking count)
  */
 
 /**
@@ -166,8 +167,10 @@
  * @property {{noiCentsPerMonth:number, noiCentsPerYear:number, grossCentsPerYear:number, upfrontCents:number,
  *   paybackMonths:number|null, effort:number, privacyImpact:number}} totals
  * @property {string[]} investments                    ids needing permit/construction, evaluated separately
- * @property {number} naiveSumNoiCentsPerYear          sum over all available opportunities, shown to explain
- *                                                     why the combination is lower than "everything added up"
+ * @property {number} naiveSumNoiCentsPerYear          sum over the `eligibleIds` only (before conflicts, shared-resource
+ *                                                     capacity and the combined budget), so it differs from the
+ *                                                     selected total only because of those
+ * @property {string[]} [eligibleIds]                  opportunities that passed every owner/rule/investment filter in this run
  * @property {number} confidence
  */
 

@@ -178,3 +178,62 @@ test('network failures become fetch_failed with a fixed message', async () => {
   const e = await rejects(fetchCalendar(URL_, opts(fakeFetch(() => { throw new TypeError('fetch failed'); }))), 'fetch_failed');
   assert.match(e.message, /Couldn't reach/);
 });
+
+// ---- DNS: a failed lookup of either record type must fail closed (review-gate #13)
+async function withDeno<T>(resolveDns: (h: string, t: string) => Promise<string[]>, fn: () => Promise<T>): Promise<T> {
+  const g = globalThis as any; const prev = g.Deno;
+  g.Deno = { resolveDns };
+  try { return await fn(); } finally { if (prev === undefined) delete g.Deno; else g.Deno = prev; }
+}
+const notFound = () => Object.assign(new Error('no record found'), { name: 'NotFound' });
+const viaDefault = (f: ReturnType<typeof fakeFetch>) => ({ fetch: f.fn }) as FetchOptions; // resolver = defaultResolver
+
+test('dns: A ok + AAAA lookup error -> rejected (fail closed)', async () => {
+  const f = fakeFetch(() => new Response(ICS));
+  await withDeno(async (_h, t) => { if (t === 'AAAA') throw new Error('timed out'); return [PUBLIC]; },
+    () => rejects(fetchCalendar(URL_, viaDefault(f)), 'fetch_failed'));
+  assert.equal(f.calls.length, 0);
+});
+
+test('dns: A error + AAAA public -> rejected (fail closed)', async () => {
+  const f = fakeFetch(() => new Response(ICS));
+  await withDeno(async (_h, t) => { if (t === 'A') throw new Error('SERVFAIL'); return ['2606:4700::1111']; },
+    () => rejects(fetchCalendar(URL_, viaDefault(f)), 'fetch_failed'));
+  assert.equal(f.calls.length, 0);
+});
+
+test('dns: A ok + AAAA no-records -> allowed', async () => {
+  const f = fakeFetch(() => new Response(ICS));
+  const body = await withDeno(async (_h, t) => { if (t === 'AAAA') throw notFound(); return [PUBLIC]; }, () => fetchCalendar(URL_, viaDefault(f)));
+  assert.equal(body, ICS);
+});
+
+test('dns: both lookups error -> rejected', async () => {
+  const f = fakeFetch(() => new Response(ICS));
+  await withDeno(async () => { throw new Error('timed out'); }, () => rejects(fetchCalendar(URL_, viaDefault(f)), 'fetch_failed'));
+  assert.equal(f.calls.length, 0);
+});
+
+test('dns: a resolved private address is still blocked even when the other type has no records', async () => {
+  const f = fakeFetch(() => new Response(ICS));
+  await withDeno(async (_h, t) => { if (t === 'AAAA') throw notFound(); return ['10.0.0.5']; }, () => rejects(fetchCalendar(URL_, viaDefault(f)), 'blocked_url'));
+});
+
+test('dns: runtime with no resolver function at all stays fail-open (documented)', async () => {
+  const f = fakeFetch(() => new Response(ICS));
+  const g = globalThis as any; const prev = g.Deno; delete g.Deno;
+  try { assert.equal(await fetchCalendar(URL_, viaDefault(f)), ICS); } finally { if (prev !== undefined) g.Deno = prev; }
+});
+
+test('name check: repeated trailing dots and empty labels do not slip past the localhost rule', () => {
+  for (const u of ['https://localhost../', 'https://localhost.../', 'https://a..b.example.com/']) {
+    assert.throws(() => assertSafeCalendarUrl(u), (e: any) => e.code === 'blocked_url', u);
+  }
+  assert.doesNotThrow(() => assertSafeCalendarUrl('https://cal.example.com./x.ics'));
+});
+
+test('non-routable IPv6 ranges (discard 100::/64, ORCHID 2001:10::/28) are blocked; ordinary public IPv6 is not', () => {
+  assert.equal(isPrivateAddress('100::1'), true);
+  assert.equal(isPrivateAddress('2001:10::1'), true);
+  assert.equal(isPrivateAddress('2606:4700::1111'), false);
+});

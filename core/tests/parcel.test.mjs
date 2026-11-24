@@ -36,13 +36,17 @@ const PT = { lat: 34.030009, lng: -118.4199946 };
 
 // ---- geocode ---------------------------------------------------------------------------------------------------
 
-test('geocode: Census match gives coordinates, county FIPS and high confidence; sends a descriptive UA and no address in headers', async () => {
+test('geocode: Census match gives coordinates, county FIPS and high confidence; sends only Accept by default and no address in headers', async () => {
   const f = happy();
   const g = await geocode(ADDRESS, { fetch: f, now: NOW });
   assert.equal(g.ok, true);
   assert.deepEqual([g.provider, g.lat, g.lng, g.confidence], ['census', 34.030009, -118.4199946, 0.8]);
   assert.deepEqual(g.jurisdiction, { country: 'US', state: 'CA', countyFips: '06037', county: 'Los Angeles County', city: 'LOS ANGELES' });
-  assert.match(f.calls[0].init.headers['User-Agent'], /^Everyspace/);
+  for (const c of f.calls) assert.deepEqual(c.init.headers, { Accept: 'application/json' }, 'default requests carry no custom headers');
+  const f2 = happy();
+  await geocode(ADDRESS, { fetch: f2, now: NOW, userAgent: 'Everyspace-server/1.0' });
+  assert.equal(f2.calls[0].init.headers['User-Agent'], 'Everyspace-server/1.0');
+  assert.equal(JSON.stringify(f2.calls[0].init.headers).includes('Venice'), false);
   assert.equal(JSON.stringify(f.calls[0].init.headers).includes('Venice'), false);
 });
 
