@@ -48,20 +48,23 @@ create trigger calendar_imports_health before update of last_status, last_synced
   for each row execute function public.track_import_health();
 
 -- ---------------------------------------------------------------- relations and shared resources
--- A booking on space_id blocks blocks_space_id (an event on the lawn blocks the pool). symmetric = both ways
--- (a studio and a hot tub that overlook each other). No row = independent (an ADU does not block the driveway).
+-- A relation means MUTUAL EXCLUSION: the two spaces can never be in use at the same time, whichever was booked first
+-- (an event on the lawn and a swim in the pool; a studio and a hot tub that overlook each other). The column names
+-- are historical: space_id and blocks_space_id are interchangeable, and each pair is stored once (unique unordered
+-- pair, never a space with itself). No row = independent (an ADU does not block the driveway).
 -- Not transitive, and not inherited by children or parents.
 create table public.space_relations (
   id uuid primary key default gen_random_uuid(),
   space_id uuid not null references public.spaces (id) on delete cascade,
   blocks_space_id uuid not null references public.spaces (id) on delete cascade,
-  "symmetric" boolean not null default false,
   note text check (length(note) <= 300),
   created_at timestamptz not null default now(),
-  check (space_id <> blocks_space_id),
-  unique (space_id, blocks_space_id)
+  check (space_id <> blocks_space_id)
 );
+create unique index space_relations_pair on public.space_relations
+  (least(space_id, blocks_space_id), greatest(space_id, blocks_space_id));
 create index on public.space_relations (blocks_space_id);
+create index on public.space_relations (space_id);
 
 -- Something several spaces draw on: one bathroom for two rooms, four parking places for the house, the ADU and the RV pad.
 create table public.resources (
@@ -113,19 +116,67 @@ begin
 end $$;
 create trigger resources_property_move before update of property_id on public.resources
   for each row execute function public.check_resource_move();
--- A space cannot move to another property while it has relations or resource links.
+-- A space cannot move to another property once anything ties it to its property: a parent, children, relations,
+-- resource links, reservations or holds (review finding 2: a family split across two properties takes two different
+-- locks, so two writers could both book it). Both properties' locks are taken first (in a fixed order), so a move
+-- waits for in-flight bookings and then sees them.
 create function public.check_space_move() returns trigger
 language plpgsql security definer set search_path = '' as $$
 begin
-  if new.property_id <> old.property_id and (
-       exists (select 1 from public.space_relations where new.id in (space_id, blocks_space_id))
-       or exists (select 1 from public.space_resources where space_id = new.id)) then
-    raise exception 'Remove this space''s relations and shared resources before moving it to another property.' using errcode = '23503';
+  if new.property_id is not distinct from old.property_id then return new; end if;
+  perform pg_advisory_xact_lock(hashtextextended(least(old.property_id, new.property_id)::text, 0));
+  perform pg_advisory_xact_lock(hashtextextended(greatest(old.property_id, new.property_id)::text, 0));
+  if old.parent_space_id is not null or new.parent_space_id is not null
+     or exists (select 1 from public.spaces c where c.parent_space_id = new.id)
+     or exists (select 1 from public.space_relations where new.id in (space_id, blocks_space_id))
+     or exists (select 1 from public.space_resources where space_id = new.id)
+     or exists (select 1 from public.reservations where space_id = new.id)
+     or exists (select 1 from public.booking_holds where space_id = new.id) then
+    raise exception 'This space cannot move to another property: it has a parent or children, relations, shared resources, bookings or holds.'
+      using errcode = '23503';
   end if;
   return new;
 end $$;
 create trigger spaces_property_move before update of property_id on public.spaces
   for each row execute function public.check_space_move();
+
+-- Override of 20261116051049's check_space_parent: a parent and its children always share a property, checked from
+-- both ends (the row's own parent, and the row's children when the row itself moves), on INSERT and UPDATE.
+create or replace function public.check_space_parent() returns trigger
+language plpgsql security definer set search_path = '' as $$
+begin
+  if tg_op = 'UPDATE' and new.property_id is distinct from old.property_id
+     and exists (select 1 from public.spaces c where c.parent_space_id = new.id and c.property_id is distinct from new.property_id) then
+    raise exception 'A space can only sit inside another space at the same property.' using errcode = '23503';
+  end if;
+  if new.parent_space_id is null then return new; end if;
+  if new.parent_space_id = new.id or new.id in (select public.space_ancestors(new.parent_space_id)) then
+    raise exception 'A space cannot sit inside itself.';
+  end if;
+  if not exists (select 1 from public.spaces where id = new.parent_space_id and property_id = new.property_id) then
+    raise exception 'A space can only sit inside another space at the same property.' using errcode = '23503';
+  end if;
+  return new;
+end $$;
+
+-- Two spaces that exclude each other cannot both take instant bookings (the one-open-door rule, review finding 6).
+create function public.check_relation_doors() returns trigger
+language plpgsql security definer set search_path = '' as $$
+declare a text; b text;
+begin
+  perform public.lock_property(new.space_id);
+  select l.channel into a from public.channel_listings l
+  where l.space_id = new.space_id and l.booking_mode = 'instant' and l.status in ('pending', 'live') limit 1;
+  select l.channel into b from public.channel_listings l
+  where l.space_id = new.blocks_space_id and l.booking_mode = 'instant' and l.status in ('pending', 'live') limit 1;
+  if a is not null and b is not null then
+    raise exception 'Both spaces take instant bookings (% and %). Switch one of them to request-to-book before linking them.', a, b
+      using errcode = 'P0001', hint = 'ONE_DOOR';
+  end if;
+  return new;
+end $$;
+create trigger space_relations_one_door before insert or update on public.space_relations
+  for each row execute function public.check_relation_doors();
 
 alter table public.space_relations enable row level security;
 alter table public.resources enable row level security;
@@ -167,14 +218,16 @@ language sql stable security definer set search_path = '' as $$
 $$;
 
 -- ---------------------------------------------------------------- the rules
--- Spaces whose bookings block p_space: itself, ancestors, descendants, and spaces related to it.
+-- Spaces whose bookings block p_space: itself, ancestors, descendants, and spaces related to it (a relation is mutual,
+-- so either stored direction counts). Symmetric by construction: b is in blocking_spaces(a) iff a is in
+-- blocking_spaces(b).
 create function public.blocking_spaces(p_space uuid) returns setof uuid
 language sql stable security definer set search_path = '' as $$
   select f.id from public.related_spaces(p_space) as f(id)
   union
   select r.space_id from public.space_relations r where r.blocks_space_id = p_space
   union
-  select r.blocks_space_id from public.space_relations r where r.space_id = p_space and r."symmetric"
+  select r.blocks_space_id from public.space_relations r where r.space_id = p_space
 $$;
 
 -- Everything that stops [p_starts, p_ends) from being booked on p_space. p_ignore skips one reservation or hold
