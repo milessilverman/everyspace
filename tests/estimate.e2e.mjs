@@ -37,9 +37,12 @@ const nominatimSpring = () => {
     address: { ...r.address, house_number: '200', road: 'South Spring Street', postcode: '90012' } }];
 };
 /** Fixture answer for a mocked external URL, or null when the host is not one we mock. */
+let override = null; // a scenario may replace one host's answer: (url, decodedUrl) => {status, body} | undefined
 function answer(urlStr) {
   const u = new URL(urlStr);
   const dec = decodeURIComponent(urlStr);
+  const o = override?.(urlStr, dec);
+  if (o) return o;
   if (u.hostname === 'nominatim.openstreetmap.org') {
     const q = u.searchParams.get('q') ?? '';
     if (q.includes('Failville')) return { status: 503, body: { error: 'down' } };
@@ -452,6 +455,9 @@ await scenario('manual mode: every lookup fails, the log says why, owner basics 
   // "enter details myself" works with no network call at all
   const mockedBefore = rec.mocked.length;
   await page.click('#manual-start');
+  assert.match(await text(page, '#status'), /You have corrections on this page\. Starting again discards them/, 'owner corrections are not dropped silently');
+  assert.ok(await page.locator('[data-opp-card]').count() > 0, 'first press changes nothing');
+  await page.click('#manual-start');
   await page.waitForSelector('#manual-basics');
   assert.equal(rec.mocked.length, mockedBefore);
   assert.equal(await page.locator('[data-opp-card]').count(), 0);
@@ -530,6 +536,186 @@ await scenario('dark mode renders (colour scheme follows the console)', async (p
   assert.equal(bg, 'rgb(11, 16, 22)');
   await page.screenshot({ path: `${SHOTS}/estimate-dark.png`, fullPage: false });
 });
+
+
+// ---- address entry: malformed input, markup, double submit, failure messages (audit additions) ----------------------
+const PWN = '<img src=x onerror=window.__pwn=1>';
+const noPwn = async (page, label) => {
+  assert.equal(await page.evaluate(() => window.__pwn), undefined, `${label}: injected handler did not run`);
+  assert.equal(await page.locator('img[src="x"]').count(), 0, `${label}: no injected <img> element`);
+};
+const nominatimQs = (rec) => rec.mocked.filter((u) => u.includes('nominatim')).map((u) => new URL(u).searchParams.get('q'));
+
+await scenario('arrival URLs: no address, empty, malformed and very long values never break the page', async (page, rec) => {
+  for (const suffix of ['', '#address=', '?address=', '#address=%20%20', '#foo=bar']) {
+    await page.goto('about:blank');
+    await page.goto(URL_PAGE + suffix);
+    await page.waitForSelector('#address');
+    assert.equal(await page.locator('#profile-table, #confirm-yes, #cand-none').count(), 0, `nothing runs for "${suffix}"`);
+    assert.equal(rec.mocked.length, 0, `no request for "${suffix}"`);
+  }
+  // a malformed escape is searched as the text it is (arrival counts as a submit) and must not crash the page
+  await page.goto('about:blank'); // a hash-only change would not reload the page
+  await page.goto(URL_PAGE + '#address=%E0%A4%A');
+  await page.waitForSelector('#profile-table, #manual-basics, #confirm-yes, #cand-none');
+  await page.goto('about:blank');
+  await page.goto(URL_PAGE + '#address=' + 'x'.repeat(5000));
+  await page.waitForSelector('#profile-table, #manual-basics, #confirm-yes, #cand-none');
+  const qs = nominatimQs(rec);
+  assert.ok(qs.length >= 1 && qs.every((q) => q.length <= 300), `address is capped at 300 characters (${qs.map((q) => q.length)})`);
+  assert.equal(await page.evaluate(() => location.hash + location.search), '', 'arrival address removed from the URL');
+  assert.equal(await page.getAttribute('#address', 'maxlength'), '300');
+});
+
+await scenario('markup in the typed address is shown as text and never runs', async (page, rec) => {
+  await page.goto(URL_PAGE);
+  await search(page, PWN);
+  await page.waitForSelector('#profile-table, #manual-basics, #confirm-yes, #cand-none');
+  await noPwn(page, 'typed address');
+  // the same through the homepage fragment path
+  await page.goto('about:blank');
+  await page.goto(URL_PAGE + '#address=' + encodeURIComponent(PWN));
+  await page.waitForSelector('#profile-table, #manual-basics, #confirm-yes, #cand-none');
+  await noPwn(page, 'fragment address');
+});
+
+await scenario('markup in a looked-up parcel record (situs address, use type) is escaped', async (page, rec) => {
+  override = (url) => {
+    if (!new URL(url).hostname.endsWith('lacounty.gov')) return undefined;
+    if (url.includes('-118.2455') && url.includes('distance=')) {
+      const body = fx('arcgis-la-buffer-spring-st-recorded.json');
+      body.features[0].attributes.SitusFullAddress = `145 S SPRING ST ${PWN}`;
+      return { status: 200, body };
+    }
+    if (!url.includes('-118.2455')) {
+      const body = fx('arcgis-la-parcel.json');
+      body.features[0].attributes.UseType = PWN;
+      body.features[0].attributes.UseDescription = PWN;
+      return { status: 200, body };
+    }
+    return undefined;
+  };
+  try {
+    await page.goto(URL_PAGE);
+    await search(page, SPRING_S);
+    await page.waitForSelector('#cand-none');
+    assert.match(await text(page, '#h-cands ~ ul'), /<img src=x onerror=window\.__pwn=1>/, 'candidate address is visible as text');
+    await noPwn(page, 'candidate list');
+    await page.goto(URL_PAGE);
+    await search(page, VENICE);
+    await page.waitForSelector('#profile-table');
+    await noPwn(page, 'profile table');
+    assert.match(await text(page, 'tr[data-key="use_type"]'), /<img src=x/, 'use type shown as text');
+    await page.click('#edit-use_type');
+    assert.match(await page.inputValue('#ed-use_type'), /<img src=x/, 'editor value is the literal text');
+    await noPwn(page, 'text editor');
+  } finally { override = null; }
+});
+
+await scenario('double submit and submit during a lookup: one lookup, the first address wins', async (page, rec) => {
+  await page.goto(URL_PAGE);
+  await page.fill('#address', VENICE);
+  await page.evaluate(() => { const f = document.getElementById('address-form'); f.requestSubmit(); f.requestSubmit(); f.requestSubmit(); });
+  await page.waitForSelector('#profile-table');
+  await page.waitForTimeout(500);
+  assert.equal(nominatimQs(rec).length, 1, 'geocoded once');
+  // change the address mid-lookup and press "enter details myself": ignored, the running lookup is not clobbered
+  await page.fill('#address', FAIL);
+  await page.evaluate(() => { document.getElementById('address-form').requestSubmit(); document.getElementById('manual-start').click(); document.getElementById('address-form').requestSubmit(); });
+  await page.waitForSelector('#manual-basics');
+  assert.equal(nominatimQs(rec).filter((q) => q.includes('Failville')).length, 1, 'second address looked up once');
+  assert.match(await text(page, '#step-log'), /Failed Address search/);
+}, { width: 1280, height: 900 }, 1, /^Failed to load resource: the server responded with a status of 503/);
+
+await scenario('lookup failure messaging: geocoder down, request aborted, parcel service down (partial)', async (page, rec) => {
+  await page.goto(URL_PAGE);
+  await search(page, FAIL);
+  await page.waitForSelector('#manual-basics');
+  assert.match(await text(page, '#status'), /could not look up your property/i);
+  assert.match(await text(page, '#step-log'), /Failed Address search.*HTTP 503/);
+  // the parcel service answers with an error: found address, failed parcel, the page says which step failed and still lets the owner continue
+  override = (url) => (new URL(url).hostname.endsWith('lacounty.gov') ? { status: 500, body: { error: 'down' } } : undefined);
+  try {
+    await page.goto(URL_PAGE);
+    await search(page, VENICE);
+    await page.waitForSelector('#manual-basics');
+    assert.match(await text(page, '#step-log'), /Found Address search/);
+    assert.match(await text(page, '#step-log'), /Failed Parcel record/);
+    assert.match(await text(page, '#h-profile'), /Your property/);
+    assert.equal(await page.locator('[data-opp-card]').count(), 0, 'no invented ways to earn');
+  } finally { override = null; }
+}, { width: 1280, height: 900 }, 1, /^Failed to load resource: the server responded with a status of (503|500)/);
+
+await scenario('reload mid-flow starts clean and the page says nothing is saved', async (page, rec) => {
+  await happy(page, rec);
+  assert.match(await text(page, '#session-note'), /Nothing is saved\. If you reload or leave this page, everything you entered here is cleared/);
+  await page.reload();
+  await page.waitForSelector('#address');
+  assert.equal(await page.locator('#profile-table').count(), 0);
+  assert.equal(await page.inputValue('#address'), '');
+  assert.match(await text(page, 'main'), /Nothing you enter here is saved\./);
+});
+
+await scenario('a second search does not silently discard owner corrections', async (page, rec) => {
+  await happy(page, rec);
+  await page.click('#edit-bedrooms');
+  await setNum(page, '#ed-bedrooms', 7);
+  await page.click('#save-bedrooms');
+  await page.waitForFunction(() => /7/.test(document.querySelector('tr[data-key="bedrooms"] .val')?.textContent ?? ''));
+  const before = nominatimQs(rec).length;
+  await page.click('#address-submit');
+  assert.match(await text(page, '#status'), /You have corrections on this page\. Starting again discards them/);
+  assert.equal(nominatimQs(rec).length, before, 'first press sends nothing');
+  assert.match(await text(page, 'tr[data-key="bedrooms"]'), /7.*You confirmed/, 'correction still there');
+  await page.click('#address-submit');
+  await page.waitForFunction((n) => document.querySelector('#profile-table') && !/You confirmed/.test(document.querySelector('tr[data-key="bedrooms"]')?.textContent ?? ''), before);
+  assert.equal(nominatimQs(rec).length, before + 1, 'second press searches again');
+});
+
+await scenario('keyboard only: type, Enter, focus lands on the results heading, edit with Enter, status announces', async (page, rec) => {
+  await page.goto(URL_PAGE);
+  await page.keyboard.press('Tab'); // skip link
+  assert.equal(await page.evaluate(() => document.activeElement.className), 'skip');
+  await page.keyboard.press('Tab');
+  assert.equal(await page.evaluate(() => document.activeElement.tagName), 'A', 'Start over link comes next');
+  await page.focus('#address');
+  await page.keyboard.type(VENICE);
+  await page.keyboard.press('Enter');
+  await page.waitForSelector('#profile-table');
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'h-profile', 'focus moves to the results heading');
+  assert.match(await text(page, '#status'), /Estimates updated|Property found/);
+  assert.equal(await page.getAttribute('#status', 'aria-atomic'), 'true');
+  await page.focus('#edit-bedrooms');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('4');
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => document.activeElement.id === 'edit-bedrooms' && /4/.test(document.querySelector('tr[data-key="bedrooms"] .val').textContent));
+});
+
+await scenario('small fixes: no-JavaScript notice, Overpass disclosure, "Apply" label, range per selected idea, step count wording', async (page, rec, ctx) => {
+  const nojs = await ctx.browser().newContext({ javaScriptEnabled: false });
+  const p2 = await nojs.newPage();
+  await p2.goto(URL_PAGE);
+  assert.match((await p2.locator('noscript').first().innerText().catch(() => '')) || (await p2.locator('main').innerText()), /needs JavaScript/);
+  await nojs.close();
+  await page.goto(URL_PAGE);
+  assert.match(await text(page, '#address-help'), /map location is then sent to OpenStreetMap's Overpass service/);
+  await search(page, FAIL);
+  await page.waitForSelector('#manual-basics');
+  assert.match(await text(page, 'details[data-dk="steplog"] summary'), /\(5 steps, 5 failed\)/);
+  await page.goto(URL_PAGE);
+  await search(page, SPRING_N);
+  await page.waitForSelector('#confirm-yes');
+  assert.match(await text(page, 'details[data-dk="steplog"] summary'), /\(1 step\)/, 'singular for one step');
+  await page.goto(URL_PAGE);
+  await search(page, VENICE);
+  await page.waitForSelector('#profile-table');
+  assert.equal(await page.locator('#save-bedrooms, [data-act="save-attr"]').count(), 0, 'no editor open yet');
+  await page.click('#edit-bedrooms');
+  assert.equal(await text(page, '#save-bedrooms'), 'Apply');
+  const li = await text(page, '#combo-selected li');
+  assert.match(li, /\$[\d,]+ to \$[\d,]+ a year on its own, baseline \$[\d,]+/, 'a range, not a lone number');
+}, { width: 1280, height: 900 }, 1, /^Failed to load resource: the server responded with a status of 503/);
 
 // zero unmocked external requests across every scenario
 const totalExternal = allRecs.flatMap((r) => r.external);

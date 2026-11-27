@@ -1,0 +1,10 @@
+{
+  "name": "everyspace",
+  "private": true,
+  "description": "Everyspace public site, estimator and Host Console. No dependencies: tests use the Playwright that is already installed.",
+  "scripts": {
+    "test": "node --test core/tests/*.test.mjs",
+    "e2e": "node tests/run-e2e.mjs",
+    "check": "npm test && npm run e2e"
+  }
+}

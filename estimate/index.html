@@ -19,14 +19,15 @@
 </header>
 
 <main class="wrap" id="main">
+  <noscript><div class="card"><p><strong>This estimator needs JavaScript.</strong> Turn it on to look up an address, or <a href="../">go back to the home page</a>.</p></div></noscript>
   <section class="card" aria-labelledby="h-address">
     <div class="section-title"><h1 id="h-address">What could your property earn?</h1></div>
     <p class="muted">Type your address and we will look up your parcel in public records, list the ways the property could earn, and show a range for each. Free, no sign-up. Nothing you enter here is saved.</p>
     <form id="address-form" class="stack" autocomplete="off" novalidate>
       <label class="f" for="address">Property address
-        <input id="address" name="q" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="123 Main St, Los Angeles, CA 90001" aria-describedby="address-help">
+        <input id="address" name="q" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="300" placeholder="123 Main St, Los Angeles, CA 90001" aria-describedby="address-help">
       </label>
-      <p id="address-help" class="tiny muted">We search only when you press the button. Your address is sent to OpenStreetMap Nominatim and, for the parcel, to the county's public parcel service.</p>
+      <p id="address-help" class="tiny muted">We search only when you press the button. Your address is sent to OpenStreetMap Nominatim and, for the parcel, to the county's public parcel service. The property's map location is then sent to OpenStreetMap's Overpass service to find buildings, pools and transit stops.</p>
       <div class="row">
         <button class="btn primary" id="address-submit" type="submit">Find my property</button>
         <button class="btn ghost" id="manual-start" type="button">Skip the lookup and enter details myself</button>

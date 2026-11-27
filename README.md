@@ -66,29 +66,33 @@ Plain JavaScript with no dependencies, used by the estimator and tests (and mean
 
 ## Tests
 
-Run these from the repository root unless noted. Counts are from 2026-11-27.
+Run these from the repository root unless noted. Counts are from 2026-11-27. There is no install step for the root project (`package.json` has no dependencies); the browser tests use the Playwright with Chromium that is already installed.
 
 ```bash
-node --test core/tests/*.test.mjs
+npm test
 ```
 
-This runs the `core/` modules. 257 tests pass.
-
-Three browser tests drive the pages with a mocked network (they never touch a real site or database):
+Runs the `core/` modules (`node --test core/tests/*.test.mjs`). 257 tests pass.
 
 ```bash
-node tests/home.e2e.mjs
+npm run e2e
 ```
+
+Runs every `tests/*.e2e.mjs` in turn through `tests/run-e2e.mjs` and fails if any file fails. A test file added later is picked up automatically. To run some of them, pass part of a name: `node tests/run-e2e.mjs home navigation`.
 
 ```bash
-node tests/estimate.e2e.mjs
+npm run check
 ```
 
-```bash
-node tests/host.e2e.mjs
-```
+Runs both. The browser tests drive the pages with a mocked network: lookups are answered from recorded fixtures, anything else that leaves localhost is blocked and fails the run, so they never touch a real site or database. Each file also runs on its own (`node tests/<name>.e2e.mjs`):
 
-The homepage test runs 7 scenarios, the estimator test 11, and the Host Console test 18 checks. They need Playwright with Chromium.
+| file | covers |
+|---|---|
+| `tests/home.e2e.mjs` | homepage: form, footer, no requests, no storage, phone width, no-JavaScript path |
+| `tests/estimate.e2e.mjs` | address entry and the estimator: results equal `core/`, malformed and markup addresses, double submit, lookup failures, keyboard use |
+| `tests/property-confirm.e2e.mjs` | match confirmation, parcel picker, the "Your property" table, owner corrections, rejected edits, manual mode |
+| `tests/navigation.e2e.mjs` | home, estimator and Host Console links, back/forward, the old `everyspace.html` redirect, wrong URLs, every internal link at a domain root and under `/everyspace/` |
+| `tests/host*.e2e.mjs`, `tests/signin.e2e.mjs` | Host Console with a mocked backend |
 
 The backend has its own tests. From `platform/`:
 
