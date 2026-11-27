@@ -62,7 +62,8 @@ test('keyless profile: every top-level field has value, source, tag and confiden
   assert.ok(Math.abs(p.lot_sqft - 6500) < 5);
   assert.deepEqual([p.floors, p.fields.floors.tag, p.fields.floors.confidence <= 0.3], [2, 'estimated', true]);
   assert.match(p.fields.floors.note, /24\.5 ft/);
-  assert.equal(p.roof_sqft, 1400); assert.equal(p.fields.roof_sqft.tag, 'estimated'); assert.equal(p.fields.roof_sqft.method, 'building footprint plan area; roof pitch not applied'); assert.ok(p.fields.roof_sqft.confidence <= 0.3);
+  // roof now follows City Pretty's roof-area method: 1,400 sq ft outline, built 1952 -> typical 4.5:12 pitch -> 1400 x 1.068 x 1.05 = 1570 (was the plan area, 1400)
+  assert.equal(p.roof_sqft, 1570); assert.equal(p.fields.roof_sqft.tag, 'estimated'); assert.match(p.fields.roof_sqft.method, /slope factor 1\.068 \(pitch 4\.5:12/); assert.ok(p.fields.roof_sqft.confidence <= 0.3); assert.match(p.fields.roof_sqft.note, /typical value/); assert.equal(p.details.roof.pitchRise, 4.5);
   assert.deepEqual([p.front_yard_sqft, p.back_yard_sqft, p.side_yard_sqft], [1200, 2600, 1000]);
   assert.equal(p.fields.front_yard_sqft.tag, 'estimated'); assert.ok(p.fields.front_yard_sqft.confidence <= 0.4);
   assert.equal(p.place_id, null); assert.equal(p.fields.place_id.tag, 'unavailable'); assert.match(p.fields.place_id.note, /Places/);
@@ -273,4 +274,42 @@ test('browser registry end to end: new rows have sources; yard rows have values 
     assert.ok(none.fields[k].note.includes(YARD_NEEDS_STREET), none.fields[k].note);
   }
   assert.ok(none.fields.roof_sqft.value > 0, 'everything else still answers');
+});
+
+test('roof: owner pitch raises confidence and changes the area; Google Solar stays preferred; details.roof carries the intermediate numbers', async () => {
+  const dflt = (await run()).profile, own = (await run({ query: { address: SFR, roofPitchRise: 6 } })).profile;
+  assert.equal(own.roof_sqft, 1643); assert.ok(own.fields.roof_sqft.confidence > dflt.fields.roof_sqft.confidence); assert.match(own.fields.roof_sqft.method, /owner-supplied pitch/);
+  assert.deepEqual([dflt.details.roof.slopeFactor, dflt.details.roof.pitchSource.startsWith('typical pitch')], [1.068, true]);
+  const solar = (await run({ keys: { 'google-solar': 'AIza-SECRET-1234' } })).profile;
+  assert.equal(solar.fields.roof_sqft.tag, 'measured'); assert.equal(solar.details.roof, undefined);
+});
+
+test('transit: not looked up by default; ctx.osm summarises stops; ctx.transit asks Overpass once; a failure is unavailable with the reason', async () => {
+  const off = (await run()).profile;
+  for (const k of ['transit_distance_m', 'transit_stops_nearby', 'rail_station_nearby']) { assert.equal(off.fields[k].tag, 'unavailable'); assert.match(off.fields[k].note, /not looked up/); }
+  const { profile: base } = await run();
+  const P = { lat: base.lat, lng: base.lng };
+  const els = [{ type: 'node', id: 1, lat: P.lat + 0.0018, lon: P.lng, tags: { highway: 'bus_stop', name: 'Example & 1st' } }, { type: 'node', id: 2, lat: P.lat + 0.005, lon: P.lng, tags: { railway: 'station', station: 'light_rail', name: 'Example Station' } }];
+  const withOsm = await buildPropertyProfile({ address: SFR }, { registry: await createDefaultRegistry(), fetch: world(), now: NOW, osm: { ok: true, elements: els, source: { name: 'OpenStreetMap via Overpass API', publisher: 'OpenStreetMap contributors', url: 'https://overpass.example', license: 'ODbL 1.0' }, retrievedAt: NOW } });
+  assert.ok(withOsm.transit_distance_m > 100 && withOsm.transit_distance_m < 400);
+  assert.deepEqual([withOsm.fields.transit_stops_nearby.value, withOsm.fields.rail_station_nearby.value], [2, true]);
+  assert.equal(withOsm.fields.transit_distance_m.tag, 'estimated'); assert.match(withOsm.fields.transit_distance_m.source, /OpenStreetMap/); assert.equal(withOsm.fields.transit_distance_m.confidence, 0.5);
+  // live path with an injected fetch: exactly one Overpass call
+  const w = world(); const calls = [];
+  const f = async (u, init) => { if (String(u).includes('overpass')) { calls.push(String(u)); return json({ elements: els }); } return w(u, init); };
+  const live = await buildPropertyProfile({ address: SFR }, { registry: await createDefaultRegistry(), fetch: f, now: NOW, transit: true });
+  assert.equal(calls.length, 1); assert.equal(live.fields.transit_stops_nearby.value, 2); assert.equal(live.providers.find((x) => x.id === 'overpass-transit').status, 'used');
+  const bad = async (u, init) => (String(u).includes('overpass') ? json({}, 502) : w(u, init));
+  const down = await buildPropertyProfile({ address: SFR }, { registry: await createDefaultRegistry(), fetch: bad, now: NOW, transit: true });
+  assert.equal(down.fields.transit_distance_m.tag, 'unavailable'); assert.match(down.fields.transit_distance_m.note, /transit lookup failed.*502/); assert.equal(down.providers.find((x) => x.id === 'overpass-transit').status, 'failed');
+  const sp = toSourcedProfile(withOsm);
+  assert.equal(getAttribute(sp, 'transit_distance_m').value, withOsm.transit_distance_m);
+});
+
+test('floors: building:levels from a footprint provider wins over the ratio', async () => {
+  const reg = await createDefaultRegistry();
+  const orig = reg.providersFor.bind(reg);
+  reg.providersFor = (kind, o) => { const r = orig(kind, o); if (kind !== 'footprint') return r; return { ...r, providers: r.providers.map((p) => ({ ...p, lookup: async (a, d) => { const x = await p.lookup(a, d); return x.ok ? { ...x, buildings: x.buildings.map((b) => ({ ...b, levels: 3 })) } : x; } })) }; };
+  const p = (await run({ registry: reg })).profile;
+  assert.equal(p.floors, 3); assert.match(p.fields.floors.source, /building:levels/);
 });

@@ -8,7 +8,11 @@ import { confidenceLabel, sourced, unavailable } from './provenance.js';
 import { createProfile, setAttribute } from './profile.js';
 import { addressMismatch, CONFIDENCE, isoNow, parseStreet } from './parcel.js';
 import { polygonAreaSqft, pointInPolygon, centroid, localProjection } from './geometry.js';
-import { compareValues, COMPARE_KIND, round } from './providers/util.js';
+import { compareValues, COMPARE_KIND } from './providers/util.js';
+import { estimateRoof } from './roof.js';
+import { estimateFloors } from './building-size.js';
+import { overpassNear } from './parcel.js';
+import { summarizeTransit, transitAttributes } from './transit.js';
 
 /** Scope of this assembler. */
 export const LA_COUNTY = { state: 'CA', countyFips: '06037', county: 'Los Angeles County' };
@@ -54,7 +58,7 @@ export function distanceToPolygonM(pt, poly) {
 
 /**
  * @param {{address:string, lat?:number, lng?:number, placeId?:string, apn?:string}|string} query
- * @param {{registry:any, fetch:(url:string, init?:any)=>Promise<any>, now:string, keys?:Record<string,string|undefined>, splitYard?:(a:any)=>any, timeoutMs?:number}} ctx
+ * @param {{registry:any, fetch:(url:string, init?:any)=>Promise<any>, now:string, keys?:Record<string,string|undefined>, osm?:any, transit?:boolean, splitYard?:(a:any)=>any, timeoutMs?:number}} ctx
  */
 export async function buildPropertyProfile(query, ctx) {
   const at = isoNow(ctx?.now);
@@ -221,25 +225,26 @@ export async function buildPropertyProfile(query, ctx) {
       note: joinNotes(buildings.length > 1 ? `${buildings.length} buildings on the parcel; this is the largest.` : undefined, main.layerAreaSqft ? `Layer's own AREA ${Math.round(main.layerAreaSqft)} sq ft.` : undefined, 'Outlines date from the 2008-2020 imagery.') }));
   } else fields.building_footprint_sqft = gone(fpP || forKind('footprint').length ? 'no building outline found on the parcel' : 'no footprint provider available');
 
+  // floors: records provider first (above), then OSM levels from a footprint provider, then living area / footprint (core/building-size.js).
+  // A footprint provider's height (LARIAC) is not used for floors: its unit and accuracy are unverified, so it stays a note.
+  if (fields.floors.value === null) {
+    const est = estimateFloors({ levelsTag: main?.levels ?? null, livingAreaSqft: isNum(fields.house_sqft.value) ? fields.house_sqft.value : null, footprintSqft: main && main.areaSqft > 0 ? main.areaSqft : null }, { now: at });
+    const s = est.floors;
+    if (est.ok) fields.floors = entry({ ...s, ...(main?.levels == null && main?.heightFt !== undefined ? { note: joinNotes(s.note, `Building outline height ${main.heightFt} ft (LARIAC; unit and accuracy unverified).`) } : {}) });
+    else fields.floors = gone(s.note ?? 'floors cannot be estimated');
+  }
+
   if (roof) {
     fields.roof_sqft = entry(sourced(Math.round(roof.areaSqft), { tag: 'measured', source: roofP.label, confidence: 0.8, retrievedAt: at, unit: 'sqft', method: 'solarPotential.wholeRoofStats.areaMeters2 converted to sq ft', note: `${roof.segments?.length ?? 0} roof segments returned.` }));
   } else if (main) {
-    fields.roof_sqft = entry(sourced(Math.round(main.areaSqft), { tag: 'estimated', source: fp?.source ?? fpSrc, confidence: 0.3, retrievedAt: at, unit: 'sqft', method: 'building footprint plan area; roof pitch not applied', note: 'A sloped roof is larger than its plan area; no roof provider answered (Google Solar needs a key).' }));
+    // City Pretty's roof-area method (core/roof.js): footprint x pitch. The pitch is a typical value unless an owner supplies one.
+    const yb = fields.year_built.value, pt = fields.property_type.value;
+    const rr = estimateRoof({ footprintSqft: main.areaSqft, yearBuilt: isNum(yb) ? yb : null, propertyType: typeof pt === 'string' ? pt : null, stories: isNum(fields.floors.value) ? fields.floors.value : null,
+      stateCode: LA_COUNTY.state, ...(q.roofPitchRise !== undefined ? { pitchRise: q.roofPitchRise } : {}), ...(q.roofType ? { roofType: q.roofType } : {}) }, { now: at });
+    fields.roof_sqft = rr.ok ? entry({ ...rr.roof, source: `${rr.roof.source} on ${fp?.source ?? fpSrc} footprint` }) : gone(rr.roof.note ?? 'roof not estimated');
+    if (rr.ok) details.roof = { planAreaSqft: rr.planAreaSqft, footprintSqft: rr.footprintSqft, pitchRise: rr.pitchRise, pitchDegrees: rr.pitchDegrees, pitchSource: rr.pitchSource, slopeFactor: rr.slopeFactor, roofShape: rr.roofShape, shapeMultiplier: rr.shapeMultiplier, overhangInches: rr.overhangInches };
   } else fields.roof_sqft = gone('no roof area provider answered and no building footprint is available');
 
-  if (fields.floors.value === null) {
-    const living = fields.house_sqft.value;
-    if (isNum(living) && main && main.areaSqft > 0) {
-      const ratio = living / main.areaSqft;
-      if (ratio > 4.5) fields.floors = gone(`living area / footprint = ${round(ratio, 1)}, too high to estimate floors (footprint may be incomplete)`);
-      else {
-        const n = Math.min(4, Math.max(1, Math.round(ratio)));
-        const ambiguous = Math.abs(ratio - Math.round(ratio)) > 0.35 || ratio < 0.7;
-        fields.floors = entry(sourced(n, { tag: 'estimated', source: ASSEMBLER, confidence: ambiguous ? 0.15 : 0.25, retrievedAt: at, method: 'living area / main building footprint, rounded to a whole number in 1..4',
-          note: joinNotes(`Ratio ${round(ratio, 2)}.`, main.heightFt !== undefined ? `Building outline height ${main.heightFt} ft (LARIAC; unit and accuracy unverified).` : undefined, ambiguous ? 'Ratio is far from a whole number; low confidence.' : undefined) }));
-      }
-    } else fields.floors = gone(`floors cannot be estimated: ${!isNum(living) ? 'no living area' : 'no main building footprint'}`);
-  }
   if (isNum(fields.house_sqft.value) && main && fields.house_sqft.value > main.areaSqft * 4.5) warnings.push('living area is more than 4.5x the main footprint; the footprint may be incomplete');
 
   // ---- 8. yard ----------------------------------------------------------------------------------------------------------
@@ -270,6 +275,22 @@ export async function buildPropertyProfile(query, ctx) {
     details.yard = { lotSqft: yard.lotSqft, buildingSqft: yard.buildingSqft, openSqft: yard.openSqft, method: yard.method, confidence: yard.confidence, frontEdge: yard.frontEdge ?? null, warnings: yw };
   } else for (const [k] of yardKeys) fields[k] = gone(yardWhy ?? 'yard not computed');
 
+  // ---- 8b. transit (core/transit.js, City Pretty's walk-radius logic over OSM stops) ------------------------------------------------
+  // Opt-in so a profile never makes an unannounced network call: pass `ctx.osm` (an overpassNear answer) or `ctx.transit: true` to ask Overpass.
+  {
+    const tp = fpPoint ?? (isNum(fields.lat.value) ? { lat: fields.lat.value, lng: fields.lng.value } : null);
+    /** @type {any} */ let osm = ctx.osm ?? null;
+    let why = 'transit stops not looked up (pass ctx.osm or ctx.transit to enable)';
+    if (!osm && ctx.transit === true && tp) {
+      osm = await overpassNear(tp, { buildingRadiusM: 1 }, { fetch: ctx.fetch, now: at, ...(ctx.timeoutMs ? { timeoutMs: ctx.timeoutMs } : {}) });
+      mark('overpass-transit', osm.ok ? 'used' : 'failed', osm.ok ? undefined : osm.reason);
+    } else if (ctx.transit === true && !tp) why = 'no location to look up transit stops from';
+    if (osm && !osm.ok) { why = `OpenStreetMap transit lookup failed: ${osm.reason}`; osm = null; }
+    const attrs = transitAttributes(osm && tp ? summarizeTransit(osm.elements, tp) : null, { now: at, unavailableReason: why,
+      ...(osm?.source ? { source: osm.source.publisher ? `${osm.source.publisher} via Overpass API` : osm.source.name, sourceUrl: osm.source.url, license: osm.source.license } : {}) });
+    for (const [k, v] of Object.entries(attrs)) fields[k] = entry(v);
+  }
+
   // ---- 9. consistency checks against geometry ----------------------------------------------------------------------------------
   if (boundary && isNum(fields.lot_sqft.value)) {
     const poly = polygonAreaSqft(boundary);
@@ -283,9 +304,10 @@ export async function buildPropertyProfile(query, ctx) {
   /** @type {Record<string, any>} */ const out = { address: fields.address.value, lat: fields.lat.value, lng: fields.lng.value, place_id: fields.place_id.value };
   const ordered = /** @type {Record<string, any>} */ ({});
   for (const k of PROFILE_FIELDS) ordered[k] = fields[k];
-  for (const k of ['building_footprint_sqft', 'use_code', 'units']) ordered[k] = fields[k];
+  for (const k of ['building_footprint_sqft', 'use_code', 'units', 'transit_distance_m', 'transit_stops_nearby', 'rail_station_nearby']) ordered[k] = fields[k];
   for (const k of PROFILE_FIELDS.slice(4)) out[k] = fields[k].value;
   out.building_footprint_sqft = fields.building_footprint_sqft.value;
+  out.transit_distance_m = fields.transit_distance_m.value;
   if (typeof ctx.splitYard === 'function' || yard) details.yard_used = Boolean(yard);
   if (parcelSrc) details.jurisdiction = { country: 'US', ...LA_COUNTY };
   return { ...out, fields: ordered, providers, warnings, details, retrieved_at: at };
@@ -305,7 +327,7 @@ export function toSourcedProfile(pj) {
   const map = /** @type {Array<[string,string]>} */ ([['address', 'address'], ['apn', 'parcel_id'], ['lot_sqft', 'lot_area_sqft'], ['house_sqft', 'living_area_sqft'], ['floors', 'floors'],
     ['beds', 'bedrooms'], ['baths', 'bathrooms'], ['roof_sqft', 'roof_area_sqft'], ['front_yard_sqft', 'front_yard_sqft'], ['back_yard_sqft', 'back_yard_sqft'],
     ['side_yard_sqft', 'side_yard_sqft'], ['year_built', 'year_built'], ['property_type', 'property_type'], ['place_id', 'place_id'], ['use_code', 'use_code'], ['units', 'units'],
-    ['building_footprint_sqft', 'building_footprint_sqft']]);
+    ['building_footprint_sqft', 'building_footprint_sqft'], ['transit_distance_m', 'transit_distance_m'], ['transit_stops_nearby', 'transit_stops_nearby'], ['rail_station_nearby', 'rail_station_nearby']]);
   for (const [from, to] of map) if (f[from]) put(to, toSourced(f[from]));
   if (f.lat && f.lng) {
     const ok = f.lat.value !== null && f.lng.value !== null;
