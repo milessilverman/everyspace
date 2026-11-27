@@ -3,7 +3,7 @@
 // injected `now`); nothing is guessed: a failed lookup returns {ok:false, reason} and the attribute is recorded as
 // 'unavailable'. Pattern (county-first, then statewide registry; ok:false with a reason) vendored from City Pretty
 // workers/parcels.ts at commit ac7faf3; geocoder fallback and addressMismatch from workers/sources.ts:105-160; the
-// Overpass/ODbL handling from workers/sources.ts:1140-1230. Parcel classification is ported from index.html:8836.
+// Overpass/ODbL handling from workers/sources.ts:1140-1230. Parcel classification is ported from everyspace-demo index.html:8836.
 
 import { sourced, unavailable } from './provenance.js';
 import { createProfile, setAttribute } from './profile.js';
@@ -435,7 +435,7 @@ export async function parcelAt(point, deps, opts = {}) {
 }
 
 /**
- * Port of classifyParcel (index.html:8836) mapped to the PropertyProfile property types. LA use-code rules apply only
+ * Port of classifyParcel (everyspace-demo index.html:8836) mapped to the PropertyProfile property types. LA use-code rules apply only
  * to services with useCodeScheme 'la-assessor'; other services are classified from the use-type text alone.
  * @param {{useCode?:string|null,useType?:string|null,useDescription?:string|null,livingAreaSqft?:number|null,units?:number|null}} a
  * @param {{codeScheme?:string, hasSqftField?:boolean}} [opts]

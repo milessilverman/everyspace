@@ -53,7 +53,7 @@ test('seeded data: every rule unverified with sourceRef, no sourceUrl', () => {
     assert.equal(r.verified, false, r.id);
     assert.equal(r.verifiedAt, null);
     assert.equal(r.sourceUrl, null);
-    assert.match(r.sourceRef, /^(platform\/docs\/PLAN\.md|index\.html):\d+$/);
+    assert.match(r.sourceRef, /^(platform\/docs\/PLAN\.md|everyspace-demo index\.html):\d+$/);
   }
 });
 

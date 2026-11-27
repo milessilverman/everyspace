@@ -1,6 +1,6 @@
 # Everyspace platform
 
-The real backend behind the Everyspace demo (the single-file app in the repository root, [`../index.html`](../index.html)). It runs on Supabase's free plan: Postgres, Auth, Edge Functions and pg_cron. The game plan is in [docs/PLAN.md](docs/PLAN.md).
+The real backend behind Everyspace and its Host Console ([`../host/`](../host/)). The earlier single-file demo now lives in [milessilverman/everyspace-demo](https://github.com/milessilverman/everyspace-demo). It runs on Supabase's free plan: Postgres, Auth, Edge Functions and pg_cron. The game plan is in [docs/PLAN.md](docs/PLAN.md).
 
 **Live:** Supabase project `everyspace` (`hnzcwfvxpfsyjpbebevp`, West US, free plan). Functions are at `https://hnzcwfvxpfsyjpbebevp.supabase.co/functions/v1/<name>`.
 
