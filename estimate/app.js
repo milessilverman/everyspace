@@ -124,7 +124,7 @@ function kindOf(key, value) {
 }
 /** The core's own question lists and unit parser when it has them; the adapter's copies otherwise. */
 const OWNER_QUESTIONS = UA.questionsFrom({ CONDO_OWNER_KEYS: OPP.CONDO_OWNER_KEYS ?? PP.CONDO_OWNER_KEYS, BUILDING_OWNER_KEYS: OPP.BUILDING_OWNER_KEYS ?? PP.BUILDING_OWNER_KEYS });
-UA.useCoreParser(PP.parseUnit ?? CORE_PARCEL.parseUnit ?? null);
+UA.useCoreParser(CORE_PARCEL.stripUnit ?? PP.parseUnit ?? null); // the core's reader of a typed unit ({address, unit}) is the source of truth
 const ESTIMATE_TIP = 'Estimated — change it if you know the exact figure';
 
 // ---- earnings inputs ----------------------------------------------------------------------------------------------------
@@ -403,7 +403,7 @@ function chooseOwn(type, id) {
   setOwner('property_type', type);
   S.focusId = id;
   renderAll();
-  if (before !== next && S.path) scheduleRerun({ focusId: id });
+  if (before !== next && S.path === 'county' && !S.notFound) scheduleRerun({ focusId: id });
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -442,7 +442,7 @@ function compute() {
   return { now, opps, estimates, opt, byId, view, hoa, hoaBlocked, hold };
 }
 /** The option that rents out the units of a building: it needs the owner's "how many units could you offer". */
-function isUnitOption(o) { return o.id === 'apartment_unit' || o.quantityKind === 'units'; }
+function isUnitOption(o) { return Boolean(o.quantityNeeded) || o.id === 'apartment_unit' || o.quantityKind === 'units'; }
 
 // ---------------------------------------------------------------------------------------------------------------
 // rendering. Every render keeps focus where it was and keeps text the owner is typing (late values never overwrite it).
@@ -920,7 +920,7 @@ function earnHtml(view) {
   const rejectedIds = new Map(opt.rejected.filter((r) => !inInv.has(r.id)).map((r) => [r.id, r.reason]));
   const leftIds = opps.map((o) => o.id).filter((id) => !inSel.has(id) && !inInv.has(id));
   const left = leftIds.length ? `<section aria-labelledby="h-left" id="combo-rejected"><div class="section-title"><h2 id="h-left">Left out of the best combination</h2><span class="small muted">${leftIds.length} option${leftIds.length === 1 ? '' : 's'}</span></div>
-    ${leftIds.map((id) => earnCard(byId[id], estimates[id], { reason: rejectedIds.has(id) ? nameize(rejectedIds.get(id), byId) : '' })).join('')}</section>` : '';
+    ${leftIds.map((id) => earnCard(byId[id], estimates[id], { reason: rejectedIds.has(id) ? nameize(rejectedIds.get(id), byId).replace(/^Estimate unavailable: missing (.*)$/i, (_, k) => `No estimate yet. We need: ${humanKeys(k).replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase()}.`) : '' })).join('')}</section>` : '';
   const inv = opt.investments.length ? `<section aria-labelledby="h-inv" id="combo-investments"><div class="section-title"><h2 id="h-inv">Needs a permit or building work first</h2><span class="small muted">Not in the total above</span></div>
     <p class="small muted">These need a permit, registration or building work before they can start. Start-up costs are unknown unless you enter them.</p>
     ${opt.investments.map((id) => earnCard(byId[id], estimates[id], { suffix: ' before start-up costs' })).join('')}</section>` : '';
@@ -1057,12 +1057,12 @@ function clearHint(input, key) {
 
 /** The owner typed a different unit: ask the lookup again for that one. */
 function changeUnit(raw, id) {
-  const pu = parseUnit(raw);
-  const u = String(pu.unit ?? raw).trim().toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 12);
+  const cleaned = CORE_PARCEL.cleanUnit ? CORE_PARCEL.cleanUnit(raw) : parseUnit(`1 Main St ${raw}`).unit; // "Unit 19", "#19" and "19" are all unit 19
+  const u = String(cleaned ?? raw).trim().toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 12);
   if (!u || u === S.unit) { S.focusId = id; renderAll(); return; }
   S.dirty = true; S.unit = u; S.unitDirty = true; S.wholeBuilding = false; S.focusId = id;
   renderAll();
-  if (S.path) scheduleRerun({ focusId: id });
+  if (S.path === 'county' && !S.notFound) scheduleRerun({ focusId: id });
 }
 /** A choice between a few words (HOA rules, roof type). The roof type also goes to the lookup, which sizes the roof from it. */
 function chooseFact(key, v, id) {
@@ -1070,7 +1070,7 @@ function chooseFact(key, v, id) {
   if (!(key in S.owner) && hasValue(cur) && cur.value === v && cur.tag !== 'estimated') return;
   setOwner(key, v);
   S.focusId = id;
-  if (key === 'roof_type') { S.roofType = v === 'unsure' ? null : v; renderAll(); if (S.path) scheduleRerun({ focusId: id }); return; }
+  if (key === 'roof_type') { S.roofType = v === 'unsure' ? null : v; renderAll(); if (S.path === 'county' && !S.notFound) scheduleRerun({ focusId: id }); return; }
   renderAll();
 }
 

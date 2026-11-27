@@ -38,7 +38,9 @@ export function parseUnit(text) {
       if (r && typeof r === 'object') {
         const unit = r.unit === null || r.unit === undefined || r.unit === '' ? null : String(r.unit);
         const base = typeof r.address === 'string' ? r.address : typeof r.base === 'string' ? r.base : t;
-        return { base: tidy(base), unit, designator: unit ? (r.designator ?? `Unit ${unit}`) : null };
+        const own = unit ? UNIT_RE.exec(t) : null; // the owner's own wording ("Apt 4", "#4") is what goes back after a suggestion
+        const word = own && own[1] ? DESIGNATOR[own[1].toLowerCase()] : null;
+        return { base: tidy(base), unit, designator: unit ? (r.designator ?? (own ? (word ? `${word} ${unit}` : `#${unit}`) : `Unit ${unit}`)) : null };
       }
     } catch { /* use the page's own reading */ }
   }

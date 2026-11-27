@@ -74,7 +74,8 @@ import { withPerUnit } from '../tests/support/mf-contract.mjs';
 export * from './revenue.js?real';
 export const estimateOpportunity = withPerUnit(real);
 `;
-const STUBS = { '/core/property-profile.js': PP_STUB, '/core/opportunities.js': OPP_STUB, '/core/revenue.js': REV_STUB };
+// the real core now gives quantity and per-unit figures itself: only the lookup is doubled (set MF_DOUBLE_EARNINGS=1 to double the earnings modules too)
+const STUBS = { '/core/property-profile.js': PP_STUB, ...(process.env.MF_DOUBLE_EARNINGS ? { '/core/opportunities.js': OPP_STUB, '/core/revenue.js': REV_STUB } : {}) };
 
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.mjs': 'text/javascript; charset=utf-8' };
 const server = http.createServer((req, res) => {
@@ -181,8 +182,8 @@ function expected(place, { opts = {}, owner = {} } = {}) {
   for (const [k, v] of Object.entries(pj.extraAttrs ?? {})) profile = setAttribute(profile, k, sourced(v.value, { tag: v.tag, source: v.source, confidence: v.confidence, retrievedAt: v.retrieved_at ?? null }));
   const now = new Date().toISOString();
   for (const [k, v] of Object.entries(owner)) profile = applyOwnerCorrection(profile, k, v, now);
-  const opps = withQuantity(realIdentify)(profile, { now, includeInvestmentIdeas: false });
-  const est = withPerUnit(realEstimate);
+  const opps = (process.env.MF_DOUBLE_EARNINGS ? withQuantity(realIdentify) : realIdentify)(profile, { now, includeInvestmentIdeas: false });
+  const est = process.env.MF_DOUBLE_EARNINGS ? withPerUnit(realEstimate) : realEstimate;
   const estimates = {};
   for (const o of opps) estimates[o.id] = est(o, defaultInputs(o, profile));
   const opt = optimize(opps, estimates, { goal: 'max_net_income', scenario: 'baseline', constraints: { allowUnknownRegulatory: true, resourceCapacity: defaultResourceCapacity(profile) } });
@@ -286,7 +287,7 @@ for (const [typed, unit] of [['1200 Test Ave Apt 4, Los Angeles, CA 90001', '4']
 await scenario('a unit the building does not have: the step opens again and says so plainly', async (page) => {
   await page.goto(entry('1200 Test Ave Apt 999, Los Angeles, CA 90001', COMPLEX));
   await page.waitForSelector('#unit-filter');
-  assert.match(await text(page, '#unit-missed'), /^We did not see Apt 999 in this building\. Pick yours from the list\.$/);
+  assert.match(await text(page, '#unit-missed'), /^We did not see (Apt|Unit) 999 in this building\. Pick yours from the list\.$/);
   assert.doesNotMatch(await ownerText(page), FORBIDDEN);
 });
 
@@ -388,6 +389,7 @@ await scenario('condo view: exactly its lines in order, none of the shared ones,
   await waitCall(page, (q) => q.unit === '19');
   await page.waitForFunction(() => document.getElementById('f-unit_label')?.value === 'Unit 19' && document.getElementById('progress').hidden);
   assert.equal((await calls(page)).at(-1).unit, '19');
+  assert.equal(await page.isChecked('#own-condo'), true, 'the condo choice stays selected after a different unit is typed');
   assert.doesNotMatch(await ownerText(page), FORBIDDEN);
   await page.locator('#property').screenshot({ path: `${SHOTS}/condo-p1-desktop.png` });
 });
@@ -480,6 +482,7 @@ await scenario('building view: its own lines first, then everything a house gets
   assert.equal(await page.locator('.fact[data-key="roof_type"] [aria-pressed="true"]').count(), 0);
   assert.equal(await page.inputValue('#f-roof_area_sqft'), '', 'the roof size waits for the roof type');
   await page.waitForSelector('#lot-map .lm-h');
+  assert.doesNotMatch(await text(page, '#lot-map'), /roof about/i, 'no roof figure in the picture before the roof type is given');
   assert.equal(await text(page, '#lot-map .lm-title'), 'Your lot from above');
   assert.ok(await page.locator('#lot-map [data-lm="addbld"]').count() === 1, 'the adjustable picture');
   assert.doesNotMatch(await ownerText(page), FORBIDDEN);
