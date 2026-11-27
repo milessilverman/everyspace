@@ -36,7 +36,27 @@ const AFFECTS = {
   bld: ['building_footprint_sqft', 'roof_area_sqft', ...YARD_KEYS],
   front: YARD_KEYS,
 };
-const ALL_KEYS = ['lot_area_sqft', 'building_footprint_sqft', 'roof_area_sqft', ...YARD_KEYS];
+const USABLE_KEYS = ['usable_yard_sqft', 'usable_front_yard_sqft', 'usable_back_yard_sqft'];
+AFFECTS.lot.push('driveway_area_sqft'); AFFECTS.bld.push('driveway_area_sqft');
+AFFECTS.drv = ['driveway_area_sqft', ...USABLE_KEYS];
+AFFECTS.kind = [];
+const ALL_KEYS = ['lot_area_sqft', 'building_footprint_sqft', 'roof_area_sqft', ...YARD_KEYS, 'driveway_area_sqft'];
+/** What an outline other than the house can be called (the choice relabels it and tells the earnings logic about garages and guest houses). */
+const WHAT = [['garage', 'Garage'], ['adu', 'ADU / guest house'], ['shed', 'Shed'], ['carport', 'Carport'], ['pool_house', 'Pool house'], ['other', 'Other']];
+const WHAT_NAME = Object.fromEntries(WHAT);
+const KIND_KEYS = ['garage_present', 'garage_area_sqft', 'adu_present', 'adu_area_sqft'];
+const SLIVER_SQFT = 100;
+const inPolyXY = (pts, x, y) => { let c = false; for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) { const [xi, yi] = pts[i], [xj, yj] = pts[j]; if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) c = !c; } return c; };
+/** Driveway area on the lot and not under a building (sq ft), 0.25 m grid; used only when core/driveway.js cannot be loaded. */
+export function drivewayAreaOwn(dv, lot, blds) {
+  const d = ptsOfRing(dv.coordinates[0]), l = ptsOfRing(lot.coordinates[0]), bs = blds.map((b) => ptsOfRing(b.coordinates[0]));
+  const { kx, ky } = metresPerDegree(d[0][1]);
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const p of d) { x0 = Math.min(x0, p[0]); x1 = Math.max(x1, p[0]); y0 = Math.min(y0, p[1]); y1 = Math.max(y1, p[1]); }
+  const cell = 0.25; let n = 0;
+  for (let y = y0 + (cell / ky) / 2; y < y1; y += cell / ky) for (let x = x0 + (cell / kx) / 2; x < x1; x += cell / kx) if (inPolyXY(d, x, y) && inPolyXY(l, x, y) && !bs.some((b) => inPolyXY(b, x, y))) n++;
+  return Math.round(n * cell * cell * 10.763910416709722);
+}
 
 // ---------------------------------------------------------------------------------------------------------------
 // pure helpers (exported for tests)
@@ -92,9 +112,9 @@ export function sourceFromProfile(profile) {
   if (!profile) return null;
   const g = profile.geometry;
   if (g && typeof g === 'object' && (g.parcel || (Array.isArray(g.buildings) && g.buildings.length))) {
-    const { parcel, parcelSource, buildings, image, zones: _z, ...rest } = g;
-    const list = (buildings ?? []).filter((b) => b && (b.polygon || b.type)).map((b) => ({ polygon: b.polygon ?? b, main: Boolean(b.main) }));
-    return { from: 'bundle', parcel: parcel ?? null, parcelSource: parcel ? (parcelSource ?? 'record') : null, buildings: list, rest, image: image ?? null, ref: g };
+    const { parcel, parcelSource, buildings, image, driveway, zones: _z, ...rest } = g;
+    const list = (buildings ?? []).filter((b) => b && (b.polygon || b.type)).map((b) => ({ polygon: b.polygon ?? b, main: Boolean(b.main), kind: typeof b.kind === 'string' ? b.kind : null }));
+    return { from: 'bundle', parcel: parcel ?? null, parcelSource: parcel ? (parcelSource ?? 'record') : null, buildings: list, rest, image: image ?? null, driveway: driveway?.polygon ?? null, ref: g };
   }
   const a = profile.attributes ?? {};
   const val = (k) => (a[k] && a[k].tag !== 'unavailable' && a[k].value !== null && a[k].value !== undefined ? a[k].value : null);
@@ -112,7 +132,7 @@ export function sourceFromProfile(profile) {
     ...(loc ? { frontPointHint: loc } : {}),
   };
   const ps = parcel ? (a.parcel_boundary?.tag === 'estimated' ? 'estimated' : 'record') : null;
-  return { from: 'attributes', parcel: parcel ?? null, parcelSource: ps, buildings: list.map(({ polygon, main }) => ({ polygon, main })), rest, image: null };
+  return { from: 'attributes', parcel: parcel ?? null, parcelSource: ps, buildings: list.map(({ polygon, main }) => ({ polygon, main, kind: null })), rest, image: null, driveway: null };
 }
 
 /** A simple starting lot around a building: its footprint plus 15 ft along its long axis and 5 ft across it. Returns a closed [lng, lat] ring or null. */
@@ -210,8 +230,8 @@ export function initLotMap(opts) {
   const loadCore = () => {
     if (coreState !== 'idle') return;
     coreState = 'loading';
-    Promise.all([import('../core/measure.js'), import('../core/geometry.js'), import('../core/providers/naip-aerial.js').catch(() => ({}))])
-      .then(([me, ge, na]) => { core = { measure: me.measureFromGeometry, areaSqft: ge.polygonAreaSqft, usgs: na.USGS_EXPORT ?? USGS_EXPORT_FALLBACK, credit: na.ATTRIBUTION_TEXT ?? CREDIT_FALLBACK }; coreState = 'ready'; update(); })
+    Promise.all([import('../core/measure.js'), import('../core/geometry.js'), import('../core/providers/naip-aerial.js').catch(() => ({})), import('../core/driveway.js').catch(() => ({}))])
+      .then(([me, ge, na, dr]) => { core = { measure: me.measureFromGeometry, areaSqft: ge.polygonAreaSqft, drvArea: dr.drivewayAreaSqft ?? null, aware: false, usgs: na.USGS_EXPORT ?? USGS_EXPORT_FALLBACK, credit: na.ATTRIBUTION_TEXT ?? CREDIT_FALLBACK }; coreState = 'ready'; update(); })
       .catch(() => { coreState = 'none'; mount.hidden = true; });
   };
 
@@ -228,19 +248,22 @@ export function initLotMap(opts) {
     let ei = 0, ea = -1;
     parts.forEach((p, i) => { const a = ringArea(p[0]); if (a > ea) { ea = a; ei = i; } });
     const pts = ptsOfRing(parts[ei][0]);
-    return { id: kind === 'lot' ? 'lot' : `bld${VID++}`, kind, main, name, geomType: geom.type, parts: parts.map((p) => p.map((r) => r.map((q) => [q[0], q[1]]))), ei, verts: pts.map(([lng, lat]) => ({ id: ++VID, lng, lat })) };
+    return { id: kind === 'lot' ? 'lot' : kind === 'drv' ? 'drv' : `bld${VID++}`, kind, main, name, what: null, whatSrc: null, removed: false, touched: false, geomType: geom.type, parts: parts.map((p) => p.map((r) => r.map((q) => [q[0], q[1]]))), ei, verts: pts.map(([lng, lat]) => ({ id: ++VID, lng, lat })) };
   };
   const toGeo = (sh) => {
     const ring = sh.verts.map((v) => [v.lng, v.lat]); ring.push([sh.verts[0].lng, sh.verts[0].lat]);
     const parts = sh.parts.map((p, i) => (i === sh.ei ? [ring, ...p.slice(1)] : p));
     return sh.geomType === 'Polygon' ? { type: 'Polygon', coordinates: parts[0] } : { type: 'MultiPolygon', coordinates: parts };
   };
-  const snap = () => ({ lot: M.lot ? M.lot.verts.map((v) => ({ ...v })) : null, blds: M.blds.map((b) => b.verts.map((v) => ({ ...v }))), front: M.frontIds ? [...M.frontIds] : null, frontSet: M.frontSet });
+  const cloneShape = (sh) => ({ ...sh, parts: sh.parts.map((p) => p.map((r) => r.map((q) => [q[0], q[1]]))), verts: sh.verts.map((v) => ({ ...v })) });
+  const snap = () => ({ lot: M.lot ? M.lot.verts.map((v) => ({ ...v })) : null, drv: M.drv ? cloneShape(M.drv) : null, blds: M.blds.map(cloneShape), front: M.frontIds ? [...M.frontIds] : null, frontSet: M.frontSet });
   const restore = (s) => {
     if (M.lot && s.lot) M.lot.verts = s.lot.map((v) => ({ ...v }));
-    M.blds.forEach((b, i) => { if (s.blds[i]) b.verts = s.blds[i].map((v) => ({ ...v })); });
+    M.drv = s.drv ? cloneShape(s.drv) : null;
+    M.blds = s.blds.map(cloneShape);
     M.frontIds = s.front ? [...s.front] : null; M.frontSet = s.frontSet;
   };
+  const live = () => M.blds.filter((b) => !b.removed);
 
   /** the front line handed to the yard split: the chosen lot corners, pushed 3 m outward so it reads as the street in front of that side */
   const frontLine = (ids) => {
@@ -263,14 +286,24 @@ export function initLotMap(opts) {
       const v = (k) => (a[k] && a[k].tag !== 'unavailable' ? a[k].value : null);
       rest.roof = { yearBuilt: num(v('year_built')) ? v('year_built') : null, propertyType: typeof v('property_type') === 'string' ? v('property_type') : null, stories: num(v('floors')) ? v('floors') : null, state: rest.roof?.state ?? null };
     }
-    const g = { ...rest, parcel: M.lot ? toGeo(M.lot) : null, buildings: M.blds.map((b) => ({ polygon: toGeo(b), main: b.main })) };
+    const g = { ...rest, parcel: M.lot ? toGeo(M.lot) : null, buildings: live().map((b) => ({ polygon: toGeo(b), main: b.main, kind: b.what ?? null })) };
+    if (M.drv) { const dg = toGeo(M.drv); g.driveway = dg; if (!core.aware && M.drv.touched) g.exclude = [...(rest.exclude ?? []), dg]; } // core without driveway support: keep the owner's driveway out of the usable yard here
     if (M.frontIds && M.lot) { const l = frontLine(M.frontIds); if (l) { g.streets = []; g.streetName = null; g.frontPoint = null; g.frontEdge = { coordinates: l }; } }
     return g;
   };
+  function drivewayArea() {
+    const dg = toGeo(M.drv), lg = toGeo(M.lot), bg = live().map(toGeo);
+    try { if (core.drvArea) { const v = core.drvArea(dg, lg, bg); if (num(v)) return v; } } catch { /* use ours */ }
+    try { return drivewayAreaOwn(dg, lg, bg); } catch { return null; }
+  }
   const measureNow = () => {
     const t0 = performance.now();
     let m = null;
-    try { m = core.measure(bundle(), { now: now() }); } catch { m = null; }
+    try {
+      m = core.measure(bundle(), { now: now() });
+      if (m && 'driveway_area_sqft' in m) core.aware = true; // the core measures driveways itself
+      if (m && !num(m.driveway_area_sqft)) m.driveway_area_sqft = M.drv ? drivewayArea() : null;
+    } catch { m = null; }
     M.lastMs = performance.now() - t0;
     return m;
   };
@@ -298,20 +331,21 @@ export function initLotMap(opts) {
     return p ? sourceFromProfile(p) : null;
   };
 
-  const SLIVER_SQFT = 100;
   const areaOf = (sh) => { try { return core.areaSqft(toGeo(sh)); } catch { return 0; } };
   /** a tiny outline that is not the house: still measured, but no handles of its own and no legend line */
-  const isSliver = (sh) => sh.kind === 'bld' && !sh.main && areaOf(sh) < SLIVER_SQFT;
+  const isSliver = (sh) => sh.kind === 'bld' && !sh.main && !sh.what && areaOf(sh) < SLIVER_SQFT;
   /** exactly one house: the one the lookup flagged, unless it is a sliver and something bigger exists; with none flagged, the largest */
   function pickMain() {
     if (!M.blds.length) return;
     const areas = M.blds.map(areaOf);
-    let mi = M.blds.findIndex((b) => b.main);
+    let mi = M.blds.findIndex((b) => b.main && !b.removed);
     const big = areas.reduce((bi, a, i) => (a > areas[bi] ? i : bi), 0);
     if (mi < 0 || (areas[mi] < SLIVER_SQFT && areas[big] >= SLIVER_SQFT)) mi = big;
     M.blds.forEach((b, i) => { b.main = i === mi; });
   }
   /** the lookup's own measurement (street lines, front side, roof inputs) arrived after the map was set up from attributes: adopt it */
+  /** what the lookup's own outlines measure (the numbers a typed-over line and Reset go back to) */
+  function baselineMeasure() { const cur = snap(); restore(M.base); const m = measureNow(); restore(cur); return m; }
   function adoptBundle(src) {
     M.bundleRef = src.ref;
     M.source = 'bundle'; M.rest = src.rest;
@@ -319,8 +353,11 @@ export function initLotMap(opts) {
     if (src.image) { M.imageInfo = src.image; if (M.imgState === 'ok') showCredit(); }
     if (!M.frontSet) { M.frontIds = null; }
     M.baseFront = null; if (M.base) { M.base.front = null; M.base.frontSet = false; }
+    if (src.driveway && !(M.drv && M.drv.touched) && !(M.base && M.base.drv)) { try { M.drv = makeShape(src.driveway, 'drv', false, 'Driveway'); if (M.base) M.base.drv = cloneShape(M.drv); } catch { /* keep none */ } }
+    for (const b of M.blds) { const sb = src.buildings.find((x) => sigOf(x.polygon) === sigOf(toGeo(b))); if (sb?.kind && !b.main && b.whatSrc !== 'owner') { b.what = sb.kind; b.whatSrc = 'lookup'; } }
+    if (M.base) for (const bb of M.base.blds) { const sb = src.buildings.find((x) => sigOf(x.polygon) === sigOf(toGeo(bb))); if (sb?.kind && !bb.main) { bb.what = sb.kind; bb.whatSrc = 'lookup'; } }
     if (M.starter) return;
-    M.m = measureNow();
+    M.m = measureNow(); M.baseM = baselineMeasure();
     if (M.edited && !M.drag) { // the owner already moved an outline: the lookup's street side now gives it front and back figures, so the list gets them too
       setTimeout(() => { if (M && !M.drag) { M.gestureBefore = snap(); commit('front'); } }, 0);
     } else M.lastMeasure = M.m;
@@ -331,13 +368,14 @@ export function initLotMap(opts) {
     const sigP = src.parcel ? sigOf(src.parcel) : 'none';
     const m0 = { sigP, sigB: src.buildings.map((b) => sigOf(b.polygon)).join('|') };
     M = {
-      ...m0, source: src.from, rest: src.rest, parcelSource: src.parcelSource, starter: false, lot: null, blds: [], frontIds: null, frontSet: false, base: null, baseFront: null,
+      ...m0, source: src.from, rest: src.rest, parcelSource: src.parcelSource, starter: false, lot: null, blds: [], drv: null, baseM: null, tip: '', frontIds: null, frontSet: false, base: null, baseFront: null,
       history: [], mapKeys: new Map(), gestureBefore: null, edited: false, sel: null, m: null, lastMeasure: null, lastMs: 0, note: '', image: null, imgState: 'idle', imageInfo: src.image,
       Wd: 0, Hd: 0, frame: null, drag: null, lastTap: null, bundleRef: src.ref ?? null,
     };
     try {
-      src.buildings.forEach((b, i) => { try { M.blds.push(makeShape(b.polygon, 'bld', b.main, b.main ? 'House' : 'Building')); } catch { /* skip an outline that is not a polygon */ } });
+      src.buildings.forEach((b) => { try { const sh = makeShape(b.polygon, 'bld', b.main, b.main ? 'House' : 'Building'); if (b.kind && !b.main) { sh.what = b.kind; sh.whatSrc = 'lookup'; } M.blds.push(sh); } catch { /* skip an outline that is not a polygon */ } });
       pickMain();
+      if (src.driveway) { try { M.drv = makeShape(src.driveway, 'drv', false, 'Driveway'); } catch { M.drv = null; } }
       if (src.parcel) M.lot = makeShape(src.parcel, 'lot', false, 'Lot');
       else {
         const main = M.blds.find((b) => b.main);
@@ -351,7 +389,7 @@ export function initLotMap(opts) {
     if (!hasRef && !M.starter) { const ids = inferFront(); if (ids) { M.frontIds = ids; M.baseFront = ids; } }
     M.base = snap();
     M.m = measureNow();
-    M.lastMeasure = M.m;
+    M.lastMeasure = M.m; M.baseM = M.m;
     return true;
   }
 
@@ -378,12 +416,17 @@ export function initLotMap(opts) {
     D.svg = svgEl('svg', { class: 'lm-svg', role: 'group', 'aria-label': 'Outlines of your lot and buildings on the photo. Each corner can be dragged or moved with the arrow keys.', 'aria-describedby': `${uid}-keys` }, D.frame);
     D.defs = svgEl('defs', {}, D.svg);
     defsMarkup(D.defs);
+    const cp = svgEl('clipPath', { id: `${uid}-lotclip` }, D.defs); D.clipLot = svgEl('path', {}, cp);
     D.gZones = svgEl('g', { mask: `url(#${uid}-bmask)` }, D.svg);
     D.zFront = svgEl('path', { class: 'lm-zone', fill: `url(#${uid}-pf)`, 'fill-rule': 'evenodd' }, D.gZones);
     D.zBack = svgEl('path', { class: 'lm-zone', fill: `url(#${uid}-pb)`, 'fill-rule': 'evenodd' }, D.gZones);
+    D.gDrvFill = svgEl('g', { 'clip-path': `url(#${uid}-lotclip)` }, D.svg); // the driveway never shows outside the lot or under a building
+    D.gDrvMask = svgEl('g', { mask: `url(#${uid}-bmask)` }, D.gDrvFill);
+    D.drvFill = svgEl('path', { class: 'lm-drvfill', fill: `url(#${uid}-pd)` }, D.gDrvMask);
     D.gShapes = svgEl('g', {}, D.svg);
     D.gFront = svgEl('g', { class: 'lm-frontline' }, D.svg);
     D.gLabels = svgEl('g', { class: 'lm-labels', 'aria-hidden': 'true' }, D.svg);
+    D.gBodies = svgEl('g', {}, D.svg);
     D.gEdges = svgEl('g', {}, D.svg);
     D.gHandles = svgEl('g', {}, D.svg);
     D.frame.append(D.canvas); // the hatched usable yard sits over the tints (it ignores the pointer, so corners stay draggable)
@@ -394,9 +437,15 @@ export function initLotMap(opts) {
     D.bFront = html('button', { type: 'button', class: 'btn sm', id: `${uid}-bfront`, 'data-lm': 'front', hidden: '' }, 'This side faces the street', D.actions);
     D.bAdd = html('button', { type: 'button', class: 'btn sm', id: `${uid}-badd`, 'data-lm': 'add', hidden: '' }, 'Add a corner', D.actions);
     D.bRemove = html('button', { type: 'button', class: 'btn sm', id: `${uid}-bremove`, 'data-lm': 'remove', hidden: '' }, 'Remove corner', D.actions);
+    D.kindWrap = html('label', { class: 'lm-kindwrap small', hidden: '' }, null, D.actions);
+    D.kindWrap.append(document.createTextNode('What is this? '));
+    D.kindSel = html('select', { class: 'lm-what', id: `${uid}-kind-bar`, 'aria-label': 'What is this building?' }, null, D.kindWrap);
+    D.bRmDrv = html('button', { type: 'button', class: 'btn sm', id: `${uid}-brmdrv`, 'data-lm': 'rmdrv', hidden: '' }, 'Remove driveway', D.actions);
+    D.bAddBld = html('button', { type: 'button', class: 'btn sm', id: `${uid}-baddbld`, 'data-lm': 'addbld' }, 'Add a building', D.actions);
     D.bReset = html('button', { type: 'button', class: 'btn sm', id: `${uid}-breset`, 'data-lm': 'reset', hidden: '' }, 'Reset outlines', D.actions);
     D.noteEl = html('p', { class: 'lm-note small', id: `${uid}-note`, role: 'status', 'aria-live': 'polite' }, '', D.body);
     D.legend = html('ul', { class: 'lm-legend', 'aria-label': 'Sizes of the outlines' }, null, D.body);
+    D.hintDrv = html('p', { class: 'lm-tip small muted', hidden: '' }, 'Drag the corners to match your driveway', D.body);
     D.hintUnknown = html('p', { class: 'lm-tip small muted', hidden: '' }, 'Tap the side of your lot that faces the street to see the front and back yard.', D.body);
     D.sr = html('p', { class: 'sr-only', id: `${uid}-sr`, role: 'status', 'aria-live': 'polite' }, '', D.body);
 
@@ -415,6 +464,8 @@ export function initLotMap(opts) {
     D.svg.addEventListener('keydown', onKey);
     D.svg.addEventListener('focusin', onFocusIn);
     D.actions.addEventListener('click', onAction);
+    D.legend.addEventListener('click', onAction);
+    D.body.addEventListener('change', onWhat);
     D.img.addEventListener('load', () => { if (!M) return; M.imgState = 'ok'; D.img.hidden = false; showCredit(); });
     D.img.addEventListener('error', () => { if (!M) return; M.imgState = 'none'; D.img.hidden = true; D.img.removeAttribute('src'); D.credit.hidden = true; });
     if (typeof ResizeObserver === 'function') { layoutObs?.disconnect(); layoutObs = new ResizeObserver(() => { if (M && !D.body.hidden && D.stage.clientWidth && Math.abs(D.stage.clientWidth - (M.stageW ?? 0)) > 1) { layout(); paint(true); } }); layoutObs.observe(D.stage); }
@@ -430,6 +481,9 @@ export function initLotMap(opts) {
     const pb = svgEl('pattern', { id: `${uid}-pb`, width: 8, height: 8, patternUnits: 'userSpaceOnUse' }, defs);
     svgEl('rect', { width: 8, height: 8, fill: '#c084fc', 'fill-opacity': '.34' }, pb);
     svgEl('path', { d: 'M-1 9 L9 -1 M-1 1 L1 -1 M7 9 L9 7', stroke: '#6b21a8', 'stroke-width': '1.6', fill: 'none' }, pb);
+    const pd = svgEl('pattern', { id: `${uid}-pd`, width: 8, height: 8, patternUnits: 'userSpaceOnUse' }, defs);
+    svgEl('rect', { width: 8, height: 8, fill: '#00e5ff', 'fill-opacity': '.30' }, pd);
+    svgEl('path', { d: 'M0 2 H8 M0 6 H8', stroke: '#0e7490', 'stroke-width': '1.4', fill: 'none' }, pd);
     const pu = svgEl('pattern', { id: `${uid}-pu`, width: 8, height: 8, patternUnits: 'userSpaceOnUse' }, defs);
     svgEl('rect', { width: 8, height: 8, fill: '#ffffff', 'fill-opacity': '.28' }, pu);
     svgEl('path', { d: 'M-1 -1 L9 9 M-1 7 L1 9 M7 -1 L9 1', stroke: '#111827', 'stroke-width': '2.6', 'stroke-opacity': '.6', fill: 'none' }, pu);
@@ -459,8 +513,8 @@ export function initLotMap(opts) {
   const px = (lng, lat) => proj().toPx(lng, lat);
   const inv = (x, y) => proj().toLngLat(x, y);
 
-  const shapes = () => [M.lot, ...M.blds];
-  const shapeOf = (key) => (key === 'lot' ? M.lot : M.blds.find((b) => b.id === key));
+  const shapes = () => [M.lot, ...(M.drv ? [M.drv] : []), ...live()];
+  const shapeOf = (key) => (key === 'lot' ? M.lot : key === 'drv' ? M.drv : live().find((b) => b.id === key));
   /** Corners that get a handle. Short outlines show every corner. A long one (a rounded corner or a curved wall is many tiny segments) shows the
    *  real turns only, and never two handles within 1.5 m of each other, so the picture does not fill with dots. */
   const visibleVerts = (sh) => {
@@ -482,14 +536,15 @@ export function initLotMap(opts) {
 
   function structure() {
     // outlines, edge hit lines, handles: rebuilt when the corner list changes; positions are set by paint()
-    D.gShapes.textContent = ''; D.gEdges.textContent = ''; D.gHandles.textContent = ''; D.maskG.textContent = ''; D.legend.textContent = '';
-    D.els = { shapes: new Map(), edges: [], handles: new Map(), legend: new Map(), mask: new Map() };
+    D.gShapes.textContent = ''; D.gBodies.textContent = ''; D.gEdges.textContent = ''; D.gHandles.textContent = ''; D.maskG.textContent = ''; D.legend.textContent = '';
+    D.els = { shapes: new Map(), edges: [], handles: new Map(), legend: new Map(), mask: new Map(), bodies: new Map() };
     shapes().forEach((sh) => {
-      const cls = sh.kind === 'lot' ? 'lm-lot' : sh.main ? 'lm-house' : 'lm-other';
+      const cls = sh.kind === 'lot' ? 'lm-lot' : sh.kind === 'drv' ? 'lm-drv' : sh.main ? 'lm-house' : 'lm-other';
       const casing = svgEl('path', { class: `lm-casing`, fill: 'none' }, D.gShapes);
       const path = svgEl('path', { class: cls, fill: 'none' }, D.gShapes);
       D.els.shapes.set(sh.id, { casing, path });
       if (sh.kind === 'bld') D.els.mask.set(sh.id, svgEl('path', {}, D.maskG));
+      if (sh.kind === 'bld' && !sh.main) D.els.bodies.set(sh.id, svgEl('path', { class: 'lm-hitbody', 'data-shape': sh.id }, D.gBodies));
       const sliver = isSliver(sh);
       if (!sliver) sh.verts.forEach((v, i) => {
         const line = svgEl('line', { class: 'lm-edge', 'data-shape': sh.id, 'data-i': i }, D.gEdges);
@@ -499,16 +554,17 @@ export function initLotMap(opts) {
       const vis = new Set(visibleVerts(sh).map((v) => v.id));
       if (!sliver) sh.verts.forEach((v, i) => {
         if (!vis.has(v.id)) return;
-        const g = svgEl('g', { class: 'lm-h', id: `${uid}-v-${v.id}`, tabindex: '0', role: 'button', 'data-vid': v.id, 'data-shape': sh.id, 'aria-label': `${sh.kind === 'lot' ? 'Lot' : sh.main ? 'House' : 'Building'} corner ${i + 1} of ${sh.verts.length}` }, D.gHandles);
+        const g = svgEl('g', { class: 'lm-h', id: `${uid}-v-${v.id}`, tabindex: '0', role: 'button', 'data-vid': v.id, 'data-shape': sh.id, 'aria-label': `${shapeName(sh)} corner ${i + 1} of ${sh.verts.length}` }, D.gHandles);
         svgEl('circle', { class: 'lm-hit', r: 17 }, g);
         svgEl('circle', { class: 'lm-ring', r: 11 }, g);
-        svgEl('circle', { class: `lm-dot ${sh.kind === 'lot' ? 'is-lot' : 'is-bld'}`, r: 6 }, g);
+        svgEl('circle', { class: `lm-dot ${sh.kind === 'lot' ? 'is-lot' : sh.kind === 'drv' ? 'is-drv' : 'is-bld'}`, r: 6 }, g);
         D.els.handles.set(v.id, g);
       });
     });
     buildLegend();
   }
 
+  const shapeName = (sh) => (sh.kind === 'lot' ? 'Lot' : sh.kind === 'drv' ? 'Driveway' : sh.main ? 'House' : sh.what ? WHAT_NAME[sh.what] : 'Building');
   const swatch = (kind) => {
     const defsRef = (id) => `url(#${uid}-${id})`;
     const body = {
@@ -517,21 +573,37 @@ export function initLotMap(opts) {
       other: '<rect x="2" y="2" width="26" height="14" rx="2" class="lm-casing" fill="none"/><rect x="2" y="2" width="26" height="14" rx="2" class="lm-other" fill="none"/>',
       front: `<rect x="1" y="1" width="28" height="16" rx="2" fill="${defsRef('pf')}" stroke="#075985" stroke-width="1"/>`,
       back: `<rect x="1" y="1" width="28" height="16" rx="2" fill="${defsRef('pb')}" stroke="#6b21a8" stroke-width="1"/>`,
+      drv: `<rect x="1" y="1" width="28" height="16" rx="2" fill="${defsRef('pd')}" stroke="#00e5ff" stroke-width="2"/>`,
       usable: `<rect x="1" y="1" width="28" height="16" rx="2" fill="${defsRef('pu')}" stroke="#111827" stroke-opacity=".7" stroke-width="1"/>`,
     }[kind];
     return `<svg class="lm-sw" width="30" height="18" viewBox="0 0 30 18" aria-hidden="true" focusable="false">${body}</svg>`;
   };
   function buildLegend() {
     const rows = [['lot', 'lot', 'Lot outline']];
-    const others = M.blds.filter((x) => !x.main && !isSliver(x));
-    M.blds.forEach((b) => { if (b.main) rows.push([b.id, 'house', 'House']); else if (!isSliver(b)) rows.push([b.id, 'other', `Other building${others.length > 1 ? ` ${others.indexOf(b) + 1}` : ''}`]); });
-    if (M.blds.filter(isSliver).length > 1) rows.push(['small', 'other', 'Other buildings']);
-    rows.push(['front', 'front', 'Front yard'], ['back', 'back', 'Back yard'], ['usable', 'usable', 'Usable yard']);
-    for (const [id, kind, name] of rows) {
+    const row = (id, kind, name, extra = '') => {
       const li = html('li', { class: 'lm-li', 'data-row': id }, null, D.legend);
-      li.innerHTML = `${swatch(kind)}<span class="lm-name">${esc(name)}</span><span class="lm-val"></span>`;
-      D.els.legend.set(id, { li, val: li.querySelector('.lm-val') });
+      li.innerHTML = `${swatch(kind)}<span class="lm-name">${esc(name)}</span><span class="lm-val"></span>${extra}`;
+      D.els.legend.set(id, { li, name: li.querySelector('.lm-name'), val: li.querySelector('.lm-val') });
+    };
+    row('lot', 'lot', 'Lot outline');
+    for (const b of live()) {
+      if (b.main) row(b.id, 'house', 'House');
+      else if (!isSliver(b)) row(b.id, 'other', 'Other building', `<span class="lm-ctl"><select class="lm-what" id="${uid}-kind-${b.id}" data-bid="${b.id}" aria-label="What is this building?"></select></span>`);
     }
+    if (live().filter(isSliver).length > 1) row('small', 'other', 'Other buildings');
+    row('driveway', 'drv', 'Driveway', `<span class="lm-ctl"><button type="button" class="btn sm" id="${uid}-adddrv" data-lm="adddrv">Add your driveway</button><button type="button" class="btn sm" id="${uid}-rmdrv" data-lm="rmdrv">Remove driveway</button></span>`);
+    row('front', 'front', 'Front yard'); row('back', 'back', 'Back yard'); row('usable', 'usable', 'Usable yard');
+    for (const sel of D.legend.querySelectorAll('select.lm-what')) fillWhat(sel, shapeOf(sel.dataset.bid));
+  }
+  /** options of a "What is this?" menu for one outline; a kind the lookup stated is pre-selected and marked ≈ */
+  function fillWhat(sel, sh) {
+    if (!sh) return;
+    sel.textContent = '';
+    const add = (v, t, selected) => { const o = html('option', { value: v }, t, sel); if (selected) o.selected = true; };
+    if (!sh.what) add('', 'What is this?', true);
+    for (const [v, t] of WHAT) add(v, `${sh.what === v && sh.whatSrc === 'lookup' ? '≈ ' : ''}${t}`, sh.what === v);
+    add('__house', 'This one is the house', false);
+    add('__remove', 'Not a building — remove it', false);
   }
 
   const pathOf = (pts) => (pts.length ? `M${pts.map((p) => `${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join('L')}Z` : '');
@@ -554,6 +626,9 @@ export function initLotMap(opts) {
       const d = pathOf(pts);
       e.casing.setAttribute('d', d); e.path.setAttribute('d', d);
       if (sh.kind === 'bld') D.els.mask.get(sh.id).setAttribute('d', d);
+      if (D.els.bodies.has(sh.id)) D.els.bodies.get(sh.id).setAttribute('d', d);
+      if (sh.kind === 'drv') D.drvFill.setAttribute('d', d);
+      if (sh.kind === 'lot') D.clipLot.setAttribute('d', d);
       sh.verts.forEach((v, i) => {
         const h = D.els.handles.get(v.id);
         if (h) { h.setAttribute('transform', `translate(${pts[i][0].toFixed(2)} ${pts[i][1].toFixed(2)})`); h.dataset.lng = v.lng.toFixed(9); h.dataset.lat = v.lat.toFixed(9); h.dataset.x = pts[i][0].toFixed(2); h.dataset.y = pts[i][1].toFixed(2); }
@@ -564,11 +639,13 @@ export function initLotMap(opts) {
       line.setAttribute('x1', a[0].toFixed(1)); line.setAttribute('y1', a[1].toFixed(1)); line.setAttribute('x2', b[0].toFixed(1)); line.setAttribute('y2', b[1].toFixed(1));
       line.classList.toggle('is-sel', Boolean(M.sel && M.sel.type === 'e' && M.sel.shape === sh.id && M.sel.i === i));
     }
+    for (const [id, el] of D.els.bodies) el.classList.toggle('is-sel', Boolean(M.sel && M.sel.type === 'b' && M.sel.id === id));
     for (const [id, g] of D.els.handles) g.classList.toggle('is-sel', Boolean(M.sel && M.sel.type === 'v' && M.sel.vid === id));
+    if (!M.drv) D.drvFill.setAttribute('d', '');
     paintZones(m);
     paintLegend(m);
     paintUsable(m);
-    if (full) D.frame.dataset.model = JSON.stringify({ lot: M.lot.verts.map((v) => [v.lng, v.lat]), blds: M.blds.map((b) => ({ main: b.main, geo: toGeo(b) })) });
+    if (full) D.frame.dataset.model = JSON.stringify({ lot: M.lot.verts.map((v) => [v.lng, v.lat]), blds: live().map((b) => ({ main: b.main, what: b.what, geo: toGeo(b) })), drv: M.drv ? toGeo(M.drv) : null, drvTouched: Boolean(M.drv && M.drv.touched) });
     D.frame.dataset.front = M.frontIds && M.lot ? JSON.stringify(frontLine(M.frontIds)) : '';
     updateActions();
   }
@@ -620,7 +697,12 @@ export function initLotMap(opts) {
       const mx = (mid[0] + nxt[0]) / 2 + ox * 15, my = (mid[1] + nxt[1]) / 2 + oy * 15;
       label(Math.max(30, Math.min(M.Wd - 30, mx)), Math.max(10, Math.min(M.Hd - 10, my)), 'Street side', 'is-street');
     }
-    const house = M.blds.find((x) => x.main);
+    for (const b of live()) {
+      if (b.main || !b.what) continue;
+      const pts = b.verts.map((v) => px(v.lng, v.lat)), bx = boxOf(pts), c = centroidPx(pts);
+      if (c && bx.w > 34 && bx.h > 16) label(c[0], c[1], WHAT_NAME[b.what], 'is-what');
+    }
+    const house = live().find((x) => x.main);
     if (house && m && num(m.roof_area_sqft)) {
       const pts = house.verts.map((v) => px(v.lng, v.lat)), bx = boxOf(pts), c = centroidPx(pts);
       if (c && bx.w > 96 && bx.h > 30) label(c[0], c[1], `Roof about ${fmt(m.roof_area_sqft)} sq ft`, 'is-roof');
@@ -629,21 +711,32 @@ export function initLotMap(opts) {
 
   function paintLegend(m) {
     const set = (id, text, muted = false, hide = false) => { const r = D.els.legend.get(id); if (!r) return; r.li.hidden = hide; r.val.textContent = text; r.val.classList.toggle('is-muted', muted); };
+    const setName = (id, t) => { const r = D.els.legend.get(id); if (r && r.name) r.name.textContent = t; };
     set('lot', m && num(m.lot_area_sqft) ? `${fmt(m.lot_area_sqft)} sq ft${M.starter || M.parcelSource === 'estimated' ? ' (a first guess; drag the corners)' : ''}` : '', false, !(m && num(m.lot_area_sqft)));
-    for (const b of M.blds) {
+    const unnamed = live().filter((b) => !b.main && !b.what && !isSliver(b));
+    for (const b of live()) {
       let text;
       if (b.main) text = m && num(m.building_footprint_sqft) ? `${fmt(m.building_footprint_sqft)} sq ft footprint${num(m.roof_area_sqft) ? ` · roof about ${fmt(m.roof_area_sqft)} sq ft` : ''}` : '';
       else { try { text = `${fmt(core.areaSqft(toGeo(b)))} sq ft`; } catch { text = ''; } }
+      if (!b.main) setName(b.id, b.what ? `${WHAT_NAME[b.what]}${b.whatSrc === 'lookup' ? ' ≈' : ''}` : `Other building${unnamed.length > 1 ? ` ${unnamed.indexOf(b) + 1}` : ''}`);
       set(b.id, text, false, !text);
     }
-    const slivers = M.blds.filter(isSliver);
+    const dv = D.els.legend.get('driveway');
+    if (dv) {
+      const have = Boolean(M.drv);
+      dv.val.textContent = have && m && num(m.driveway_area_sqft) ? `${fmt(m.driveway_area_sqft)} sq ft` : '';
+      dv.li.querySelector('[data-lm="adddrv"]').hidden = have; dv.li.querySelector('[data-lm="rmdrv"]').hidden = !have;
+      dv.li.hidden = !live().length && !have;
+    }
+    D.hintDrv.hidden = !(M.drv && M.drv.starter);
+    const slivers = live().filter(isSliver);
     if (slivers.length > 1) set('small', `${fmt(slivers.reduce((t, b) => t + areaOf(b), 0))} sq ft in all (${slivers.length} small outlines)`);
     const hasYard = m && num(m.front_yard_sqft) && num(m.back_yard_sqft);
-    set('front', hasYard ? `${fmt(m.front_yard_sqft)} sq ft` : 'tap the side that faces the street', !hasYard, !M.blds.length);
+    set('front', hasYard ? `${fmt(m.front_yard_sqft)} sq ft` : 'tap the side that faces the street', !hasYard, !live().length);
     set('back', hasYard ? `${fmt(m.back_yard_sqft)} sq ft` : '', false, !hasYard);
     const u = m && num(m.usable_yard_sqft);
     set('usable', u ? `${fmt(m.usable_yard_sqft)} sq ft${num(m.usable_front_yard_sqft) && num(m.usable_back_yard_sqft) ? ` (front ${fmt(m.usable_front_yard_sqft)} · back ${fmt(m.usable_back_yard_sqft)})` : ''}` : '', false, !u);
-    D.hintUnknown.hidden = Boolean(hasYard) || !M.blds.length;
+    D.hintUnknown.hidden = Boolean(hasYard) || !live().length;
   }
 
   let hatchTile = null;
@@ -686,7 +779,12 @@ export function initLotMap(opts) {
     D.bRemove.hidden = !v;
     D.bRemove.disabled = Boolean(v && v.sh.verts.length <= 3);
     D.bReset.hidden = !M.edited;
-    D.selText.textContent = sel?.type === 'e' ? 'Side selected.' : v ? `${v.sh.kind === 'lot' ? 'Lot' : v.sh.main ? 'House' : 'Building'} corner selected.` : '';
+    const selB = sel?.type === 'b' ? shapeOf(sel.id) : v && v.sh.kind === 'bld' && !v.sh.main ? v.sh : null;
+    D.kindWrap.hidden = !selB;
+    const kkey = selB ? `${selB.id}:${selB.what ?? ''}:${selB.whatSrc ?? ''}` : '';
+    if (selB && D.kindKey !== kkey) { D.kindKey = kkey; D.kindSel.dataset.for = selB.id; fillWhat(D.kindSel, selB); }
+    D.bRmDrv.hidden = !(v && v.sh.kind === 'drv');
+    D.selText.textContent = sel?.type === 'e' ? 'Side selected.' : v ? `${shapeName(v.sh)} corner selected.` : sel?.type === 'b' ? 'Building selected.' : '';
     D.bAdd.textContent = sel?.type === 'e' ? 'Add a corner here' : 'Add a corner next to it';
     D.noteEl.textContent = M.note || (M.needsMatchNote ? 'Outline no longer matches the number · Reset outlines' : '');
   }
@@ -698,7 +796,7 @@ export function initLotMap(opts) {
   // ----- interaction -------------------------------------------------------------------------------------------
   const pointerXY = (e) => { const r = D.svg.getBoundingClientRect(); return [((e.clientX - r.left) * M.Wd) / r.width, ((e.clientY - r.top) * M.Hd) / r.height]; };
   const beginGesture = () => { if (!M.gestureBefore) M.gestureBefore = snap(); };
-  const kindOf = (sh) => (sh.kind === 'lot' ? 'lot' : 'bld');
+  const kindOf = (sh) => (sh.kind === 'lot' ? 'lot' : sh.kind === 'drv' ? 'drv' : 'bld');
 
   function moveVertex(sh, v, lng, lat) {
     const [w, s, e, n] = M.frame.bbox;
@@ -707,6 +805,7 @@ export function initLotMap(opts) {
     v.lng = lng; v.lat = lat;
     if (ringCrosses(sh.verts)) { v.lng = old.lng; v.lat = old.lat; setNote("An outline can't cross itself, so the corner went back."); return false; }
     if (M.note) setNote('');
+    if (sh.kind === 'drv') { sh.touched = true; sh.starter = false; }
     return true;
   }
 
@@ -724,7 +823,9 @@ export function initLotMap(opts) {
       e.preventDefault();
       return;
     }
+    const bd = e.target.closest?.('.lm-hitbody');
     const ed = e.target.closest?.('.lm-edge');
+    if (bd && !ed) { M.tap = { pid: e.pointerId, body: bd.dataset.shape, x: e.clientX, y: e.clientY }; return; }
     if (ed) { M.tap = { pid: e.pointerId, shape: ed.dataset.shape, i: Number(ed.dataset.i), x: e.clientX, y: e.clientY, t: performance.now() }; }
     else M.tap = { pid: e.pointerId, none: true, x: e.clientX, y: e.clientY };
   }
@@ -748,6 +849,7 @@ export function initLotMap(opts) {
     }
     const t = M.tap; M.tap = null;
     if (!t || t.pid !== e.pointerId || Math.hypot(e.clientX - t.x, e.clientY - t.y) > 8) return;
+    if (t.body) { select({ type: 'b', id: t.body }); return; }
     if (t.none) { if (M.sel) { select(null); } M.lastTap = null; return; }
     const now2 = performance.now(), last = M.lastTap;
     if (last && last.shape === t.shape && last.i === t.i && now2 - last.t < DOUBLE_TAP_MS) { M.lastTap = null; addCornerAt(shapeOf(t.shape), t.i, pointerXY(e)); return; }
@@ -799,6 +901,84 @@ export function initLotMap(opts) {
     else if (act === 'add' && sel) { if (sel.type === 'e') addCornerAt(shapeOf(sel.shape), sel.i, null); else { const r = vertexById(sel.vid); if (r) addCornerAt(r.sh, r.i, null); } }
     else if (act === 'remove' && sel?.type === 'v') { const r = vertexById(sel.vid); if (r) removeCorner(r.sh, r.v.id); }
     else if (act === 'reset') resetAll();
+    else if (act === 'adddrv') addDriveway();
+    else if (act === 'rmdrv') removeDriveway();
+    else if (act === 'addbld') addBuilding();
+  }
+
+  function onWhat(e) {
+    const t = e.target; if (!t?.classList?.contains('lm-what') || !M) return;
+    const sh = shapeOf(t.dataset.bid || t.dataset.for); if (sh) setWhat(sh, t.value);
+  }
+  function setWhat(sh, v) {
+    beginGesture();
+    M.edited = true; M.sel = null;
+    let again = null;
+    if (v === '__remove') { sh.removed = true; again = `${uid}-baddbld`; announce('Outline removed.'); }
+    else if (v === '__house') { for (const b of M.blds) b.main = false; sh.main = true; sh.what = null; sh.whatSrc = null; announce('That outline is now the house.'); }
+    else { sh.what = v || null; sh.whatSrc = v ? 'owner' : null; again = `${uid}-kind-${sh.id}`; announce(`${v ? WHAT_NAME[v] : 'Unnamed'}.`); }
+    structure(); paint(true);
+    commit(v === '__remove' || v === '__house' ? 'bld' : 'kind');
+    const el = again ? document.getElementById(again) : null; el?.focus({ preventScroll: true });
+  }
+
+  function addDriveway() {
+    const m = M.m, fe = m?.zones?.frontEdge?.edges, bd = m?.zones?.bands;
+    if (!fe?.length || !bd || !live().length) { setNote('Tap the side of your lot that faces the street first, then add your driveway.'); return; }
+    const a = fe[0].from, z = fe[fe.length - 1].to, mid = { lng: (a.lng + z.lng) / 2, lat: (a.lat + z.lat) / 2 };
+    const { kx, ky } = metresPerDegree(mid.lat);
+    const nx = bd.nx, ny = bd.ny, ux = -ny, uy = nx;
+    const house = live().find((x) => x.main);
+    const hp = house ? house.verts.map((v) => [v.lng, v.lat]) : null, lp = M.lot.verts.map((v) => [v.lng, v.lat]);
+    let t = 0.5;
+    for (; t < 80; t += 0.25) {
+      const lng = mid.lng + (nx * t) / kx, lat = mid.lat + (ny * t) / ky;
+      if (hp && inPolyXY(hp, lng, lat)) break;
+      if (t > 1.5 && !inPolyXY(lp, lng, lat)) break;
+    }
+    t = house ? Math.max(3, t - 0.1) : Math.min(8, t);
+    const h = 5 * FT, t0 = 0.2;
+    const at = (tt, s) => [mid.lng + (nx * tt + ux * s) / kx, mid.lat + (ny * tt + uy * s) / ky];
+    const ring = [at(t0, -h), at(t0, h), at(t, h), at(t, -h)]; ring.push(ring[0]);
+    beginGesture();
+    M.drv = makeShape({ type: 'Polygon', coordinates: [ring] }, 'drv', false, 'Driveway'); M.drv.touched = true; M.drv.starter = true;
+    M.edited = true; M.sel = null;
+    structure(); paint(true); commit('drv');
+    announce('Driveway added. Drag its corners to match your driveway.');
+  }
+  function removeDriveway() {
+    if (!M.drv) return;
+    beginGesture();
+    M.drv = null; M.edited = true; M.sel = null;
+    structure(); paint(true); commit('drv');
+    document.getElementById(`${uid}-adddrv`)?.focus({ preventScroll: true });
+    announce('Driveway removed.');
+  }
+  function addBuilding() {
+    if (!M.lot) return;
+    const bd = M.m?.zones?.bands;
+    const lp = M.lot.verts.map((v) => [v.lng, v.lat]);
+    const c = lp.reduce((s, p) => [s[0] + p[0] / lp.length, s[1] + p[1] / lp.length], [0, 0]);
+    const { kx, ky } = metresPerDegree(c[1]);
+    const nx = bd ? bd.nx : 0, ny = bd ? bd.ny : 1, ux = -ny, uy = nx;
+    const w = 14 * FT / 2, d = 12 * FT / 2;
+    const others = live().map((b) => b.verts.map((v) => [v.lng, v.lat]));
+    const at = (t, a, b) => [c[0] + (nx * (t + b) + ux * a) / kx, c[1] + (ny * (t + b) + uy * a) / ky];
+    const fits = (t) => {
+      const corners = [at(t, -w, -d), at(t, w, -d), at(t, w, d), at(t, -w, d)], ctr = at(t, 0, 0);
+      if (!corners.every((p) => inPolyXY(lp, p[0], p[1]))) return false;
+      if (others.some((o) => inPolyXY(o, ctr[0], ctr[1]) || corners.some((p) => inPolyXY(o, p[0], p[1])) || o.some((p) => inPolyXY(corners, p[0], p[1])))) return false;
+      return true;
+    };
+    let tt = 0, found = false;
+    for (let t = 60; t >= -10; t -= 0.5) if (fits(t)) { tt = t; found = true; break; }
+    if (!found) tt = 0;
+    const ring = [at(tt, -w, -d), at(tt, w, -d), at(tt, w, d), at(tt, -w, d)]; ring.push(ring[0]);
+    beginGesture();
+    const sh = makeShape({ type: 'Polygon', coordinates: [ring] }, 'bld', false, 'Building'); sh.added = true;
+    M.blds.push(sh); M.edited = true; M.sel = { type: 'b', id: sh.id };
+    structure(); paint(true); commit('bld');
+    announce('Building added. Drag its corners, then say what it is.');
   }
 
   function addCornerAt(sh, i, point) {
@@ -811,7 +991,7 @@ export function initLotMap(opts) {
       const t = Math.max(0.1, Math.min(0.9, ((point[0] - ax) * dx + (point[1] - ay) * dy) / l2));
       [lng, lat] = inv(ax + dx * t, ay + dy * t);
     }
-    beginGesture();
+    beginGesture(); if (sh.kind === 'drv') sh.touched = true;
     const nv = { id: ++VID, lng, lat };
     sh.verts.splice(i + 1, 0, nv);
     if (sh.kind === 'lot' && M.frontIds) { const ia = M.frontIds.indexOf(a.id), ib = M.frontIds.indexOf(b.id); if (ia >= 0 && ib === ia + 1) M.frontIds.splice(ib, 0, nv.id); }
@@ -827,7 +1007,7 @@ export function initLotMap(opts) {
     const i = sh.verts.findIndex((v) => v.id === vid);
     const trial = sh.verts.filter((v) => v.id !== vid);
     if (ringCrosses(trial)) { setNote("That would make the outline cross itself, so the corner stayed."); return; }
-    beginGesture();
+    beginGesture(); if (sh.kind === 'drv') sh.touched = true;
     const before = M.frontIds ? [...M.frontIds] : null;
     sh.verts = trial;
     if (sh.kind === 'lot' && M.frontIds) {
@@ -867,20 +1047,39 @@ export function initLotMap(opts) {
     const m = M.m ?? measureNow(); M.m = m;
     const keys = new Set(AFFECTS[kind] ?? ALL_KEYS);
     if (M.starter) keys.add('lot_area_sqft');
-    const batch = {};
+    const batch = {}, clearList = [];
     for (const k of keys) {
       const v = m?.[k];
-      if (!num(v)) continue;
+      const own = M.mapKeys.get(k);
+      if (!num(v)) { if (own && !own.typed) clearList.push(k); continue; } // e.g. the driveway was removed: the line goes back to what the lookup said
+      if (own && !own.typed && M.baseM && v === M.baseM[k]) { clearList.push(k); continue; } // the outlines are back to what was looked up
       if (M.starter && !M.history.length && !M.mapKeys.size) { batch[k] = v; continue; }
       if (v !== M.lastMeasure?.[k]) batch[k] = v;
     }
+    // garage and guest-house facts, from the names the owner gave to outlines (what the lookup said is left to the lookup)
+    const F = kindFacts();
+    for (const [k, v] of Object.entries(F)) if (M.mapKeys.get(k)?.pushed !== v) batch[k] = v;
+    for (const k of KIND_KEYS) if (!(k in F)) { const own = M.mapKeys.get(k); if (own && !own.typed) clearList.push(k); }
     M.lastMeasure = m;
-    if (!Object.keys(batch).length) return;
-    M.history.push({ before, keys: Object.keys(batch) });
+    if (!Object.keys(batch).length && !clearList.length) return;
+    M.history.push({ before, keys: [...Object.keys(batch), ...clearList] });
     for (const [k, v] of Object.entries(batch)) M.mapKeys.set(k, { pushed: v, typed: false });
+    for (const k of clearList) M.mapKeys.delete(k);
     pushing = true;
-    try { applyOwnerCorrections(batch); } finally { pushing = false; }
+    try { if (Object.keys(batch).length) applyOwnerCorrections(batch); if (clearList.length) clearOwnerCorrections(clearList); } finally { pushing = false; }
     announce(`${num(batch.lot_area_sqft) ? `Lot size is now ${fmt(batch.lot_area_sqft)} sq ft. ` : ''}${num(batch.building_footprint_sqft) ? `House footprint is now ${fmt(batch.building_footprint_sqft)} sq ft. ` : ''}`.trim() || 'Numbers updated.');
+  }
+
+  /** garage and ADU facts implied by the names the owner gave */
+  function kindFacts() {
+    const F = {}; let g = 0, a = 0, hg = false, ha = false;
+    for (const b of live()) {
+      if (b.main || b.whatSrc !== 'owner') continue;
+      if (b.what === 'garage') { hg = true; g += areaOf(b); } else if (b.what === 'adu') { ha = true; a += areaOf(b); }
+    }
+    if (hg) { F.garage_present = true; F.garage_area_sqft = Math.round(g); }
+    if (ha) { F.adu_present = true; F.adu_area_sqft = Math.round(a); }
+    return F;
   }
 
   function resetAll() {
@@ -980,13 +1179,14 @@ export function initLotMap(opts) {
   /** building outlines arrived (or changed) for the property on screen: swap them in place, keeping the frame and the photo */
   function refreshBuildings(src, sigB) {
     M.sigB = sigB; M.blds = [];
-    for (const b of src.buildings) { try { M.blds.push(makeShape(b.polygon, 'bld', b.main, b.main ? 'House' : 'Building')); } catch { /* skip */ } }
+    for (const b of src.buildings) { try { const sh = makeShape(b.polygon, 'bld', b.main, b.main ? 'House' : 'Building'); if (b.kind && !b.main) { sh.what = b.kind; sh.whatSrc = 'lookup'; } M.blds.push(sh); } catch { /* skip */ } }
     pickMain();
+    if (src.driveway && !(M.drv && M.drv.touched)) { try { M.drv = makeShape(src.driveway, 'drv', false, 'Driveway'); } catch { /* keep none */ } }
     const gb = M.drag ? M.gestureBefore : null; // a corner being dragged keeps the snapshot it started from
     M.base = snap(); M.history = []; M.mapKeys = new Map(); M.sel = null; M.gestureBefore = gb;
     const hasRef = (M.rest.streets && M.rest.streets.length) || M.rest.frontEdge || M.rest.frontPoint;
     if (!hasRef && !M.frontSet) { const ids = inferFront(); M.frontIds = ids; M.baseFront = ids; M.base = snap(); }
-    M.m = measureNow(); M.lastMeasure = M.edited ? {} : M.m; // edited: every yard figure the map now has is new to the list
+    M.m = measureNow(); M.baseM = baselineMeasure(); M.lastMeasure = M.edited ? {} : M.m; // edited: every yard figure the map now has is new to the list
     const dragging = M.drag ? { ...M.drag } : null;
     structure(); paint(true);
     if (dragging) { // the corner being dragged was rebuilt with the rest: hand the pointer to the new one, no focus change otherwise

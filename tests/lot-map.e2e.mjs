@@ -23,6 +23,8 @@ const pfx = (n) => JSON.parse(fs.readFileSync(path.join(ROOT, 'core/tests/fixtur
 const fx = (n) => JSON.parse(fs.readFileSync(path.join(ROOT, 'core/tests/fixtures/parcel', n), 'utf8'));
 import { overtureServer, OVERTURE_REAL } from '../core/tests/fixtures/providers/overture-mock.mjs';
 import { measureFromGeometry } from '../core/measure.js';
+import { drivewayAreaSqft } from '../core/driveway.js';
+import { polygonAreaSqft } from '../core/geometry.js';
 import { frameProject, frameFor, starterRing, ringCrosses, sourceFromProfile, photoUrl, NAIP_BACKDROP } from '../estimate/lot-map.js';
 
 const SFR = '4321 Example Ave, Los Angeles, CA 90099';
@@ -113,6 +115,12 @@ const server = http.createServer((req, res) => {
   if (!file.startsWith(ROOT)) { res.writeHead(403); res.end(); return; }
   if (fs.existsSync(file) && fs.statSync(file).isDirectory()) file = path.join(file, 'index.html');
   if (!fs.existsSync(file)) { res.writeHead(404); res.end('not found'); return; }
+  if (p === '/estimate/app.js') { // test seam only: lets a scenario hand the page a geometry bundle with a driveway and building kinds (the lookup does not produce them here)
+    const seam = 'if (v?.geometry) S.geometry = v.geometry;';
+    const text = fs.readFileSync(file, 'utf8');
+    if (!text.includes(seam)) { res.writeHead(500); res.end('seam missing'); return; }
+    res.writeHead(200, { 'content-type': MIME['.js'] }); res.end(text.replace(seam, 'if (v?.geometry) S.geometry = (window.__geomPatch ? window.__geomPatch(v.geometry) : v.geometry);')); return;
+  }
   res.writeHead(200, { 'content-type': MIME[path.extname(file)] ?? 'application/octet-stream' });
   fs.createReadStream(file).pipe(res);
 });
@@ -124,7 +132,7 @@ const browser = await chromium.launch();
 const failures = [];
 let passed = 0;
 const allExternal = [];
-async function scenario(name, fn, { viewport = { width: 1280, height: 900 }, reducedMotion = 'no-preference', colorScheme = 'light', hasTouch = false, allow404 = false } = {}) {
+async function scenario(name, fn, { patch = null, viewport = { width: 1280, height: 900 }, reducedMotion = 'no-preference', colorScheme = 'light', hasTouch = false, allow404 = false } = {}) {
   if (process.env.ONLY && !name.includes(process.env.ONLY)) return;
   const ctx = await browser.newContext({ viewport, reducedMotion, colorScheme, hasTouch, isMobile: hasTouch, deviceScaleFactor: 1 });
   const page = await ctx.newPage();
@@ -148,6 +156,14 @@ async function scenario(name, fn, { viewport = { width: 1280, height: 900 }, red
     if (lariacDelay && url.includes('LARIAC')) return new Promise((r) => setTimeout(r, lariacDelay)).then(() => route.fulfill({ status: a.status, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(a.body) }).catch(() => {}));
     return route.fulfill({ status: a.status, contentType: a.type ?? 'application/json', headers: { 'access-control-allow-origin': '*', 'access-control-expose-headers': 'content-range' }, body: a.raw ?? JSON.stringify(a.body) });
   });
+  if (patch) await page.addInitScript((o) => {
+    window.__geomPatch = (g) => {
+      const out = { ...g };
+      if (o.driveway) out.driveway = { polygon: { type: 'Polygon', coordinates: [[[-118.299995, 33.99998], [-118.299955, 33.99998], [-118.299955, 34.000068], [-118.299995, 34.000068], [-118.299995, 33.99998]]] }, areaSqft: 0, source: 'test', confidence: 0.4 };
+      if (o.kind) out.buildings = g.buildings.map((b) => ({ ...b, kind: b.main ? 'house' : 'garage' }));
+      return out;
+    };
+  }, patch);
   await page.addInitScript(() => { new MutationObserver(() => { if (!window.__factsAt && document.querySelector('#facts .fact')) window.__factsAt = performance.timeOrigin + performance.now(); }).observe(document, { subtree: true, childList: true }); });
   try {
     await fn(page, rec);
@@ -588,6 +604,232 @@ await scenario('very small outlines are measured but get no handles or legend li
     assert.equal(await val(page, 'building_footprint_sqft'), 1400);
   } finally { lariacSlivers = false; }
 });
+
+// ---- driveway and "what is this building?" ---------------------------------------------------------------------------------------------------
+const modelOf = (page) => page.evaluate(() => JSON.parse(document.querySelector('#lot-map .lm-frame').dataset.model));
+async function expectedFull(page) {
+  const g = await bundleOf(page); const model = await modelOf(page);
+  const fr = await page.evaluate(() => document.querySelector('#lot-map .lm-frame').dataset.front);
+  g.parcel = { type: 'Polygon', coordinates: [[...model.lot, model.lot[0]]] };
+  g.buildings = model.blds.map((b) => ({ polygon: b.geo, main: b.main, kind: b.what ?? null }));
+  delete g.driveway; delete g.exclude;
+  if (model.drv) { g.driveway = model.drv; if (model.drvTouched) g.exclude = [model.drv]; }
+  if (fr) { g.streets = []; g.streetName = null; g.frontPoint = null; g.frontEdge = { coordinates: JSON.parse(fr) }; }
+  const m = measureFromGeometry(g, { now: new Date().toISOString() });
+  const dv = model.drv ? drivewayAreaSqft(model.drv, g.parcel, model.blds.map((b) => b.geo)) : null;
+  return { m, dv, model, g };
+}
+const smallBuilding = async (page) => { const hs = await handles(page, 'bld'); const g = {}; for (const h of hs) (g[h.shape] ??= []).push(h); const area = (x) => (Math.max(...x.map((p) => p.x)) - Math.min(...x.map((p) => p.x))) * (Math.max(...x.map((p) => p.y)) - Math.min(...x.map((p) => p.y))); const grp = Object.values(g).reduce((a, x) => (area(x) < area(a) ? x : a)); return { id: grp[0].shape, cx: grp.reduce((t, h) => t + h.sx, 0) / grp.length, cy: grp.reduce((t, h) => t + h.sy, 0) / grp.length }; };
+const legendHas = async (page, re) => assert.match(await page.locator('#lot-map .lm-legend').innerText(), re);
+const earnText = async (page) => { await page.click('#next-earn'); await page.waitForSelector('#earn-headline'); const t = await page.locator('#view-earn').innerText(); await page.click('#back-property'); await page.waitForSelector('#facts'); return t; };
+const driveStable = async (page) => { await frames(page); };
+
+await scenario('driveway from the lookup: drawn with its area; dragging a corner updates Driveway and the usable yard; add and remove a corner; it cannot leave the lot', async (page) => {
+  world = 'county'; photoMode = 'png'; lariacDelay = 1200;
+  try {
+    await open(page); await mapLotOnly(page); await bundleArrived(page); await settled(page);
+    await page.waitForFunction(() => document.querySelector('#lot-map .lm-frame').dataset.model.includes('"drv":{'), null, { timeout: 10000 });
+    const e0 = await expectedFull(page);
+    assert.ok(e0.dv > 100, `driveway area ${e0.dv}`);
+    assert.match(await page.locator('#lot-map .lm-legend').innerText(), new RegExp(`Driveway\\s*\\n?\\s*${e0.dv.toLocaleString('en-US')} sq ft`));
+    assert.ok(await page.evaluate(() => document.querySelector('#lot-map .lm-drvfill').getAttribute('d').length > 10), 'driveway fill drawn');
+    assert.ok(await page.evaluate(() => document.querySelector('#lot-map .lm-drvfill').closest('g[clip-path]') !== null), 'clipped to the lot');
+    assert.equal(await page.locator('#lot-map .lm-svg .lm-drv').count(), 1);
+    assert.equal(await page.locator('.fact[data-key="driveway_area_sqft"]').count(), 0, 'no list line until the owner changes it');
+    const before = await figures(page);
+    // drag a corner of the driveway (the outline's own handles are the ones that are neither the lot's nor a building's)
+    const dh = (await page.evaluate(() => [...document.querySelectorAll('#lot-map .lm-h')].filter((h) => h.dataset.shape === 'drv').map((h) => h.id)));
+    assert.equal(dh.length, 4);
+    await page.evaluate(() => document.querySelector('#lot-map .lm-frame').scrollIntoView({ block: 'center' }));
+    const hs = await handles(page, 'any'); const d = hs.filter((h) => h.shape === 'drv').sort((a, b) => a.y - b.y)[0];
+    await drag(page, d, 3, 12);
+    await page.waitForFunction(() => document.querySelector('.fact[data-key="driveway_area_sqft"]')?.dataset.state === 'edited');
+    const e1 = await expectedFull(page); const f = await figures(page);
+    assert.equal(await val(page, 'driveway_area_sqft'), e1.dv); assert.equal(e1.m.driveway_area_sqft ?? e1.dv, e1.dv);
+    for (const k of ['usable_yard_sqft', 'usable_front_yard_sqft', 'usable_back_yard_sqft']) assert.equal(f[k], e1.m[k], k);
+    assert.ok(f.usable_yard_sqft < before.usable_yard_sqft || f.usable_front_yard_sqft < before.usable_front_yard_sqft, 'the driveway is out of the usable yard');
+    assert.match(await page.locator('.fact[data-key="driveway_area_sqft"] .flabel').innerText(), /^Driveway$/);
+    // add a corner by double-click on its side, then remove it with Delete
+    const dd = (await handles(page, 'any')).filter((h) => h.shape === 'drv').sort((a, b) => a.x - b.x);
+    const left = dd.slice(0, 2).sort((a, b) => a.y - b.y);
+    await page.mouse.dblclick((left[0].sx + left[1].sx) / 2, (left[0].sy + left[1].sy) / 2);
+    await page.waitForFunction(() => [...document.querySelectorAll('#lot-map .lm-h')].filter((h) => h.dataset.shape === 'drv').length === 5);
+    await page.keyboard.press('Delete');
+    await page.waitForFunction(() => [...document.querySelectorAll('#lot-map .lm-h')].filter((h) => h.dataset.shape === 'drv').length === 4);
+    // it cannot leave the lot: pull a corner far out through the street side and past the lot's west line
+    const far = (await handles(page, 'any')).filter((h) => h.shape === 'drv').sort((a, b) => b.y - a.y)[0];
+    await drag(page, far, -60, 30);
+    await frames(page);
+    await page.waitForFunction(() => document.querySelector('.fact[data-key="driveway_area_sqft"]'));
+    const e2 = await expectedFull(page);
+    const raw = polygonAreaSqft(e2.model.drv);
+    assert.ok(e2.dv < raw - 20, `the part outside the lot is not counted (${e2.dv} of ${Math.round(raw)})`);
+    assert.equal(await val(page, 'driveway_area_sqft'), e2.dv);
+    // remove the driveway: the owner value goes, the usable yard comes back
+    await page.click('#lm-rmdrv');
+    await page.waitForFunction(() => !document.querySelector('.fact[data-key="driveway_area_sqft"]'));
+    assert.deepEqual(await figures(page), before, 'figures are back as looked up');
+    await legendHas(page, /Driveway/); assert.equal(await page.locator('#lm-adddrv').isVisible(), true);
+  } finally { lariacDelay = 0; }
+}, { patch: { driveway: true } });
+
+await scenario('add your driveway: needs the street side; then a starter strip from the street side toward the house, measured with buildings subtracted', async (page) => {
+  world = 'county'; photoMode = 'png';
+  await open(page); await mapReady(page); await settled(page);
+  assert.equal(await page.locator('#lm-adddrv').isVisible(), true, 'the legend offers Add your driveway');
+  await page.click('#lm-adddrv');
+  await page.waitForFunction(() => document.querySelector('#lot-map .lm-frame').dataset.model.includes('"drv":{'));
+  await frames(page);
+  assert.equal(await page.locator('#lot-map .lm-hint, #lot-map .lm-tip:not([hidden])').filter({ hasText: 'Drag the corners to match your driveway' }).count(), 1, 'the hint shows');
+  await page.waitForFunction(() => document.querySelector('.fact[data-key="driveway_area_sqft"]')?.dataset.state === 'edited');
+  const e = await expectedFull(page); const f = await figures(page);
+  assert.ok(e.dv > 50); assert.equal(await val(page, 'driveway_area_sqft'), e.dv);
+  assert.equal(f.usable_yard_sqft, e.m.usable_yard_sqft);
+  // about 10 ft wide, runs from the street-facing side toward (and stops at) the house
+  const ring = e.model.drv.coordinates[0]; const kx = 6371008.8 * Math.cos(34 * Math.PI / 180) * Math.PI / 180, ky = 6371008.8 * Math.PI / 180;
+  const w = Math.hypot((ring[1][0] - ring[0][0]) * kx, (ring[1][1] - ring[0][1]) * ky) / 0.3048;
+  assert.ok(Math.abs(w - 10) < 0.3, `width ${w} ft`);
+  const topLat = Math.max(...ring.map((p) => p[1])); const houseSouth = Math.min(...e.model.blds.find((b) => b.main).geo.coordinates[0].map((p) => p[1]));
+  assert.ok(topLat <= houseSouth + 0.0000012, 'stops at the house');
+  assert.match(await page.locator('#lot-map .lm-legend').innerText(), /Driveway\s*\n?\s*[\d,]+ sq ft/);
+  // dragging a corner removes the starter hint
+  const d = (await handles(page, 'any')).filter((h) => h.shape === 'drv')[0]; await drag(page, d, 4, 0);
+  await frames(page);
+  assert.equal(await page.locator('#lot-map .lm-tip:not([hidden])').filter({ hasText: 'Drag the corners to match your driveway' }).count(), 0);
+});
+
+await scenario('add your driveway with no street side known asks for it first', async (page) => {
+  world = 'chicago'; photoMode = 'png';
+  await open(page, CHICAGO); await mapReady(page); await settled(page);
+  await page.click('#lm-adddrv');
+  assert.match(await page.locator('#lm-note').innerText(), /street first/i);
+  assert.equal(await page.locator('#lot-map .lm-svg .lm-drv').count(), 0);
+});
+
+await scenario('naming a building: Garage sets the garage facts, relabels, and the earnings page lists the garage option; changing it reverses them', async (page) => {
+  world = 'county'; photoMode = 'png';
+  await open(page); await mapReady(page); await settled(page);
+  assert.doesNotMatch(await earnText(page), /garage/i, 'no garage option before');
+  const sb = await smallBuilding(page);
+  await page.mouse.click(sb.cx, sb.cy);
+  await page.waitForSelector('#lm-kind-bar', { state: 'visible' });
+  await page.selectOption('#lm-kind-bar', 'garage');
+  await page.waitForFunction(() => document.querySelector('.fact[data-key="garage_present"]')?.dataset.state === 'edited');
+  const e = await expectedFull(page);
+  const area = Math.round(polygonAreaSqft(e.model.blds.find((b) => !b.main).geo));
+  assert.equal(await val(page, 'garage_area_sqft'), area); assert.equal(await page.locator('#f-garage_present-yes').getAttribute('aria-pressed'), 'true');
+  assert.match(await page.locator('.fact[data-key="garage_area_sqft"] .flabel').innerText(), /^Garage size$/);
+  await legendHas(page, new RegExp(`Garage\\s*\\n?\\s*${area.toLocaleString('en-US')} sq ft`));
+  assert.ok(await page.locator('#lot-map .lm-label.is-what').filter({ hasText: 'Garage' }).count() >= 1, 'the outline is labelled Garage');
+  assert.match(await earnText(page), /garage/i, 'the earnings page lists the garage option');
+  // undo coupling: Undo on the garage line takes the name back too
+  await page.click('#undo-garage_present');
+  await page.waitForFunction(() => !document.querySelector('.fact[data-key="garage_area_sqft"][data-state="edited"]') && !document.querySelector('.fact[data-key="garage_present"][data-state="edited"]'));
+  assert.doesNotMatch((await page.locator('#lot-map .lm-legend .lm-name').allInnerTexts()).join('|'), /Garage/);
+  // name it again, then change it to Other: both facts go
+  await page.selectOption(`#lot-map .lm-legend select.lm-what`, 'garage');
+  await page.waitForFunction(() => document.querySelector('.fact[data-key="garage_present"]')?.dataset.state === 'edited');
+  await page.selectOption(`#lot-map .lm-legend select.lm-what`, 'other');
+  await page.waitForFunction(() => !document.querySelector('.fact[data-key="garage_area_sqft"]') && document.querySelector('.fact[data-key="garage_present"]')?.dataset.state !== 'edited');
+  await legendHas(page, /Other\s*\n?\s*[\d,]+ sq ft/);
+});
+
+await scenario('naming a building ADU / guest house sets the ADU facts and the earnings page lists the ADU option', async (page) => {
+  world = 'county'; photoMode = 'png';
+  await open(page); await mapReady(page); await settled(page);
+  const before = await earnText(page);
+  const sb = await smallBuilding(page);
+  await page.mouse.click(sb.cx, sb.cy);
+  await page.selectOption('#lm-kind-bar', 'adu');
+  await page.waitForFunction(() => document.querySelector('.fact[data-key="adu_present"]')?.dataset.state === 'edited');
+  const e = await expectedFull(page); const area = Math.round(polygonAreaSqft(e.model.blds.find((b) => !b.main).geo));
+  assert.equal(await val(page, 'adu_area_sqft'), area);
+  assert.match(await page.locator('.fact[data-key="adu_area_sqft"] .flabel').innerText(), /^ADU \/ guest house size$/);
+  await legendHas(page, /ADU \/ guest house/);
+  const after = await earnText(page);
+  assert.notEqual(after, before, 'page 2 changed'); assert.match(after, /guest house|ADU|accessory/i);
+});
+
+await scenario('a kind the lookup states is pre-selected with ≈ and pushes nothing; "This one is the house" swaps and the roof follows; "Not a building" removes and the yards update', async (page) => {
+  world = 'county'; photoMode = 'png'; lariacDelay = 1200;
+  try {
+    await open(page); await mapLotOnly(page); await bundleArrived(page); await settled(page);
+    await page.waitForFunction(() => document.querySelector('#lot-map .lm-legend').innerText.includes('Garage'), null, { timeout: 10000 });
+    await legendHas(page, /Garage ≈\s*\n?\s*[\d,]+ sq ft/);
+    assert.equal(await page.locator('#lot-map .lm-legend select.lm-what option:checked').innerText(), '≈ Garage');
+    assert.equal(await page.locator('.fact[data-key="garage_present"][data-state="edited"]').count(), 0, 'nothing pushed for a lookup kind');
+    const before = await figures(page);
+    // swap the house
+    await page.selectOption('#lot-map .lm-legend select.lm-what', '__house');
+    await page.waitForFunction(() => document.querySelector('.fact[data-key="building_footprint_sqft"]')?.dataset.state === 'edited');
+    const e = await expectedFull(page); const f = await figures(page);
+    assert.notEqual(f.building_footprint_sqft, before.building_footprint_sqft);
+    assert.equal(f.building_footprint_sqft, e.m.building_footprint_sqft); assert.equal(f.roof_area_sqft, e.m.roof_area_sqft); assert.ok(f.roof_area_sqft < before.roof_area_sqft, 'roof follows the new house');
+    await legendHas(page, /House\s*\n?\s*300 sq ft footprint/);
+    // the old house is now the other building: remove it ("Not a building")
+    await page.selectOption('#lot-map .lm-legend select.lm-what', '__remove');
+    await page.waitForFunction(() => document.querySelector('.fact[data-key="back_yard_sqft"]')?.dataset.state === 'edited' || document.querySelector('.fact[data-key="front_yard_sqft"]')?.dataset.state === 'edited');
+    const e2 = await expectedFull(page); const f2 = await figures(page);
+    assert.equal(e2.model.blds.length, 1);
+    for (const k of ['front_yard_sqft', 'back_yard_sqft', 'usable_yard_sqft']) assert.equal(f2[k], e2.m[k], k);
+    assert.ok(f2.back_yard_sqft + f2.front_yard_sqft > before.back_yard_sqft + before.front_yard_sqft, 'the removed building went back into the yard figures');
+    await page.click('#lm-breset');
+    await page.waitForFunction(() => !document.querySelector('.fact[data-state="edited"]'));
+    assert.deepEqual(await figures(page), before, 'Reset restores the lookup'); await legendHas(page, /Garage ≈/);
+  } finally { lariacDelay = 0; }
+}, { patch: { kind: true } });
+
+await scenario('add a building: a starter box near the back of the lot, then name it; Reset restores; a typed number wins', async (page) => {
+  world = 'county'; photoMode = 'png';
+  await open(page); await mapReady(page); await settled(page);
+  const before = await figures(page); const n0 = (await modelOf(page)).blds.length;
+  if (process.env.DBG) console.log('DBGA', await page.evaluate(() => [document.querySelectorAll('#lot-map .lm-hitbody').length, JSON.parse(document.querySelector('#lot-map .lm-frame').dataset.model).blds.length]));
+  await page.click('#lm-baddbld');
+  if (process.env.DBG) { await page.waitForTimeout(500); console.log('DBGB', n0, await page.evaluate(() => [document.querySelectorAll('#lot-map .lm-hitbody').length, document.querySelector('#lot-map .lm-frame').dataset.model.length, document.getElementById('lm-note').innerText, JSON.parse(document.querySelector('#lot-map .lm-frame').dataset.model).blds.length])); }
+  await page.waitForFunction((n) => document.querySelectorAll('#lot-map .lm-hitbody').length === n, n0);
+  const e = await expectedFull(page); assert.equal(e.model.blds.length, n0 + 1);
+  const nb = e.model.blds[e.model.blds.length - 1]; const lotNorth = Math.max(...e.model.lot.map((p) => p[1])), lotSouth = Math.min(...e.model.lot.map((p) => p[1]));
+  assert.ok(Math.min(...nb.geo.coordinates[0].map((p) => p[1])) > (lotNorth + lotSouth) / 2 - 0.00003, 'near the back of the lot');
+  await page.waitForFunction(() => document.querySelector('.fact[data-key="back_yard_sqft"]')?.dataset.state === 'edited' || document.querySelector('.fact[data-key="front_yard_sqft"]')?.dataset.state === 'edited' || document.querySelector('.fact[data-key="usable_yard_sqft"]')?.dataset.state === 'edited');
+  const f = await figures(page); for (const k of ['back_yard_sqft', 'front_yard_sqft']) assert.equal(f[k], e.m[k], k);
+  assert.ok(await page.locator('#lm-kind-bar').isVisible(), 'the new outline is selected so it can be named');
+  await page.selectOption('#lm-kind-bar', 'garage');
+  await page.waitForFunction(() => document.querySelector('.fact[data-key="garage_present"]')?.dataset.state === 'edited');
+  // a typed number wins over later drags of an unrelated outline
+  await page.fill('#f-garage_area_sqft', '555'); await page.press('#f-garage_area_sqft', 'Enter');
+  assert.equal(await val(page, 'garage_area_sqft'), 555);
+  const hs = await handles(page, 'lot'); await drag(page, hs.reduce((a, h) => (h.y < a.y ? h : a)), -8, -9);
+  await page.waitForFunction(() => document.querySelector('.fact[data-key="lot_area_sqft"]').dataset.state === 'edited');
+  assert.equal(await val(page, 'garage_area_sqft'), 555, 'typed garage size kept');
+  assert.equal((await modelOf(page)).blds.length, n0 + 1, 'typing did not move or remove an outline');
+  await page.click('#lm-breset');
+  await page.waitForFunction(() => !document.querySelector('.fact[data-key="lot_area_sqft"][data-state="edited"]') && !document.querySelector('.fact[data-key="back_yard_sqft"][data-state="edited"]'));
+  assert.equal((await modelOf(page)).blds.length, n0, 'the added building is gone');
+  const after = await figures(page); for (const k of ALLK) assert.equal(after[k], before[k], k);
+  assert.equal(await val(page, 'garage_area_sqft'), 555, 'the typed number stays after Reset');
+});
+
+await scenario('driveway and named garage on the picture: desktop and phone screenshots, no failure wording, no sideways scroll', async (page) => {
+  world = 'county'; photoMode = 'png'; lariacDelay = 1200;
+  try {
+    await open(page); await mapLotOnly(page); await bundleArrived(page); await settled(page);
+    await page.waitForFunction(() => document.querySelector('#lot-map .lm-legend').innerText.includes('Garage'), null, { timeout: 10000 });
+    await page.waitForFunction(() => { const i = document.querySelector('#lot-map .lm-img'); return i && !i.hidden && i.complete; });
+    const t = await page.locator('main').innerText(); assert.doesNotMatch(t, /fail|error|unavailable|not found/i); assert.doesNotMatch(t, /side yard/i);
+    const m = await page.evaluate(() => ({ sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth })); assert.ok(m.sw <= m.cw);
+    await page.screenshot({ path: `${SHOTS}/${page.viewportSize().width < 600 ? 'phone' : 'desktop'}-driveway-garage.png`, fullPage: true, clip: await clipOf(page) });
+  } finally { lariacDelay = 0; }
+}, { patch: { driveway: true, kind: true } });
+await scenario('driveway and named garage on the picture (phone 390 px)', async (page) => {
+  world = 'county'; photoMode = 'png'; lariacDelay = 1200;
+  try {
+    await open(page); await mapLotOnly(page); await bundleArrived(page); await settled(page);
+    await page.waitForFunction(() => document.querySelector('#lot-map .lm-legend').innerText.includes('Garage'), null, { timeout: 10000 });
+    await page.waitForFunction(() => { const i = document.querySelector('#lot-map .lm-img'); return i && !i.hidden && i.complete; });
+    const m = await page.evaluate(() => ({ sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth })); assert.ok(m.sw <= m.cw, `${m.sw} > ${m.cw}`);
+    await page.screenshot({ path: `${SHOTS}/phone-driveway-garage.png`, fullPage: true, clip: await clipOf(page) });
+  } finally { lariacDelay = 0; }
+}, { patch: { driveway: true, kind: true }, viewport: { width: 390, height: 844 }, hasTouch: true });
 
 await scenario('photo answers 404: outlines still drawn, nothing said about it', async (page, rec) => {
   world = 'county'; photoMode = '404';

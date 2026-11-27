@@ -78,7 +78,7 @@ const FACT_ORDER = ['lot_area_sqft', 'living_area_sqft', 'bedrooms', 'bathrooms'
 /** Listed right after the yard lines, only when the lookup supplied a value (or the owner typed one). */
 const AFTER_YARD = ['green_area_sqft', 'paved_area_sqft', 'pool_area_sqft', 'tree_cover_sqft'];
 /** Listed after those when the profile has a value for them, in this order; any other owner-meaningful attribute follows. */
-const MORE_ORDER = ['units', 'driveway_area_sqft', 'adu_present', 'zoning', 'transit_distance_m'];
+const MORE_ORDER = ['units', 'driveway_area_sqft', 'adu_present', 'adu_area_sqft', 'zoning', 'transit_distance_m'];
 /** Never listed: map and record internals. Address and parcel number appear once in the heading. */
 const HIDDEN = new Set(['side_yard_sqft', 'address', 'location', 'jurisdiction', 'parcel_id', 'parcel_boundary', 'use_code', 'use_type', 'buildings', 'place_id',
   'demand_generators', 'equipment_owned', 'lat', 'lng', 'apn']);
@@ -88,12 +88,12 @@ const LABELS = {
   green_area_sqft: 'Lawn and planting', paved_area_sqft: 'Paved area (driveway, patio)', pool_area_sqft: 'Pool size', tree_cover_sqft: 'Tree cover',
   roof_area_sqft: 'Roof area', front_yard_sqft: 'Front yard', back_yard_sqft: 'Back yard', usable_yard_sqft: 'Usable yard', usable_front_yard_sqft: 'Usable front yard', usable_back_yard_sqft: 'Usable back yard', yard_area_sqft: 'Yard (total open ground)',
   building_footprint_sqft: 'Building footprint', pool_present: 'Pool', parking_spaces: 'Parking spaces', garage_present: 'Garage', property_type: 'Property type',
-  units: 'Units', driveway_area_sqft: 'Driveway area', adu_present: 'Guest house or ADU', zoning: 'Zoning', transit_distance_m: 'Nearest bus or train stop',
+  units: 'Units', driveway_area_sqft: 'Driveway', garage_area_sqft: 'Garage size', adu_area_sqft: 'ADU / guest house size', adu_present: 'Guest house or ADU', zoning: 'Zoning', transit_distance_m: 'Nearest bus or train stop',
   address: 'Address', parcel_id: 'Parcel number',
 };
 const factLabel = (k) => LABELS[k] ?? cap(k.replace(/_(sqft|present|available|m|ft)$/, '').replace(/_/g, ' '));
 const INT_KEYS = new Set(['year_built', 'remodeled_year', 'bedrooms', 'units', 'parking_spaces', 'floors']);
-const NUMBER_KEYS = new Set(['lot_area_sqft', 'year_built', 'remodeled_year', 'bedrooms', 'bathrooms', 'floors', 'front_yard_sqft', 'back_yard_sqft', 'side_yard_sqft', 'living_area_sqft', 'units',
+const NUMBER_KEYS = new Set(['garage_area_sqft', 'adu_area_sqft', 'lot_area_sqft', 'year_built', 'remodeled_year', 'bedrooms', 'bathrooms', 'floors', 'front_yard_sqft', 'back_yard_sqft', 'side_yard_sqft', 'living_area_sqft', 'units',
   'building_footprint_sqft', 'roof_area_sqft', 'yard_area_sqft', 'driveway_area_sqft', 'parking_spaces', 'transit_distance_m']);
 /** Unit shown next to a number, and the factor from the stored value to what is shown (metres are shown in feet). */
 function unitOf(key) {
@@ -426,7 +426,7 @@ function factKeys() {
   const present = (k) => (hasValue(attrs[k]) || k in S.owner) && !attrs[k]?.hidden;
   // usable lines sit right after the line they refine; only when the lookup (or the owner) supplied them
   const put = (after, ...ks) => { const w = ks.filter(present); keys.splice(keys.indexOf(after) + 1, 0, ...w); };
-  put('yard_area_sqft', ...AFTER_YARD); put('yard_area_sqft', 'usable_yard_sqft'); put('back_yard_sqft', 'usable_back_yard_sqft'); put('front_yard_sqft', 'usable_front_yard_sqft');
+  put('yard_area_sqft', 'driveway_area_sqft'); put('garage_present', 'garage_area_sqft'); put('yard_area_sqft', ...AFTER_YARD); put('yard_area_sqft', 'usable_yard_sqft'); put('back_yard_sqft', 'usable_back_yard_sqft'); put('front_yard_sqft', 'usable_front_yard_sqft');
   const extra = (k) => !keys.includes(k) && !HIDDEN.has(k) && !HIDDEN_RE.test(k) && !attrs[k]?.hidden && (hasValue(attrs[k]) || k in S.owner) && kindOf(k, attrs[k]?.value) !== null && kindOf(k, attrs[k]?.value) !== 'equipment';
   for (const k of MORE_ORDER) if (extra(k)) keys.push(k);
   for (const k of Object.keys(attrs)) if (extra(k)) keys.push(k);

@@ -1,6 +1,6 @@
 /* "Your lot from above" (estimate/lot-map.js). Outline colours are the same in light and dark: they sit on a photo, and each one also has a pattern or a label. */
 .lm { margin: 4px 0 16px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2);
-  --lm-bg: #dfe6ea; --lm-lot: #ffc400; --lm-house: #ff4d6d; --lm-other: #ff4d6d; }
+  --lm-bg: #dfe6ea; --lm-lot: #ffc400; --lm-house: #ff4d6d; --lm-other: #ff4d6d; --lm-drv: #00e5ff; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .lm { --lm-bg: #1b252e; } }
 :root[data-theme="dark"] .lm { --lm-bg: #1b252e; }
 .lm[hidden], .lm-body[hidden], .lm [hidden] { display: none !important; }
@@ -50,3 +50,17 @@
 .lm-tip { margin-top: 8px; }
 @media (max-width: 520px) { .lm { padding: 10px; margin-left: 0; margin-right: 0; } .lm-legend { grid-template-columns: 1fr; } .lm-actions .btn { flex: 1 1 auto; } }
 @media (prefers-reduced-motion: reduce) { .lm *, .lm *::before { transition: none !important; animation: none !important; } }
+
+.lm-drv { fill: none; stroke: var(--lm-drv); stroke-width: 2.6; stroke-linejoin: round; pointer-events: none; }
+.lm-drvfill { pointer-events: none; }
+.lm-dot.is-drv { fill: var(--lm-drv); }
+.lm-hitbody { fill: rgba(0, 0, 0, 0); stroke: none; pointer-events: all; cursor: pointer; }
+.lm-hitbody.is-sel { fill: rgba(255, 255, 255, .2); }
+.lm-label.is-what { font-size: 11px; }
+.lm-sw .lm-drv { stroke-width: 2.4; }
+.lm-li { grid-template-areas: "sw name" "sw val" "sw ctl"; }
+.lm-ctl { grid-area: ctl; margin-top: 4px; display: flex; gap: 6px; flex-wrap: wrap; }
+.lm-ctl .btn { min-height: 34px; }
+.lm-what, .lm-kindwrap .lm-what { font-size: 13px; min-height: 34px; padding: 3px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); max-width: 100%; }
+.lm-what:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.lm-kindwrap { display: inline-flex; align-items: center; gap: 6px; }
