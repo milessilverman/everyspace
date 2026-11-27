@@ -7,8 +7,11 @@
 // Earth model differs from the WGS84 ellipsoid by up to ~0.5%. Fine for lot and roof sizing, NOT for survey,
 // legal or tax use. Rings larger than ~10 km are not supported accurately.
 
-const R = 6371008.8;
-const SQFT_PER_M2 = 10.763910416709722;
+/** Mean Earth radius used by every helper here, metres. */
+export const EARTH_RADIUS_M = 6371008.8;
+const R = EARTH_RADIUS_M;
+/** Square feet per square metre (exact: 1 ft = 0.3048 m). */
+export const SQFT_PER_M2 = 10.763910416709722;
 const RAD = Math.PI / 180;
 
 /** @typedef {{lat:number, lng:number}} LatLng */
@@ -124,4 +127,25 @@ export function yardAreaSqft(parcel, buildings, lotSqft) {
   const on = buildings.filter((b) => pointInPolygon(centroid(b.polygon), parcel));
   const built = sumAreas(on.map((b) => b.polygon));
   return { lotSqft: lot, buildingSqft: built, buildingCount: on.length, yardSqft: Math.max(0, lot - built) };
+}
+
+/**
+ * Local planar frame: equirectangular projection around `origin` (x = R*cos(lat0)*dLng east, y = R*dLat north,
+ * metres, same R as above). ERROR BOUND: the east scale is fixed at cos(lat0), so at a point dy metres north of the
+ * origin lengths are off by about tan(lat0)*dy/R relative: at Los Angeles (34 N) and 100 m from the origin that is
+ * < 1.1e-5 (0.06 sq ft on a 5,000 sq ft lot). Against the WGS84 ellipsoid the spherical R adds, at 34 N, about +0.25%
+ * on north-south lengths, -0.22% on east-west lengths and +0.03% on areas. Use within ~1 km of the origin only.
+ * @param {LatLng} origin
+ * @returns {{origin:LatLng, toXY:(p:number[])=>number[], toLngLat:(p:number[])=>number[]}}
+ */
+export function localProjection(origin) {
+  if (!origin || !Number.isFinite(origin.lat) || !Number.isFinite(origin.lng) || Math.abs(origin.lat) >= 90) {
+    throw new TypeError('localProjection: origin must be {lat, lng} with finite values and |lat| < 90');
+  }
+  const kx = R * Math.cos(origin.lat * RAD) * RAD, ky = R * RAD;
+  return {
+    origin: { lat: origin.lat, lng: origin.lng },
+    toXY: (p) => [(p[0] - origin.lng) * kx, (p[1] - origin.lat) * ky],
+    toLngLat: (p) => [origin.lng + p[0] / kx, origin.lat + p[1] / ky],
+  };
 }

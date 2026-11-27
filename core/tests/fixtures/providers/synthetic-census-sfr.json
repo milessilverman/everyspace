@@ -1,0 +1,32 @@
+{
+ "_fixture_note": "SYNTHETIC: invented address and geometry shaped like the live LA County response; not a real property",
+ "result": {
+  "addressMatches": [
+   {
+    "matchedAddress": "4321 EXAMPLE AVE, LOS ANGELES, CA, 90099",
+    "coordinates": {
+     "x": -118.29991733992684,
+     "y": 33.99994517735488
+    },
+    "addressComponents": {
+     "city": "LOS ANGELES",
+     "state": "CA",
+     "zip": "90099"
+    },
+    "geographies": {
+     "Counties": [
+      {
+       "GEOID": "06037",
+       "NAME": "Los Angeles County"
+      }
+     ],
+     "States": [
+      {
+       "STUSAB": "CA"
+      }
+     ]
+    }
+   }
+  ]
+ }
+}

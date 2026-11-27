@@ -9,7 +9,7 @@ Updated 2026-11-27. Read this first. Detail lives in the files named here.
 | Homepage = address input that starts the property flow | done, live | `index.html`; merged in PR #10 |
 | Site audit, fixes, browser tests (Part 2) | done on branch | `claude/part2-site-audit`, findings in `docs/audit.md` |
 | Property-data providers, yard split, profile storage, accuracy run | done on branch (keyless path) | `claude/trusting-cannon-yynabw`; `docs/property-data.md`, `docs/phase1-accuracy.md` |
-| Property-data wired into the homepage flow | in progress | same branch |
+| Property-data wired into the homepage flow | done on branch (keyless path) | same branch; LA County addresses use the county locator, assessor and building outlines first, earlier lookup as fallback; address suggestions from the county service |
 | Rename to "Spacavia" ("Your space, your way") and repository rename | on hold | waiting for the owner's go-ahead |
 | Backend from run 1 (orgs, conflict engine, adapters) | staging only | not applied to the live database |
 
@@ -26,8 +26,8 @@ Live backend functions (checked read-only 2026-11-27): `calendar-feed`, `calenda
 ## Test commands and last results
 | command | result |
 |---|---|
-| `npm test` (core unit tests) | 257 pass on the Part 2 branch; 366 on the property-data branch |
-| `npm run e2e` (every `tests/*.e2e.mjs`) | 7 files pass: home 10, address entry 20, property confirm 8, navigation 12, sign-in 62 checks, console navigation 164 checks, console 18 checks |
+| `npm test` (core unit tests) | 257 pass on the Part 2 branch; 370 on the property-data branch |
+| `npm run e2e` (every `tests/*.e2e.mjs`) | Part 2 branch: 7 files pass (home 10, address entry 20, property confirm 8, navigation 12, sign-in 62 checks, console navigation 164 checks, console 18 checks). Property-data branch: 8 files pass (adds address suggestions 25; address entry 35, property confirm 10) |
 | `cd platform && npm test` | 231 on main; 264 on the property-data branch |
 | `cd platform && npm run test:staging` | 16 pass |
 | demo repo: `node --test tests/*.test.mjs` | 15 pass |
@@ -99,7 +99,7 @@ All three need an account with the provider (and a billing account for Google), 
 - Sign-in, email delivery and row-level security were tested against a mocked backend only; no real account was used on production.
 
 ## Next
-1. Merge Part 2; finish wiring property data into the homepage flow.
+1. Merge Part 2, then the property-data pull request.
 2. On the owner's go-ahead: rename pass, then repository rename.
 3. With keys: verify RentCast and Solar adapters against real responses and fill the accuracy columns.
 4. After A2: switch the property flow to the server endpoint and change the "nothing is saved" statement accordingly.

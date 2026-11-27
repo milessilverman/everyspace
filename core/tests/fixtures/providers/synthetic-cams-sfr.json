@@ -1,0 +1,26 @@
+{
+ "_fixture_note": "SYNTHETIC: invented address and geometry shaped like the live LA County response; not a real property",
+ "spatialReference": {
+  "wkid": 4326
+ },
+ "candidates": [
+  {
+   "address": "4321 Example Ave, Los Angeles, CA, 90099",
+   "location": {
+    "x": -118.29991733992684,
+    "y": 33.99997807094195
+   },
+   "score": 100,
+   "attributes": {
+    "Match_addr": "4321 Example Ave, Los Angeles, CA, 90099",
+    "StAddr": "4321 Example Ave",
+    "StreetName": "Example",
+    "SufType": "Ave",
+    "City": "Los Angeles",
+    "State": "CA",
+    "ZIP": "90099",
+    "Addr_type": "StreetAddress"
+   }
+  }
+ ]
+}

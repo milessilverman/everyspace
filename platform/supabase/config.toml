@@ -14,3 +14,8 @@ verify_jwt = true
 # A host uploads a reservations CSV; the function calls import_reservations with the caller's own JWT.
 [functions.booking-import]
 verify_jwt = true
+
+# Public address -> property profile estimator. Browsers call it without a login, so the JWT check is off; the function
+# enforces its own CORS allow-list (ALLOWED_ORIGINS), input limits and per-provider daily budgets (reserve_provider_call).
+[functions.property-profile]
+verify_jwt = false

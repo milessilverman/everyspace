@@ -16,6 +16,9 @@ const DENIED = /row-level security|permission denied|does not belong|cannot add 
 const GLOBAL = ['app_settings', 'roles', 'channels', 'space_categories', 'amenities', 'regulatory_rules'];
 const ANON_READABLE = ['channels', 'space_categories', 'amenities', 'regulatory_rules'];
 
+// Service-role-only tables: no policies at all, so no signed-in user or visitor reads or writes them.
+const SERVICE_ONLY = ['provider_usage'];
+
 const F = {}; // fixture ids for org A
 let db, one;
 
@@ -85,6 +88,9 @@ const TENANT = {
     insert: () => `insert into public.resources (property_id, name, capacity) values ('${F.prop}', 'Intruder', 1)` },
   space_resources: { where: () => `space_id = '${F.space}' and resource_id = '${F.resource}'`, viewer: true, owner: true, set: `units = 9`,
     insert: () => `insert into public.space_resources (space_id, resource_id) values ('${F.space2}', '${F.resource}')` },
+  // Only the property-profile function (service role) writes; a member reads non-expired profiles claimed for their property.
+  property_profiles: { where: () => `id = '${F.profile}'`, viewer: true, owner: false, set: `address = 'pwned'`,
+    insert: () => `insert into public.property_profiles (address_key, address, profile, model_version, expires_at, property_id) values ('x-${uuid()} st', 'x st', '{}', 'v1', now() + interval '1 day', '${F.prop}')` },
   communications: { where: () => `id = '${F.comm}'`, viewer: true, owner: true, set: `body = 'pwned'`,
     insert: () => `insert into public.communications (org_id, space_id, direction, body) values ('${F.org}', '${F.space}', 'note', 'x')` },
 };
@@ -139,6 +145,7 @@ before(async () => {
   F.relation = await ins(`insert into public.space_relations (space_id, blocks_space_id) values ($1, $2)`, [F.space, F.space2]);
   F.resource = await ins(`insert into public.resources (property_id, name, capacity) values ($1, 'Parking', 2)`, [F.prop]);
   await db.query(`insert into public.space_resources (space_id, resource_id) values ($1, $2)`, [F.space, F.resource]);
+  F.profile = await ins(`insert into public.property_profiles (address_key, address, profile, model_version, expires_at, property_id) values ('1 maple st', '1 Maple St', '{}', 'v1', now() + interval '1 day', $1)`, [F.prop]);
   F.comm = await ins(`insert into public.communications (space_id, direction, body) values ($1, 'inbound', 'Hi')`, [F.space]);
   // Sam's own data, so "0 rows" means isolation rather than an empty database.
   const sp = await ins(`insert into public.properties (host_id, title) values ($1, 'Sam place')`, [SAM]);
@@ -154,7 +161,7 @@ test('row-level security is enabled on every table in public, and every view run
 
 test('every table in public is classified (new tables must be added to this test)', async () => {
   const tables = (await db.query(`select relname from pg_class where relnamespace = 'public'::regnamespace and relkind in ('r', 'p') order by 1`)).rows.map((r) => r.relname);
-  const known = new Set([...GLOBAL, ...Object.keys(TENANT)]);
+  const known = new Set([...GLOBAL, ...SERVICE_ONLY, ...Object.keys(TENANT)]);
   assert.deepEqual(tables.filter((t) => !known.has(t)), [], 'unclassified tables: add them to GLOBAL or TENANT in tests/rls.test.mjs');
   assert.deepEqual([...known].filter((t) => !tables.includes(t)), []);
 });
@@ -187,6 +194,18 @@ for (const [table, spec] of Object.entries(TENANT)) {
     assert.equal(await count(sel), 1, 'fixture row untouched');
   });
 }
+
+test('service-only tables: no policy, no grant to anon or signed-in users', async () => {
+  for (const t of SERVICE_ONLY) {
+    assert.equal(await count(`select count(*)::int as n from pg_policy where polrelid = 'public.${t}'::regclass`), 0, `${t} has no policies`);
+    for (const who of [null, MAYA]) {
+      await as(db, who, async () => {
+        await assert.rejects(db.query(`select count(*) from public.${t}`), /permission denied/);
+        await assert.rejects(db.query(`delete from public.${t}`), /permission denied/);
+      });
+    }
+  }
+});
 
 test('anon reads only the public lookups; nobody but the service role writes them', async () => {
   const objects = (await db.query(`select relname from pg_class where relnamespace = 'public'::regnamespace and relkind in ('r', 'p', 'v') order by 1`)).rows.map((r) => r.relname);

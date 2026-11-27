@@ -1,0 +1,150 @@
+{
+ "_fixture_note": "SYNTHETIC: a made-up corner lot placed near 34.063 N, -118.31 W (Los Angeles latitude). Not a real parcel, footprint or street. Layout in feet: lot 60 x 120, street W 4th St 30 ft south of the front line, S Gramercy Pl 30 ft east of the east side, house 35 x 45 set back 25 ft, detached garage 20 x 20 in the back yard.",
+ "parcel": {
+  "type": "Polygon",
+  "coordinates": [
+   [
+    [
+     -118.3105,
+     34.0631
+    ],
+    [
+     -118.310301469,
+     34.0631
+    ],
+    [
+     -118.310301469,
+     34.063428935
+    ],
+    [
+     -118.3105,
+     34.063428935
+    ],
+    [
+     -118.3105,
+     34.0631
+    ]
+   ]
+  ]
+ },
+ "buildings": [
+  {
+   "type": "Feature",
+   "properties": {
+    "kind": "house"
+   },
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       -118.310466911,
+       34.063168528
+      ],
+      [
+       -118.310351101,
+       34.063168528
+      ],
+      [
+       -118.310351101,
+       34.063291879
+      ],
+      [
+       -118.310466911,
+       34.063291879
+      ],
+      [
+       -118.310466911,
+       34.063168528
+      ]
+     ]
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "kind": "garage"
+   },
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       -118.31038419,
+       34.063346702
+      ],
+      [
+       -118.310318013,
+       34.063346702
+      ],
+      [
+       -118.310318013,
+       34.063401524
+      ],
+      [
+       -118.31038419,
+       34.063401524
+      ],
+      [
+       -118.31038419,
+       34.063346702
+      ]
+     ]
+    ]
+   }
+  }
+ ],
+ "streets": [
+  {
+   "name": "W 4th St",
+   "geometry": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      -118.311161772,
+      34.063017766
+     ],
+     [
+      -118.309639697,
+      34.063017766
+     ]
+    ]
+   }
+  },
+  {
+   "name": "S Gramercy Pl",
+   "geometry": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      -118.310202203,
+      34.062551774
+     ],
+     [
+      -118.310202203,
+      34.063977161
+     ]
+    ]
+   }
+  }
+ ],
+ "expected_by_hand": {
+  "W 4th St": {
+   "lotSqft": 7200,
+   "buildingSqft": 1975,
+   "openSqft": 5225,
+   "frontYardSqft": 1500,
+   "sideYardSqft": 1125,
+   "backYardSqft": 2600
+  },
+  "S Gramercy Pl": {
+   "lotSqft": 7200,
+   "buildingSqft": 1975,
+   "openSqft": 5225,
+   "frontYardSqft": 1600,
+   "sideYardSqft": 2425,
+   "backYardSqft": 1200
+  }
+ }
+}

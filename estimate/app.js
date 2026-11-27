@@ -1,7 +1,11 @@
 // Everyspace public income estimator. UI and glue only: every number shown comes from the /core modules.
-// Nothing the visitor types is stored (no localStorage, cookies, analytics or account); the only network calls are the
-// lookups made by core/parcel.js (Nominatim, the county parcel service, Overpass), and only after an explicit submit.
+// Nothing the visitor types is stored (no localStorage, cookies, analytics or account). Network calls: address suggestions
+// (Los Angeles County's public address service, after 5 typed characters, see address-suggest.js) and, only after an explicit
+// submit, the lookups: first Los Angeles County's public services (county-path.js), and only when those cannot answer the
+// older path in core/parcel.js (OpenStreetMap Nominatim, the county parcel service, Overpass).
 import { resolveAddress, BROWSER_GEOCODERS } from '../core/parcel.js';
+import { runCountyPath } from './county-path.js';
+import { attachAddressSuggest } from './address-suggest.js';
 import { createProfile, applyOwnerCorrection, summarize as summarizeProfile } from '../core/profile.js';
 import { confidenceLabel } from '../core/provenance.js';
 import { identifyOpportunities, missingEvidence, defaultResourceCapacity } from '../core/opportunities.js';
@@ -71,15 +75,16 @@ const ATTR_LABELS = {
   address: 'Address', location: 'Map location', jurisdiction: 'City and state', parcel_id: 'Parcel number (APN)', parcel_boundary: 'Parcel outline',
   lot_area_sqft: 'Lot size', property_type: 'Property type', use_type: 'Assessor use type', year_built: 'Year built', bedrooms: 'Bedrooms',
   living_area_sqft: 'Living area', units: 'Number of units', buildings: 'Buildings on the lot', building_footprint_sqft: 'Building footprint',
-  roof_area_sqft: 'Roof area', yard_area_sqft: 'Yard area', driveway_area_sqft: 'Driveway area', parking_spaces: 'Parking spaces',
+  roof_area_sqft: 'Roof area', yard_area_sqft: 'Yard area (all open ground)', floors: 'Floors', bathrooms: 'Bathrooms', front_yard_sqft: 'Front yard',
+  back_yard_sqft: 'Back yard', side_yard_sqft: 'Side yard', use_code: 'Assessor use code', driveway_area_sqft: 'Driveway area', parking_spaces: 'Parking spaces',
   garage_present: 'Garage', pool_present: 'Pool', adu_present: 'Guest house or ADU', zoning: 'Zoning', transit_distance_m: 'Distance to transit',
   demand_generators: 'Nearby venues and events', equipment_owned: 'Gear you could rent out',
 };
 const humanKeys = (t) => t.replace(/\b[a-z]+(?:_[a-z]+)+\b/g, (k) => (ATTR_LABELS[k] ?? k.replace(/_/g, ' ')).toLowerCase());
 const attrLabel = (k) => ATTR_LABELS[k] ?? cap(k.replace(/_/g, ' ').replace(/\bavailable$/, 'available'));
-const UNIT_OF = { lot_area_sqft: 'sqft', living_area_sqft: 'sqft', building_footprint_sqft: 'sqft', roof_area_sqft: 'sqft', yard_area_sqft: 'sqft', driveway_area_sqft: 'sqft', transit_distance_m: 'm' };
-const NUMBER_KEYS = new Set(['lot_area_sqft', 'year_built', 'bedrooms', 'living_area_sqft', 'units', 'building_footprint_sqft', 'roof_area_sqft', 'yard_area_sqft', 'driveway_area_sqft', 'parking_spaces', 'transit_distance_m']);
-const TEXT_KEYS = new Set(['address', 'use_type', 'parcel_id', 'zoning']);
+const UNIT_OF = { lot_area_sqft: 'sqft', living_area_sqft: 'sqft', building_footprint_sqft: 'sqft', roof_area_sqft: 'sqft', yard_area_sqft: 'sqft', front_yard_sqft: 'sqft', back_yard_sqft: 'sqft', side_yard_sqft: 'sqft', driveway_area_sqft: 'sqft', transit_distance_m: 'm' };
+const NUMBER_KEYS = new Set(['lot_area_sqft', 'year_built', 'bedrooms', 'bathrooms', 'floors', 'front_yard_sqft', 'back_yard_sqft', 'side_yard_sqft', 'living_area_sqft', 'units', 'building_footprint_sqft', 'roof_area_sqft', 'yard_area_sqft', 'driveway_area_sqft', 'parking_spaces', 'transit_distance_m']);
+const TEXT_KEYS = new Set(['address', 'use_type', 'use_code', 'parcel_id', 'zoning']);
 const READONLY_KEYS = new Set(['location', 'parcel_boundary', 'buildings', 'demand_generators']);
 const kindOf = (key) => {
   if (key === 'property_type') return 'type';
@@ -119,6 +124,7 @@ const S = {
   includeInvestments: false, overrides: {}, editAttr: null, editInput: null,
   goal: 'max_net_income', maxUpfront: '', noStrangers: false, onlyKnownRules: false,
   open: new Set(['steplog']), focusId: null, error: '',
+  path: '', pathNote: '', notes: {}, countyMatched: '', // path: 'county' | 'fallback' (which lookup produced the profile)
   limiter: { lastAt: null }, yardYes: false, selectOnFocus: null, keepStatus: false,
   dirty: false, discardOk: false, // dirty = the owner has typed a correction this session; discardOk = they were warned that searching again drops it
 };
@@ -139,13 +145,31 @@ async function lookup(extra = {}) {
   S.busy = true; els.submit.disabled = true; els.submit.classList.add('busy');
   announce('Looking up your address. This can take a few seconds.');
   renderLookup();
-  let res;
-  try {
-    res = await resolveAddress(S.address, {
-      fetch: (url, init) => fetch(url, init), now: nowIso(), geocoders: BROWSER_GEOCODERS, nowMs: () => Date.now(), nominatimLimiter: S.limiter, ...extra,
-    });
-  } catch (e) {
-    res = { ok: false, profile: createProfile(), steps: [{ step: 'geocode', ok: false, reason: e instanceof Error ? e.message : String(e), source: 'lookup' }] };
+  let res = null, why = '';
+  const via = (url, init) => fetch(url, init);
+  // A candidate pick, or a confirmation that came from the older path, continues on the older path.
+  const stayOld = Boolean(extra.parcelApn) || (extra.confirmMatchedAddress && S.path === 'fallback');
+  if (!stayOld) {
+    try {
+      const c = await runCountyPath(S.address, { fetch: via, now: nowIso(), ...(extra.confirmMatchedAddress && S.countyMatched ? { confirmedAddress: S.countyMatched } : {}) });
+      if (c.kind === 'ok') {
+        res = { ok: true, profile: c.profile, steps: c.steps }; S.path = 'county'; S.notes = c.notes;
+        S.pathNote = `Lookup path: ${c.summary}. OpenStreetMap Nominatim was not used. Pool and transit stops come from OpenStreetMap.`;
+      } else if (c.kind === 'confirm') {
+        res = { ok: false, needsConfirmation: true, matchedAddress: c.matchedAddress, profile: createProfile(), steps: [], reasonText: c.reason }; S.path = 'county'; S.countyMatched = c.matchedAddress;
+      } else why = c.why;
+    } catch (e) { why = `the county lookup failed (${e instanceof Error ? e.message : String(e)})`; }
+  }
+  if (!res) {
+    if (!stayOld) S.pathNote = `Lookup path: OpenStreetMap Nominatim (the older path), because ${why || 'the county lookup could not answer'}.`;
+    S.path = 'fallback'; S.notes = {};
+    try {
+      res = await resolveAddress(extra.confirmMatchedAddress && S.countyMatched ? S.countyMatched : S.address, {
+        fetch: via, now: nowIso(), geocoders: BROWSER_GEOCODERS, nowMs: () => Date.now(), nominatimLimiter: S.limiter, ...extra,
+      });
+    } catch (e) {
+      res = { ok: false, profile: createProfile(), steps: [{ step: 'geocode', ok: false, reason: e instanceof Error ? e.message : String(e), source: 'lookup' }] };
+    }
   }
   S.busy = false; els.submit.disabled = false; els.submit.classList.remove('busy');
   S.result = res; S.steps = res.steps ?? [];
@@ -173,6 +197,7 @@ async function lookup(extra = {}) {
 function resetSession() {
   S.result = null; S.confirmed = false; S.profile = null; S.steps = []; S.manual = false; S.overrides = {};
   S.editAttr = null; S.editInput = null; S.phase = 'address'; S.error = ''; S.dirty = false; S.discardOk = false;
+  S.path = ''; S.pathNote = ''; S.notes = {}; S.countyMatched = '';
 }
 
 /** Start a new search or manual session only when nothing typed by the owner would be lost silently. */
@@ -256,7 +281,7 @@ function renderLookup() {
   if (!S.busy && S.phase === 'confirm' && S.result) {
     parts.push(`<section class="card" aria-labelledby="h-confirm"><h2 id="h-confirm">Is this your property?</h2>
       <p class="stack" style="margin-top:8px">We found: <strong id="matched-address">${esc(S.result.matchedAddress)}</strong>. Is this your property?</p>
-      <p class="small muted" style="margin-top:6px">You typed: ${esc(S.address)}. The search matched a different street address, so we have not looked up a parcel yet.</p>
+      <p class="small muted" style="margin-top:6px">You typed: ${esc(S.address)}. ${S.result.reasonText && S.path === 'county' && /another candidate/.test(S.result.reasonText) ? 'More than one address matched' : 'The search matched a different street address'}, so we have not looked up a parcel yet.</p>
       <div class="row" style="margin-top:12px"><button class="btn primary" id="confirm-yes" type="button" data-act="confirm-yes">Yes, that is my property</button>
       <button class="btn" id="confirm-no" type="button" data-act="confirm-no">No, edit the address</button></div></section>`);
   }
@@ -273,7 +298,7 @@ function renderLookup() {
     const items = S.steps.map((s) => `<li><span class="chip ${s.ok ? 'ok' : 'bad'}">${s.ok ? 'Found' : 'Failed'}</span>
       <strong>${esc(STEP_NAMES[s.step] ?? s.step)}</strong> <span class="muted">from ${esc(s.source)}</span>${s.ok ? '' : ` <span>${esc(s.reason ?? 'no reason given')}</span>`}</li>`).join('');
     const failed = S.steps.filter((s) => !s.ok).length;
-    parts.push(dKey('steplog', `What we looked up (${S.steps.length} step${S.steps.length === 1 ? '' : 's'}${failed ? `, ${failed} failed` : ''})`, `<ul class="log" id="step-log">${items}</ul>`));
+    parts.push(dKey('steplog', `What we looked up (${S.steps.length} step${S.steps.length === 1 ? '' : 's'}${failed ? `, ${failed} failed` : ''})`, `${S.pathNote ? `<p class="small muted" id="path-note" style="margin-bottom:6px">${esc(S.pathNote)}</p>` : ''}<ul class="log" id="step-log">${items}</ul>`));
   }
   els.lookup.innerHTML = parts.join('<div style="height:14px"></div>');
 }
@@ -339,6 +364,13 @@ function editorHtml(key, current) {
   return `<div class="edit-inline">${control}<button class="btn sm primary" id="save-${safeId(key)}" type="button" data-act="save-attr" data-key="${esc(key)}">Apply</button><button class="btn sm" id="cancel-${safeId(key)}" type="button" data-act="cancel-attr">Cancel</button></div>`;
 }
 
+/** A short note under the source: a second source that disagrees, a field warning, or why an estimate is only an estimate. */
+function rowNote(r) {
+  if (S.path !== 'county' || r.tag === 'owner-confirmed') return '';
+  const parts = [S.notes[r.key], r.tag === 'estimated' ? S.profile.attributes[r.key]?.note : ''].filter(Boolean);
+  return parts.length ? `<div class="tiny muted row-note" data-note-for="${esc(r.key)}">${esc([...new Set(parts)].join(' '))}</div>` : '';
+}
+
 function profileHtml(view) {
   const rows = summarizeProfile(S.profile);
   const have = rows.filter((r) => r.tag !== 'unavailable');
@@ -351,7 +383,7 @@ function profileHtml(view) {
       <th scope="row">${esc(attrLabel(r.key))}</th>
       <td data-label="Value">${S.editAttr === r.key ? editorHtml(r.key, attr(r.key)) : `<span class="val">${esc(valueText(r.key, r.value, r.unit))}</span>`}</td>
       <td data-label="Where it came from">${badge(r.tag)}</td>
-      <td data-label="Source and date">${esc(r.source)}${r.retrievedAt ? `<div class="tiny muted">${esc(dateText(r.retrievedAt))}</div>` : ''}</td>
+      <td data-label="Source and date">${esc(r.source)}${r.retrievedAt ? `<div class="tiny muted">${esc(dateText(r.retrievedAt))}</div>` : ''}${rowNote(r)}</td>
       <td data-label="Confidence">${esc(confText(r.confidenceLabel))}</td>
       <td data-label="Change">${editBtn(r, 'Edit')}</td></tr>`).join('');
   const noneRows = none.map((r) => `<tr data-key="${esc(r.key)}">
@@ -653,7 +685,7 @@ function readEditor(key) {
   return checkNumber(key, raw);
 }
 
-const INT_KEYS = new Set(['year_built', 'bedrooms', 'units', 'parking_spaces']);
+const INT_KEYS = new Set(['year_built', 'bedrooms', 'units', 'parking_spaces', 'floors']);
 /** One place that decides whether a number typed for a property attribute is acceptable. */
 function checkNumber(key, raw) {
   const n = Number(raw);
@@ -662,6 +694,7 @@ function checkNumber(key, raw) {
   if (INT_KEYS.has(key) && !Number.isInteger(n)) return { error: 'Enter a whole number.' };
   if (key === 'year_built' && (n < 1600 || n > new Date().getUTCFullYear() + 2)) return { error: `Enter a year between 1600 and ${new Date().getUTCFullYear() + 2}.` };
   if (key === 'units' && n < 1) return { error: 'A property has at least one unit.' };
+  if (key === 'floors' && n < 1) return { error: 'A building has at least one floor.' };
   return { value: n };
 }
 /** Show a rejected value next to the control as well as in the status line, so it is seen where the person is looking. */
@@ -779,6 +812,7 @@ document.addEventListener('toggle', (ev) => {
 }, true);
 
 renderAll();
+attachAddressSuggest(els.input);
 
 // An address submitted on the homepage arrives in the URL fragment (#address=...) or, without JavaScript there,
 // the query (?address=...). Start the lookup once, as if the button had been pressed, then clear it from the address bar.

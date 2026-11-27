@@ -1,0 +1,90 @@
+{
+ "_fixture_note": "recorded 2026-11-27 from the live public service for a PUBLIC building (200 N Spring St, Los Angeles, CA 90012); CAMS_Locator findAddressCandidates with the first magicKey (note 'Single Line Input' parameter)",
+ "spatialReference": {
+  "wkid": 4326,
+  "latestWkid": 4326
+ },
+ "candidates": [
+  {
+   "address": "200 North Spring St, Los Angeles, CA, 90012",
+   "location": {
+    "x": -118.24349338502931,
+    "y": 34.053898451258405
+   },
+   "score": 100,
+   "attributes": {
+    "Score": 100,
+    "Match_addr": "200 North Spring St, Los Angeles, CA, 90012",
+    "Side": "R",
+    "FromAddr": "100",
+    "ToAddr": "298",
+    "PreDir": "North",
+    "PreType": "",
+    "StreetName": "Spring",
+    "SufType": "St",
+    "SufDir": "",
+    "StAddr": "200 North Spring St",
+    "City": "Los Angeles",
+    "State": "CA",
+    "ZIP": "90012",
+    "Ref_ID": 338132,
+    "User_fld": "",
+    "Addr_type": "StreetAddress"
+   }
+  },
+  {
+   "address": "200 South Spring St, Los Angeles, CA, 90012",
+   "location": {
+    "x": -118.24560621118287,
+    "y": 34.051631069713714
+   },
+   "score": 90.87,
+   "attributes": {
+    "Score": 90.87,
+    "Match_addr": "200 South Spring St, Los Angeles, CA, 90012",
+    "Side": "L",
+    "FromAddr": "200",
+    "ToAddr": "298",
+    "PreDir": "South",
+    "PreType": "",
+    "StreetName": "Spring",
+    "SufType": "St",
+    "SufDir": "",
+    "StAddr": "200 South Spring St",
+    "City": "Los Angeles",
+    "State": "CA",
+    "ZIP": "90012",
+    "Ref_ID": 214713,
+    "User_fld": "",
+    "Addr_type": "StreetAddress"
+   }
+  },
+  {
+   "address": "201 North Spring St, Los Angeles, CA, 90012",
+   "location": {
+    "x": -118.24359769991253,
+    "y": 34.053965849026234
+   },
+   "score": 79,
+   "attributes": {
+    "Score": 79,
+    "Match_addr": "201 North Spring St, Los Angeles, CA, 90012",
+    "Side": "L",
+    "FromAddr": "101",
+    "ToAddr": "299",
+    "PreDir": "North",
+    "PreType": "",
+    "StreetName": "Spring",
+    "SufType": "St",
+    "SufDir": "",
+    "StAddr": "201 North Spring St",
+    "City": "Los Angeles",
+    "State": "CA",
+    "ZIP": "90012",
+    "Ref_ID": 338132,
+    "User_fld": "",
+    "Addr_type": "StreetAddress"
+   }
+  }
+ ]
+}

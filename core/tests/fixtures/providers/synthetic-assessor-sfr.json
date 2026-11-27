@@ -1,0 +1,66 @@
+{
+ "_fixture_note": "SYNTHETIC: invented address and geometry shaped like the live LA County response; not a real property",
+ "geometryType": "esriGeometryPolygon",
+ "spatialReference": {
+  "wkid": 4326
+ },
+ "features": [
+  {
+   "attributes": {
+    "AIN": "9999999999",
+    "APN": "9999-999-999",
+    "SitusHouseNo": "4321",
+    "SitusFraction": " ",
+    "SitusDirection": " ",
+    "SitusUnit": " ",
+    "SitusStreet": "EXAMPLE AVE",
+    "SitusCity": "LOS ANGELES CA",
+    "SitusZIP": "90099-1234",
+    "SitusFullAddress": "4321 EXAMPLE AVE LOS ANGELES CA 90099",
+    "UseCode": "0100",
+    "UseType": "Residential",
+    "UseDescription": "Single Family Residence",
+    "DesignType1": "1000",
+    "YearBuilt1": "1952",
+    "Units1": 1,
+    "Bedrooms1": 3,
+    "Bathrooms1": 2,
+    "SQFTmain1": 2800,
+    "YearBuilt2": "0000",
+    "Units2": 0,
+    "Bedrooms2": 0,
+    "Bathrooms2": 0,
+    "SQFTmain2": 0,
+    "Shape.STArea()": 6500,
+    "CENTER_LAT": 34,
+    "CENTER_LON": -118.3
+   },
+   "geometry": {
+    "rings": [
+     [
+      [
+       -118.3,
+       34
+      ],
+      [
+       -118.3,
+       34.000356347193275
+      ],
+      [
+       -118.29983467985367,
+       34.000356347193275
+      ],
+      [
+       -118.29983467985367,
+       34
+      ],
+      [
+       -118.3,
+       34
+      ]
+     ]
+    ]
+   }
+  }
+ ]
+}

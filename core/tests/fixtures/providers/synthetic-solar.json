@@ -1,0 +1,32 @@
+{
+ "_fixture_note": "SYNTHETIC: invented address and geometry shaped like the live LA County response; not a real property; shape is from memory of Google Solar documentation (unverified)",
+ "name": "buildings/synthetic",
+ "imageryQuality": "HIGH",
+ "imageryDate": {
+  "year": 2023,
+  "month": 5,
+  "day": 1
+ },
+ "solarPotential": {
+  "wholeRoofStats": {
+   "areaMeters2": 190,
+   "groundAreaMeters2": 150
+  },
+  "roofSegmentStats": [
+   {
+    "pitchDegrees": 20,
+    "azimuthDegrees": 180,
+    "stats": {
+     "areaMeters2": 100
+    }
+   },
+   {
+    "pitchDegrees": 20,
+    "azimuthDegrees": 0,
+    "stats": {
+     "areaMeters2": 90
+    }
+   }
+  ]
+ }
+}

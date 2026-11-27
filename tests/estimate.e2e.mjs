@@ -13,6 +13,7 @@ import { applyOwnerCorrection } from '../core/profile.js';
 import { identifyOpportunities, defaultResourceCapacity } from '../core/opportunities.js';
 import { defaultInputs, withOverrides, estimateOpportunity } from '../core/revenue.js';
 import { optimize } from '../core/optimizer.js';
+import { runCountyPath } from '../estimate/county-path.js';
 
 const require = createRequire(import.meta.url);
 let pw;
@@ -47,6 +48,10 @@ function answer(urlStr) {
     const q = u.searchParams.get('q') ?? '';
     if (q.includes('Failville')) return { status: 503, body: { error: 'down' } };
     return { status: 200, body: q.includes('Spring') ? nominatimSpring() : fx('nominatim-la.json') };
+  }
+  if (u.hostname.endsWith('lacounty.gov') && dec.includes('CAMS_Locator')) {
+    // the county locator: no match by default, so these scenarios keep exercising the older Nominatim path; suggest answers nothing
+    return { status: 200, body: dec.includes('/suggest') ? { suggestions: [] } : { candidates: [] } };
   }
   if (u.hostname.endsWith('lacounty.gov')) {
     if (dec.includes('-118.2455')) return { status: 200, body: urlStr.includes('distance=') ? fx('arcgis-la-buffer-spring-st-recorded.json') : fx('arcgis-empty.json') };
@@ -167,11 +172,13 @@ await scenario('load: no request and no storage before submit; accessible shell'
   assert.equal(await page.locator('label[for="address"]').count(), 1);
   assert.equal(await page.getAttribute('#status', 'aria-live'), 'polite');
   assert.equal(await page.locator('#address').getAttribute('autocomplete'), 'off');
-  // typing alone must not trigger lookups (no autocomplete)
+  // typing alone must not start a lookup: it may only ask the county's address service for suggestions (after 5 characters)
   await page.type('#address', '99999 Venice Blv', { delay: 5 });
   await page.waitForTimeout(1300);
-  assert.equal(rec.mocked.length + rec.external.length, 0, 'typing sends nothing');
-  assert.match(await text(page, 'footer'), /Address search © OpenStreetMap contributors \(ODbL\) via Nominatim\. Parcel data: county assessor public services\. Buildings and pools: © OpenStreetMap contributors\./);
+  assert.equal(rec.external.length, 0);
+  assert.ok(rec.mocked.length >= 1 && rec.mocked.every((u) => u.includes('CAMS_Locator/GeocodeServer/suggest')), `typing sends only suggest requests: ${rec.mocked.join(' ')}`);
+  assert.match(await text(page, '#address-suggest-note'), /Suggestions come from Los Angeles County's public address service and cover Los Angeles County only/);
+  assert.match(await text(page, 'footer'), /Los Angeles County public services \(address locator, assessor parcel layer, LARIAC\)\. Outside Los Angeles County: address search © OpenStreetMap contributors \(ODbL\) via Nominatim/);
   assert.match(await text(page, 'footer'), /Nothing you enter here is saved\./);
   assert.equal(await page.locator('footer a[href="../host/"]').innerText(), 'Already renting? Manage your spaces in the Host Console');
 });
@@ -367,7 +374,7 @@ await scenario('mismatch: confirmation is asked before any parcel lookup; Yes co
   await search(page, SPRING_N);
   await page.waitForSelector('#confirm-yes');
   assert.match(await text(page, '#h-confirm ~ p'), /We found: 200 South Spring Street, Los Angeles, CA 90012\. Is this your property\?/);
-  assert.equal(rec.mocked.some((u) => u.includes('lacounty') || u.includes('overpass')), false, 'no parcel request before confirmation');
+  assert.equal(rec.mocked.some((u) => (u.includes('lacounty') && !u.includes('CAMS_Locator')) || u.includes('overpass')), false, 'no parcel request before confirmation');
   assert.match(await text(page, '#status'), /We found 200 South Spring Street/);
   // No: back to editing the address
   await page.click('#confirm-no');
@@ -378,7 +385,7 @@ await scenario('mismatch: confirmation is asked before any parcel lookup; Yes co
   await page.waitForSelector('#confirm-yes');
   await page.click('#confirm-yes');
   await page.waitForSelector('#cand-none');
-  assert.ok(rec.mocked.some((u) => u.includes('lacounty')), 'now the parcel service is asked');
+  assert.ok(rec.mocked.some((u) => u.includes('LACounty_Parcel')), 'now the parcel service is asked');
   const rows = await page.locator('[data-act="pick"]').count();
   assert.equal(rows, 10);
   assert.match(await text(page, '#h-cands ~ ul'), /145 S SPRING ST LOS ANGELES CA 90012 \(parcel 5149001003\)/);
@@ -716,6 +723,169 @@ await scenario('small fixes: no-JavaScript notice, Overpass disclosure, "Apply" 
   const li = await text(page, '#combo-selected li');
   assert.match(li, /\$[\d,]+ to \$[\d,]+ a year on its own, baseline \$[\d,]+/, 'a range, not a lone number');
 }, { width: 1280, height: 900 }, 1, /^Failed to load resource: the server responded with a status of 503/);
+
+// ---- the county path (first choice): Los Angeles County's public services, mocked from synthetic fixtures ----------------
+const PFX = path.join(ROOT, 'core/tests/fixtures/providers');
+const pfx = (n) => JSON.parse(fs.readFileSync(path.join(PFX, n), 'utf8'));
+const SFR = '4321 Example Ave, Los Angeles, CA 90099';
+/** override() for the county services; `over` replaces one service's answer ({status, body}) or a function of the fixture. */
+function countyWorld(over = {}) {
+  const pick = (k, fixture) => (over[k] ? (typeof over[k] === 'function' ? over[k](pfx(fixture)) : over[k]) : { status: 200, body: pfx(fixture) });
+  return (url, dec) => {
+    const h = new URL(url).hostname;
+    if (h === 'public.gis.lacounty.gov') {
+      if (dec.includes('CAMS_Locator') && dec.includes('/suggest')) return { status: 200, body: pfx('la-cams-suggest.json') };
+      if (dec.includes('CAMS_Locator')) return typeof over.cams === 'function' ? { status: 200, body: over.cams(pfx('synthetic-cams-sfr.json')) } : pick('cams', 'synthetic-cams-sfr.json');
+      if (dec.includes('LACounty_Parcel') && !over.parcel && !dec.includes('SitusHouseNo=')) return undefined; // the older path's own parcel questions keep their default answers
+      if (dec.includes('LACounty_Parcel')) return typeof over.parcel === 'function' ? { status: 200, body: over.parcel(pfx('synthetic-assessor-sfr.json')) } : pick('parcel', 'synthetic-assessor-sfr.json');
+      if (dec.includes('LARIAC')) return typeof over.lariac === 'function' ? { status: 200, body: over.lariac(pfx('synthetic-lariac-sfr.json')) } : pick('lariac', 'synthetic-lariac-sfr.json');
+    }
+    if (h.includes('overpass')) return { status: 200, body: fx('overpass-no-features.json') };
+    return undefined;
+  };
+}
+const countyReqs = (rec) => rec.mocked.filter((u) => u.includes('public.gis.lacounty.gov'));
+const withCounty = (over, fn) => async (page, rec, ctx) => { override = countyWorld(over); try { await fn(page, rec, ctx); } finally { override = null; } };
+const noNominatim = (rec) => assert.equal(rec.mocked.some((u) => u.includes('nominatim')), false, 'Nominatim was not used');
+const SOURCE_ROWS = ['floors', 'bathrooms', 'roof_area_sqft', 'front_yard_sqft', 'back_yard_sqft', 'side_yard_sqft'];
+
+await scenario('county path: an LA address uses the county services, shows floors, bathrooms, roof and yards with source, date, confidence and an edit control; earnings equal core', withCounty({}, async (page, rec) => {
+  await page.goto(URL_PAGE);
+  await search(page, SFR);
+  await page.waitForSelector('#profile-table');
+  noNominatim(rec);
+  assert.ok(countyReqs(rec).some((u) => u.includes('CAMS_Locator')) && countyReqs(rec).some((u) => u.includes('LACounty_Parcel')) && countyReqs(rec).some((u) => u.includes('LARIAC')));
+  assert.match(await text(page, '#path-note'), /Lookup path: used Los Angeles County's public services \(address locator, assessor parcel layer, LARIAC building outlines\)\. OpenStreetMap Nominatim was not used\./);
+  assert.equal(await page.locator('#step-log li').count(), 5);
+  for (const k of SOURCE_ROWS) {
+    const row = `tr[data-key="${k}"]`;
+    assert.equal(await page.locator(row).count(), 1, `${k} row`);
+    assert.match(await text(page, row), /(High|Medium|Low) confidence/, `${k} confidence`);
+    assert.match(await text(page, row), /\b[A-Z][a-z]{2} \d{1,2}, \d{4}\b/, `${k} date`);
+    assert.equal(await page.locator(`#edit-${k}`).count(), 1, `${k} edit control`);
+  }
+  const t = async (k) => text(page, `tr[data-key="${k}"]`);
+  assert.match(await t('floors'), /Floors.*2.*Estimated.*Everyspace property-profile assembler/);
+  assert.match(await t('bathrooms'), /Bathrooms.*2.*Measured.*LA County Assessor/);
+  assert.match(await t('roof_area_sqft'), /Roof area.*1,400 sq ft.*Estimated.*LARIAC building outlines 2020 \(LA County\).*plan area/);
+  for (const k of ['front_yard_sqft', 'back_yard_sqft', 'side_yard_sqft']) assert.match(await t(k), /Estimated.*Everyspace yard split/, k);
+  assert.match(await t('front_yard_sqft'), /Front yard.*sq ft/);
+  assert.match(await t('living_area_sqft'), /2,800 sq ft.*Measured/);
+  const c = await runCountyPath(SFR, { fetch: async (u) => { const a = answer(String(u)); if (!a) throw new Error(`unmocked ${u}`); return json(a.body, a.status); }, now: NOW });
+  assert.equal(c.kind, 'ok');
+  await assertMatchesCore(page, corePipeline(c.profile), 'county path');
+  assert.equal(await page.evaluate(() => localStorage.length + sessionStorage.length + document.cookie.length), 0, 'nothing stored');
+}));
+
+await scenario('county path: an estimated value reads as estimated; an owner correction on a new row is applied and marked as confirmed by the owner', withCounty({}, async (page) => {
+  await page.goto(URL_PAGE);
+  await search(page, SFR);
+  await page.waitForSelector('#profile-table');
+  assert.equal(await text(page, 'tr[data-key="floors"] .chip'), 'Estimated');
+  assert.match(await text(page, 'tr[data-key="floors"] .row-note'), /Ratio 2/);
+  await page.click('#edit-floors');
+  await page.fill('#ed-floors', '1');
+  await page.click('#save-floors');
+  assert.equal(await text(page, 'tr[data-key="floors"] .chip'), 'You confirmed');
+  assert.match(await text(page, 'tr[data-key="floors"] .val'), /^1$/);
+  assert.match(await text(page, 'tr[data-key="floors"]'), /Owner/);
+  assert.equal(await page.locator('tr[data-key="floors"] .row-note').count(), 0, 'the automated note is gone once the owner confirmed');
+  await page.click('#edit-roof_area_sqft');
+  await page.fill('#ed-roof_area_sqft', '1700');
+  await page.click('#save-roof_area_sqft');
+  assert.equal(await text(page, 'tr[data-key="roof_area_sqft"] .chip'), 'You confirmed');
+  assert.match(await text(page, 'tr[data-key="roof_area_sqft"] .val'), /1,700 sq ft/);
+  await page.click('#edit-floors'); await page.fill('#ed-floors', '1.5'); await page.click('#save-floors');
+  assert.match(await text(page, '#status'), /Enter a whole number/);
+}));
+
+await scenario('county path: a street-side point outside the lot gives yard values; the locator point inside the lot gives the stated reason and no guessed front', withCounty({}, async (page) => {
+  await page.goto(URL_PAGE);
+  await search(page, SFR);
+  await page.waitForSelector('#profile-table');
+  for (const k of ['front_yard_sqft', 'back_yard_sqft', 'side_yard_sqft']) assert.match(await text(page, `tr[data-key="${k}"] .val`), /^[\d,]+ sq ft$/, k);
+  assert.match(await text(page, 'tr[data-key="front_yard_sqft"] .row-note'), /no street centreline/i, 'the splitter warning is shown as a short note');
+  assert.equal((await text(page, 'tr[data-key="front_yard_sqft"] .row-note')).match(/no street centreline/gi).length, 1, 'once, not repeated');
+}));
+await scenario('county path: with no street-side reference the three yard rows say why and invite the owner to fill them in', withCounty({ cams: (b) => { b.candidates[0].location = { x: -118.29992, y: 34.00018 }; return b; } }, async (page) => {
+  await page.goto(URL_PAGE);
+  await search(page, SFR);
+  await page.waitForSelector('#profile-table');
+  for (const k of ['front_yard_sqft', 'back_yard_sqft', 'side_yard_sqft']) assert.equal(await page.locator(`#profile-table tr[data-key="${k}"]`).count(), 0, `${k} is not shown as a value`);
+  await page.click('details[data-dk="missing-attrs"] > summary');
+  for (const k of ['front_yard_sqft', 'back_yard_sqft', 'side_yard_sqft']) {
+    const row = await text(page, `#unavailable-table tr[data-key="${k}"]`);
+    assert.match(row, /Not available.*Needs a street reference; available once the server-side lookup is switched on/, k);
+    assert.equal(await page.locator(`#edit-${k}`).count(), 1, `${k} can be filled in`);
+  }
+  assert.match(await text(page, 'tr[data-key="yard_area_sqft"]'), /4,800 sq ft.*Estimated/, 'total open ground is still estimated from the lot and the outlines');
+  await page.click('#edit-front_yard_sqft'); await page.fill('#ed-front_yard_sqft', '900'); await page.click('#save-front_yard_sqft');
+  assert.match(await text(page, 'tr[data-key="front_yard_sqft"]'), /900 sq ft.*You confirmed/);
+}));
+
+await scenario('county path: a note appears on the row whose second figure disagrees (assessor stored lot area vs the outline)', withCounty({ parcel: (b) => { b.features[0].attributes['Shape.STArea()'] = 8200; return b; } }, async (page) => {
+  await page.goto(URL_PAGE);
+  await search(page, SFR);
+  await page.waitForSelector('#profile-table');
+  assert.match(await text(page, 'tr[data-key="lot_area_sqft"] .row-note'), /Check this: .*stored parcel area.* says 8,200 \(2[0-9.]+% apart\)/);
+  assert.equal(await page.locator('tr[data-key="bathrooms"] .row-note').count(), 0, 'rows that agree carry no note');
+}));
+
+await scenario('county path: a missing building outline is stated, not guessed (roof, footprint unavailable) and the page still reaches results', withCounty({ lariac: { status: 200, body: { features: [] } } }, async (page, rec) => {
+  await page.goto(URL_PAGE);
+  await search(page, SFR);
+  await page.waitForSelector('#profile-table');
+  noNominatim(rec);
+  assert.match(await text(page, '#step-log'), /Failed Buildings from LARIAC building outlines 2020/);
+  await page.click('details[data-dk="missing-attrs"] > summary');
+  assert.match(await text(page, '#unavailable-table tr[data-key="roof_area_sqft"]'), /Not available/);
+  assert.ok(await page.locator('[data-opp-card]').count() >= 1);
+}));
+
+const venice = (b) => { const c = b.candidates[0]; Object.assign(c, { address: '99999 Venice Blvd, Los Angeles, CA, 90034' }); Object.assign(c.attributes, { Match_addr: c.address, StAddr: '99999 Venice Blvd', StreetName: 'Venice', SufType: 'Blvd', ZIP: '90034' }); return b; };
+// [name, county mocks, typed address, why the county path gave up, a profile (not the confirm or manual screen) is expected]
+const FALLBACKS = [
+  ['the county locator finds no match', { cams: { status: 200, body: { candidates: [] } } }, VENICE, /found no match/, true],
+  ['the county locator is down', { cams: { status: 500, body: { error: 'down' } } }, VENICE, /could not answer/, true],
+  ['the county locator answers with something unreadable', { cams: { status: 200, body: { nope: true } } }, VENICE, /could not answer/, true],
+  ['the assessor has no matching parcel', { cams: venice, parcel: { status: 200, body: { features: [] } } }, VENICE, /no matching parcel/, false],
+  ['the assessor is down', { cams: venice, parcel: { status: 500, body: { error: 'down' } } }, VENICE, /no matching parcel/, false],
+  ['the address says another state', { cams: venice }, '99999 Venice Blvd, Phoenix, AZ 85001', /address says AZ, outside Los Angeles County/, false],
+  ['the typed ZIP differs from the county match', { cams: venice }, '99999 Venice Blvd, Los Angeles, CA 90210', /typed ZIP 90210 does not match/, false],
+];
+for (const [name, over, addr, why, expectProfile] of FALLBACKS) {
+  await scenario(`fallback: ${name} -> the older OpenStreetMap path runs as before and reaches an outcome`, withCounty(over, async (page, rec) => {
+    await page.goto(URL_PAGE);
+    await search(page, addr);
+    await page.waitForSelector(expectProfile ? '#profile-table' : '#profile-table, #confirm-yes, #cand-none, #manual-basics');
+    assert.ok(rec.mocked.some((u) => u.includes('nominatim')), 'Nominatim was asked');
+    const note = await text(page, '#path-note');
+    assert.match(note, /^Lookup path: OpenStreetMap Nominatim \(the older path\), because /);
+    assert.match(note, why);
+    assert.match(await text(page, '#step-log'), /Address search from OpenStreetMap Nominatim/);
+    assert.equal(await page.locator('tr[data-key="floors"], tr[data-key="front_yard_sqft"]').count(), 0, 'the older path has no new rows');
+    if (expectProfile) {
+      assert.equal(await page.locator('#step-log li').count(), 5);
+      assert.ok(await page.locator('[data-opp-card]').count() >= 1, 'earnings sections still work');
+    }
+  }), { width: 1280, height: 900 }, 1, /^Failed to load resource: the server responded with a status of 5\d\d/);
+}
+
+await scenario('county path: the 390 px phone layout of "Your property" with the new rows has no horizontal scroll', withCounty({}, async (page) => {
+  await page.goto(URL_PAGE);
+  await search(page, SFR);
+  await page.waitForSelector('#profile-table');
+  const m = await page.evaluate(() => ({ sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth }));
+  assert.ok(m.sw <= m.cw, `scrollWidth ${m.sw} > ${m.cw}`);
+  await page.locator('section[aria-labelledby="h-profile"]').screenshot({ path: `${SHOTS}/wire/your-property-390.png` });
+}), { width: 390, height: 900 });
+
+await scenario('county path: desktop screenshot of "Your property" with the new rows', withCounty({}, async (page) => {
+  await page.goto(URL_PAGE);
+  await search(page, SFR);
+  await page.waitForSelector('#profile-table');
+  await page.locator('section[aria-labelledby="h-profile"]').screenshot({ path: `${SHOTS}/wire/your-property-1280.png` });
+}), { width: 1280, height: 1100 });
 
 // zero unmocked external requests across every scenario
 const totalExternal = allRecs.flatMap((r) => r.external);

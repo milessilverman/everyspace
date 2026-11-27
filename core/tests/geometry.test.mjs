@@ -86,3 +86,26 @@ test('yardAreaSqft: lot minus buildings whose centroid is on the parcel; outside
   assert.equal(yardAreaSqft(lot, [{ polygon: poly(rect(34.0001, -117.9999, 30, 30)) }, huge], 100).yardSqft, 0);
   assert.equal(yardAreaSqft(lot, [], 5000).yardSqft, 5000, 'explicit lot area is used');
 });
+
+test('localProjection: round-trips, 1e-4 degree of latitude is ~11.12 m, east scale uses cos(lat0)', async () => {
+  const { localProjection, EARTH_RADIUS_M, SQFT_PER_M2 } = await import('../geometry.js');
+  const pr = localProjection({ lat: 34.05, lng: -118.25 });
+  const [x, y] = pr.toXY([-118.25, 34.0501]);
+  near(x, 0, 1e-9); near(y, EARTH_RADIUS_M * 1e-4 * Math.PI / 180, 1e-9);
+  const [x2] = pr.toXY([-118.2499, 34.05]);
+  near(x2, EARTH_RADIUS_M * Math.cos(34.05 * Math.PI / 180) * 1e-4 * Math.PI / 180, 1e-9);
+  const back = pr.toLngLat(pr.toXY([-118.2512, 34.0493]));
+  near(back[0], -118.2512, 1e-12); near(back[1], 34.0493, 1e-12);
+  near(SQFT_PER_M2, 1 / 0.3048 ** 2, 1e-12);
+  assert.throws(() => localProjection({ lat: NaN, lng: 0 }), TypeError);
+});
+
+test('localProjection agrees with polygonAreaSqft on a 30 m x 20 m lot within 1e-4', async () => {
+  const { localProjection, SQFT_PER_M2 } = await import('../geometry.js');
+  const ring = rect(34.05, -118.25, 30, 20);
+  const pr = localProjection({ lat: 34.05009, lng: -118.24984 });
+  const xy = ring.map(pr.toXY);
+  let a = 0;
+  for (let i = 0; i < xy.length - 1; i++) a += xy[i][0] * xy[i + 1][1] - xy[i + 1][0] * xy[i][1];
+  near(Math.abs(a) / 2 * SQFT_PER_M2, polygonAreaSqft(poly(ring)), polygonAreaSqft(poly(ring)) * 1e-4);
+});
