@@ -142,6 +142,42 @@ await scenario('without JavaScript the form is a GET to estimate/?address=, whic
   await js.close();
 }, { javaScriptEnabled: false });
 
+await scenario('form semantics: labelled, native GET fallback, required, capped, whitespace-only is refused', async (page, rec) => {
+  await page.goto(`${ORIGIN}/`);
+  const f = await page.evaluate(() => { const form = document.getElementById('home-form'); const i = document.getElementById('address'); return { action: form.getAttribute('action'), method: form.method, name: i.name, maxlength: i.maxLength, type: i.type, required: i.required, labelFor: document.querySelector('label[for="address"]').textContent.trim(), buttons: [...form.querySelectorAll('button')].map((b) => [b.type, b.textContent.trim()]) }; });
+  assert.deepEqual(f, { action: 'estimate/', method: 'get', name: 'address', maxlength: 300, type: 'text', required: true, labelFor: 'Property address', buttons: [['submit', 'Find my property']] });
+  await page.fill('#address', '   ');
+  await page.click('button[type=submit]');
+  assert.equal(new URL(page.url()).pathname, '/', 'whitespace-only address does not leave the homepage');
+  assert.equal(await page.evaluate(() => document.getElementById('address').validity.valid), false);
+  await page.fill('#address', '');
+  await page.click('button[type=submit]');
+  assert.equal(new URL(page.url()).pathname, '/', 'empty address does not leave the homepage');
+  assert.equal(rec.mocked.length + rec.external.length, 0);
+});
+
+await scenario('homepage says where the address goes and promises nothing it does not do', async (page) => {
+  await page.goto(`${ORIGIN}/`);
+  const t = (await page.locator('body').innerText()).replace(/\s+/g, ' ');
+  assert.match(t, /Nothing is looked up while you type\. When you press the button, your address is sent to OpenStreetMap Nominatim and, for the parcel, to the county's public parcel service\. Nothing you enter is saved\./);
+  assert.match(t, /Free, no sign-up/);
+  assert.doesNotMatch(t, /sign in|log in|your account|save your|we will email|subscribe/i, 'no account or save promise');
+  const demoMentions = t.match(/demo/gi) ?? [];
+  assert.equal(demoMentions.length, 1, 'the only "demo" is the footer link to the earlier demo');
+  assert.equal(await page.locator('footer a:has-text("earlier demo")').count(), 1);
+  assert.equal(await page.locator('a[href^="http"]').count(), 1, 'one external link only');
+});
+
+await scenario('typed markup reaches the estimator as text', async (page, rec) => {
+  await page.goto(`${ORIGIN}/`);
+  await page.fill('#address', '<img src=x onerror=window.__pwn=1>');
+  await page.press('#address', 'Enter');
+  await page.waitForURL(/\/estimate\//);
+  await page.waitForSelector('#profile-table, #manual-basics, #confirm-yes, #cand-none');
+  assert.equal(await page.evaluate(() => window.__pwn), undefined);
+  assert.equal(await page.locator('img[src="x"]').count(), 0);
+});
+
 await scenario('390 px wide: no horizontal scroll', async (page) => {
   await page.goto(`${ORIGIN}/`);
   const m = await page.evaluate(() => ({ sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth, left: document.querySelector('h1').getBoundingClientRect().left }));

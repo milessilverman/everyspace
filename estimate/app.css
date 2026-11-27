@@ -108,6 +108,7 @@ table.scen .big { font-family: var(--display); font-weight: 700; font-size: 17px
 .opp .chips { margin-bottom: 8px; }
 .card > p + form { margin-top: 14px; }
 .opp .why { margin: 10px 0; font-size: 14px; }
+.inline-err { flex: 1 0 100%; margin: 0; font-size: 13px; font-weight: 600; color: var(--bad); }
 .edit-inline { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .edit-inline input[type=number], .edit-inline input[type=text], .edit-inline select { width: 9em; min-height: 36px; }
 .result-total { font-family: var(--display); font-size: 22px; font-weight: 700; }

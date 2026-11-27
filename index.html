@@ -25,9 +25,10 @@
     <form id="home-form" action="estimate/" method="get">
       <label class="f" for="address">Property address</label>
       <div class="row">
-        <input id="address" name="address" type="text" autocomplete="street-address" required placeholder="123 Main St, Los Angeles, CA 90001">
+        <input id="address" name="address" type="text" autocomplete="street-address" required maxlength="300" pattern=".*\S.*" title="Type your street address" placeholder="123 Main St, Los Angeles, CA 90001">
         <button class="btn primary" type="submit">Find my property</button>
       </div>
+      <p class="small muted" style="margin-top:10px">Nothing is looked up while you type. When you press the button, your address is sent to OpenStreetMap Nominatim and, for the parcel, to the county's public parcel service. Nothing you enter is saved.</p>
     </form>
   </div>
 </main>
@@ -42,7 +43,7 @@ document.getElementById('home-form').addEventListener('submit', function (e) {
   var v = document.getElementById('address').value.trim();
   if (!v) return;
   e.preventDefault();
-  location.href = 'estimate/#address=' + encodeURIComponent(v);
+  try { location.href = 'estimate/#address=' + encodeURIComponent(v); } catch (err) { e.preventDefault(); }
 });
 </script>
 </body>
