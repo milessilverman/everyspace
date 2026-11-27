@@ -1,0 +1,52 @@
+/* "Your lot from above" (estimate/lot-map.js). Outline colours are the same in light and dark: they sit on a photo, and each one also has a pattern or a label. */
+.lm { margin: 4px 0 16px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2);
+  --lm-bg: #dfe6ea; --lm-lot: #ffc400; --lm-house: #ff4d6d; --lm-other: #ff4d6d; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .lm { --lm-bg: #1b252e; } }
+:root[data-theme="dark"] .lm { --lm-bg: #1b252e; }
+.lm[hidden], .lm-body[hidden], .lm [hidden] { display: none !important; }
+.lm-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.lm-title { font-size: 16px; }
+.lm-sub { margin-top: 2px; }
+.lm-stage { margin-top: 10px; text-align: center; }
+.lm-frame { position: relative; display: block; margin: 0 auto; max-width: 100%; background: var(--lm-bg); border-radius: 10px; overflow: hidden; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; border: 1px solid var(--line); }
+.lm-img, .lm-canvas, .lm-svg { position: absolute; left: 0; top: 0; width: 100%; height: 100%; display: block; }
+.lm-img { object-fit: fill; image-rendering: auto; }
+.lm-canvas { pointer-events: none; }
+.lm-svg { touch-action: pan-y pinch-zoom; overflow: hidden; }
+.lm-zone { pointer-events: none; }
+.lm-casing { stroke: rgba(0, 0, 0, .62); stroke-width: 5.5; stroke-linejoin: round; vector-effect: non-scaling-stroke; pointer-events: none; }
+.lm-lot { stroke: var(--lm-lot); stroke-width: 2.6; stroke-linejoin: round; pointer-events: none; }
+.lm-house { stroke: var(--lm-house); stroke-width: 2.6; stroke-linejoin: round; pointer-events: none; }
+.lm-other { stroke: var(--lm-other); stroke-width: 2.4; stroke-dasharray: 7 4; stroke-linejoin: round; pointer-events: none; }
+.lm-front-casing { stroke: rgba(0, 0, 0, .7); stroke-width: 8; stroke-linecap: round; pointer-events: none; }
+.lm-front-line { stroke: #fff; stroke-width: 4; stroke-dasharray: 2 7; stroke-linecap: round; pointer-events: none; }
+.lm-label { font: 600 12px/1 var(--font); fill: #fff; stroke: rgba(0, 0, 0, .8); stroke-width: 3.2px; paint-order: stroke fill; stroke-linejoin: round; pointer-events: none; }
+.lm-edge { stroke: transparent; stroke-width: 26px; fill: none; cursor: pointer; touch-action: manipulation; }
+.lm-edge.is-sel { stroke: rgba(255, 255, 255, .45); }
+.lm-edge:focus { outline: none; }
+.lm-edge:focus-visible { stroke: rgba(45, 212, 191, .6); }
+.lm-h { cursor: grab; touch-action: none; outline: none; }
+.lm-h:active { cursor: grabbing; }
+.lm-hit { fill: transparent; }
+.lm-ring { fill: none; stroke: transparent; stroke-width: 3; }
+.lm-dot { stroke: #111827; stroke-width: 2; fill: #fff; }
+.lm-dot.is-lot { fill: var(--lm-lot); }
+.lm-dot.is-bld { fill: #fff; }
+.lm-h.is-sel .lm-ring, .lm-h:focus-visible .lm-ring, .lm-h:focus .lm-ring { stroke: #2dd4bf; }
+.lm-credit { margin-top: 8px; }
+.lm-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.lm-actions .btn { min-height: 38px; }
+.lm-actions .lm-sel { color: var(--muted); margin-right: 4px; }
+.lm-note { margin-top: 6px; min-height: 0; color: var(--warn); }
+.lm-note:empty { display: none; }
+.lm-legend { list-style: none; margin: 10px 0 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 6px 14px; }
+.lm-li { display: grid; grid-template-columns: 30px auto; grid-template-areas: "sw name" "sw val"; column-gap: 8px; align-items: center; font-size: 13px; }
+.lm-sw { grid-area: sw; }
+.lm-name { grid-area: name; font-weight: 600; }
+.lm-val { grid-area: val; color: var(--ink-2); }
+.lm-val.is-muted { color: var(--muted); }
+.lm-sw .lm-casing { stroke-width: 5; vector-effect: none; }
+.lm-sw .lm-lot, .lm-sw .lm-house, .lm-sw .lm-other { stroke-width: 2.4; }
+.lm-tip { margin-top: 8px; }
+@media (max-width: 520px) { .lm { padding: 10px; margin-left: 0; margin-right: 0; } .lm-legend { grid-template-columns: 1fr; } .lm-actions .btn { flex: 1 1 auto; } }
+@media (prefers-reduced-motion: reduce) { .lm *, .lm *::before { transition: none !important; animation: none !important; } }

@@ -13,6 +13,7 @@ import { defaultInputs, withOverrides, estimateOpportunity, summarize, INPUT_KEY
 import { optimize, GOALS } from '../core/optimizer.js';
 import { SCENARIO_NAMES } from '../core/data/scenarios.js';
 import { ATTRIBUTE_QUESTIONS } from '../core/data/categories.js';
+import { initLotMap } from './lot-map.js';
 
 // ---------------------------------------------------------------------------------------------------------------
 // helpers
@@ -155,6 +156,8 @@ const MAX_ADDRESS = 300; // same cap as the input's maxlength; a street address 
 const MAIN_MAX_MS = 10000; // the property screen (or the "add your details" list) is shown within this long after a submit
 const els = { form: $('#address-form'), input: $('#address'), submit: $('#address-submit'), status: $('#status'), lookup: $('#lookup'), results: $('#results'), progress: $('#progress'),
   viewProperty: $('#view-property'), earn: $('#view-earn'), nextBar: $('#next-bar'), next: $('#next-earn') };
+/** The satellite view of the lot (estimate/lot-map.js). It only reads the profile and pushes owner corrections back; it loads its own helpers lazily. */
+const lotMap = initLotMap({ getProfile: () => S.profile, applyOwnerCorrections: (b) => applyOwnerCorrections(b), clearOwnerCorrections: (k) => clearOwnerCorrections(k), mount: document.getElementById('lot-map') });
 /** Every lookup request goes through one in-memory session cache: the same question is never asked twice. */
 const lookupFetch = sessionFetch((url, init) => fetch(url, init));
 
@@ -162,7 +165,11 @@ function announce(msg, isError = false) {
   els.status.textContent = msg;
   els.status.classList.toggle('err', isError);
 }
-function recompute() { S.profile = S.base ? mergeProfile(S.base, S.extra, S.owner, nowIso()) : null; }
+function recompute() {
+  S.profile = S.base ? mergeProfile(S.base, S.extra, S.owner, nowIso()) : null;
+  // the outlines the lookup measured (lot, buildings, street side, zones), for the satellite view; not an attribute, so it rides alongside
+  if (S.profile && S.geometry) S.profile.geometry = S.geometry;
+}
 
 // ---------------------------------------------------------------------------------------------------------------
 // progress bar: advances by finished stages, creeps slowly inside a stage, never goes back, never reaches 100 while busy
@@ -269,6 +276,7 @@ function follow(run, pending) {
       if (run !== S.run) return;
       if (v?.profile) S.base = v.profile;
       if (v?.attrs) Object.assign(S.extra, v.attrs);
+      if (v?.geometry) S.geometry = v.geometry;
       for (const k of p.keys ?? []) S.loading.delete(k);
       left.delete(p);
       recompute(); S.keepStatus = S.page === 'property';
@@ -279,7 +287,7 @@ function follow(run, pending) {
 }
 
 function resetSession() {
-  S.result = null; S.confirmed = false; S.base = null; S.extra = {}; S.owner = {}; S.profile = null; S.loading = new Set(); S.notFound = false; S.hints = {};
+  S.result = null; S.confirmed = false; S.base = null; S.extra = {}; S.owner = {}; S.geometry = null; S.profile = null; S.loading = new Set(); S.notFound = false; S.hints = {};
   S.overrides = {}; S.editInput = null; S.phase = 'address'; S.error = ''; S.dirty = false; S.discardOk = false;
   S.path = ''; S.countyMatched = ''; S.picked = null;
   progress.done();
@@ -352,6 +360,7 @@ function renderAll() {
   const target = explicit ?? (inPage ? a.id : null);
   if (S.page === 'earn') renderEarn();
   else { renderLookup(); renderResults(); }
+  try { lotMap.update(); } catch { /* the picture is optional */ }
   if (!target) return;
   const el = document.getElementById(target);
   if (!el) return;
@@ -1058,4 +1067,12 @@ export function applyOwnerCorrections(batch) {
   for (const [k, v] of Object.entries(batch)) if (v !== undefined && v !== null) setOwner(k, v);
   renderAll();
   return true;
+}
+
+/** Take owner corrections back off the list (as Undo does), for the map's "Reset outlines" and for lines its outlines produced. */
+export function clearOwnerCorrections(keys) {
+  let changed = false;
+  for (const k of keys ?? []) if (k in S.owner) { const { [k]: _g, ...rest } = S.owner; S.owner = rest; delete S.hints[k]; changed = true; }
+  if (changed) { recompute(); renderAll(); }
+  return changed;
 }

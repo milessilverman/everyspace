@@ -286,7 +286,7 @@ export async function runCountyPath(typed, ctx) {
 
   stage('buildings');
   const buildingKeys = BUILDING_KEYS.filter((k) => !(profile.attributes[k] && profile.attributes[k].value !== null));
-  const buildingsDone = within(pFull.then((full) => ({ profile: countyProfile(full, ctx.now) })), ctx.buildingsMs ?? BUILDINGS_MAX_MS, null)
+  const buildingsDone = within(pFull.then((full) => ({ profile: countyProfile(full, ctx.now), geometry: full?.geometry ?? null })), ctx.buildingsMs ?? BUILDINGS_MAX_MS, null)
     .then((v) => { if (!v) stopAll.abort(); return v; });
   const extrasDone = point
     ? overpassCapped(point, { buildingRadiusM: lotRadius(point, boundary) }, { fetch: ctx.fetch, now: ctx.now }, { capMs: ctx.extrasCapMs ?? EXTRAS_CAP_MS })
@@ -342,7 +342,7 @@ async function runNationwide(typed, ctx, env) {
   const profile = countyProfile(first, ctx.now);
   if (first.details?.county?.countyFips === '06037' && !how.picked) { stopAll.abort(); return null; } // Los Angeles County: the classic path has the richer records
   const unfilled = (keys) => keys.filter((k) => !(profile.attributes[k] && profile.attributes[k].value !== null));
-  const asProfile = (pj) => (pj ? { profile: countyProfile(pj, ctx.now) } : null);
+  const asProfile = (pj) => (pj ? { profile: countyProfile(pj, ctx.now), geometry: pj.geometry ?? null } : null); // geometry: the measured outlines, for the satellite view
   const buildingsDone = within(buildingsP.then(asProfile), ctx.buildingsMs ?? BUILDINGS_MAX_MS, null);
   const lotDone = within(finalP.then(asProfile), ctx.lotMs ?? LOT_MAX_MS, null).then((v) => { if (!v) stopAll.abort(); return v; });
   const extrasDone = Promise.all([osmP, within(finalP, ctx.lotMs ?? LOT_MAX_MS, null)])

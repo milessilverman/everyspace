@@ -50,6 +50,7 @@ function answer(urlStr, range = null) {
     const o = chicagoOv.answer(urlStr, range);
     if (o) return { status: o.status, raw: Buffer.from(typeof o.body === 'string' ? o.body : o.body), type: o.type };
     if (u.hostname === 'photon.komoot.io') return { status: 200, body: { features: [] } };
+    if (OTHER_SOURCES.test(u.hostname)) return { status: 404, body: {} }; // other data sources (photo catalogue, road tiles): "not here"
     return null;
   }
   if (OTHER_SOURCES.test(u.hostname)) return { status: 404, body: {} };

@@ -1203,7 +1203,7 @@ await scenario('yard lines without usable attributes: no usable lines, no helper
 await scenario('map mount point and exports: #lot-map sits between the heading and the list; getProfile and applyOwnerCorrections update the list and page 2', async (page, rec) => {
   await happy(page, rec);
   assert.equal(await page.locator('#lot-map').count(), 1);
-  assert.equal(await page.locator('#lot-map').isHidden(), true, 'empty and hidden for now');
+  assert.equal(await page.locator('#lot-map').count(), 1, 'the lot map mounts here (it shows itself once there is an outline)');
   const order = await page.evaluate(() => {
     const m = document.getElementById('lot-map'), h = document.getElementById('h-profile'), f = document.getElementById('facts');
     return { afterHeading: Boolean(h.compareDocumentPosition(m) & Node.DOCUMENT_POSITION_FOLLOWING), beforeFacts: Boolean(m.compareDocumentPosition(f) & Node.DOCUMENT_POSITION_FOLLOWING) };
@@ -1216,7 +1216,7 @@ await scenario('map mount point and exports: #lot-map sits between the heading a
     m.applyOwnerCorrections({ bedrooms: 6, parking_spaces: 3 });
     return { names: Object.keys(m).sort(), hadProfile: Boolean(before && before.attributes), bedrooms: m.getProfile().attributes.bedrooms.value };
   });
-  assert.deepEqual(api.names, ['applyOwnerCorrections', 'getProfile']);
+  assert.deepEqual(api.names, ['applyOwnerCorrections', 'clearOwnerCorrections', 'getProfile']);
   assert.equal(api.hadProfile, true); assert.equal(api.bedrooms, 6);
   assert.equal(await page.inputValue('#f-bedrooms'), '6');
   assert.equal(await page.locator(`${row('bedrooms')}[data-state="edited"]`).count(), 1);
