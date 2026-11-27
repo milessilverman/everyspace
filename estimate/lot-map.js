@@ -216,7 +216,7 @@ export function frameFor(ring) {
 // ---------------------------------------------------------------------------------------------------------------
 /**
  * @param {{getProfile:()=>any, applyOwnerCorrections:(b:Record<string,any>)=>any, clearOwnerCorrections:(keys:string[])=>any, mount:HTMLElement, now?:()=>string}} opts
- * @returns {{update:()=>void}}
+ * @returns {{update:()=>void, hide:()=>void}}
  */
 export function initLotMap(opts) {
   const { getProfile, applyOwnerCorrections, clearOwnerCorrections, mount } = opts;
@@ -224,7 +224,7 @@ export function initLotMap(opts) {
   /** @type {any} */ let core = null;
   let coreState = 'idle';
   /** @type {any} */ let M = null; // the model for the property on screen
-  let pushing = false, setupTimer = 0, layoutObs = null;
+  let pushing = false, setupTimer = 0, layoutObs = null, suspended = false;
   const uid = 'lm';
 
   const loadCore = () => {
@@ -331,6 +331,8 @@ export function initLotMap(opts) {
     return p ? sourceFromProfile(p) : null;
   };
 
+  /** An apartment building's roof is only an estimate once the owner has given the roof type: until the list has a roof figure, the picture shows none. */
+  const roofShown = () => { const a = getProfile()?.attributes ?? {}; if (a.property_type?.value !== 'multi_family') return true; const r = a.roof_area_sqft; return Boolean(r && r.tag !== 'unavailable' && r.value !== null && r.value !== undefined); };
   const areaOf = (sh) => { try { return core.areaSqft(toGeo(sh)); } catch { return 0; } };
   /** a tiny outline that is not the house: still measured, but no handles of its own and no legend line */
   const isSliver = (sh) => sh.kind === 'bld' && !sh.main && !sh.what && areaOf(sh) < SLIVER_SQFT;
@@ -706,7 +708,7 @@ export function initLotMap(opts) {
       if (c && bx.w > 34 && bx.h > 16) label(c[0], c[1], WHAT_NAME[b.what], 'is-what');
     }
     const house = live().find((x) => x.main);
-    if (house && m && num(m.roof_area_sqft)) {
+    if (house && m && num(m.roof_area_sqft) && roofShown()) {
       const pts = house.verts.map((v) => px(v.lng, v.lat)), bx = boxOf(pts), c = centroidPx(pts);
       if (c && bx.w > 96 && bx.h > 30) label(c[0], c[1], `Roof about ${fmt(m.roof_area_sqft)} sq ft`, 'is-roof');
     }
@@ -719,7 +721,7 @@ export function initLotMap(opts) {
     const unnamed = live().filter((b) => !b.main && !b.what && !isSliver(b));
     for (const b of live()) {
       let text;
-      if (b.main) text = m && num(m.building_footprint_sqft) ? `${fmt(m.building_footprint_sqft)} sq ft footprint${num(m.roof_area_sqft) ? ` · roof about ${fmt(m.roof_area_sqft)} sq ft` : ''}` : '';
+      if (b.main) text = m && num(m.building_footprint_sqft) ? `${fmt(m.building_footprint_sqft)} sq ft footprint${num(m.roof_area_sqft) && roofShown() ? ` · roof about ${fmt(m.roof_area_sqft)} sq ft` : ''}` : '';
       else { try { text = `${fmt(core.areaSqft(toGeo(b)))} sq ft`; } catch { text = ''; } }
       if (!b.main) setName(b.id, b.what ? `${WHAT_NAME[b.what]}${b.whatSrc === 'lookup' ? ' ≈' : ''}` : `Other building${unnamed.length > 1 ? ` ${unnamed.indexOf(b) + 1}` : ''}`);
       set(b.id, text, false, !text);
@@ -1142,6 +1144,7 @@ export function initLotMap(opts) {
 
   // ----- update (called after every render of the page) -----------------------------------------------------
   function update() {
+    if (suspended) return;
     let profile = null;
     try { profile = getProfile(); } catch { profile = null; }
     if (!profile) { if (M) { M = null; mount.hidden = true; } return; }
@@ -1161,6 +1164,7 @@ export function initLotMap(opts) {
       // heavy work after the page has painted the list
       setupTimer = requestAnimationFrame(() => { setupTimer = setTimeout(() => {
         setupTimer = 0;
+        if (suspended) return;
         const s2 = readSource();
         if (!s2 || !setup(s2)) { mount.hidden = true; return; }
         build(); mount.hidden = false; layout(); structure(); D.sub.textContent = subline(); paint(true);
@@ -1202,5 +1206,8 @@ export function initLotMap(opts) {
     : M.parcelSource === 'estimated' ? 'This lot outline is an estimate. Drag the corners to match your lot.'
       : 'These are the outlines we measured. Drag a corner if one is off.');
 
-  return { update };
+  /** Let go of the mount (a condo owner sees the read-only picture there instead); the next update() builds again. */
+  function hide() { suspended = true; layoutObs?.disconnect(); if (M) { M = null; mount.hidden = true; } }
+
+  return { update: () => { suspended = false; update(); }, hide };
 }

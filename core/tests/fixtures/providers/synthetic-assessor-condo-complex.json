@@ -1,0 +1,1125 @@
+{
+ "_fixture_note": "SYNTHETIC: invented address, units and geometry shaped like the live LA County response (record shapes checked 2026-11-27); not a real property",
+ "geometryType": "esriGeometryPolygon",
+ "spatialReference": {
+  "wkid": 4326
+ },
+ "features": [
+  {
+   "attributes": {
+    "OBJECTID": 100,
+    "AIN": "9990000000",
+    "APN": "9990-000-000",
+    "SitusHouseNo": "7700",
+    "SitusDirection": " ",
+    "SitusFraction": " ",
+    "SitusUnit": "UNIT   1",
+    "SitusStreet": "SAMPLE CT",
+    "SitusAddress": "7700 SAMPLE CT   UNIT   1",
+    "SitusCity": "LOS ANGELES CA",
+    "SitusZIP": "90098-0001",
+    "SitusFullAddress": "7700 SAMPLE CT UNIT   1 LOS ANGELES CA 90098",
+    "UseCode": "010C",
+    "UseCode_2": "01",
+    "UseType": "Residential",
+    "UseDescription": "Single",
+    "DesignType1": "0131",
+    "YearBuilt1": "1982",
+    "EffectiveYear1": "1998",
+    "Units1": 1,
+    "Bedrooms1": 2,
+    "Bathrooms1": 2,
+    "SQFTmain1": 1020,
+    "DesignType2": null,
+    "YearBuilt2": null,
+    "EffectiveYear2": null,
+    "Units2": null,
+    "Bedrooms2": null,
+    "Bathrooms2": null,
+    "SQFTmain2": null,
+    "DesignType3": null,
+    "YearBuilt3": null,
+    "EffectiveYear3": null,
+    "Units3": null,
+    "Bedrooms3": null,
+    "Bathrooms3": null,
+    "SQFTmain3": null,
+    "DesignType4": null,
+    "YearBuilt4": null,
+    "EffectiveYear4": null,
+    "Units4": null,
+    "Bedrooms4": null,
+    "Bathrooms4": null,
+    "SQFTmain4": null,
+    "DesignType5": null,
+    "YearBuilt5": null,
+    "EffectiveYear5": null,
+    "Units5": null,
+    "Bedrooms5": null,
+    "Bathrooms5": null,
+    "SQFTmain5": null,
+    "LegalDescription": "*TR=99999 LOT 1 CONDOMINIUM*UNIT 1",
+    "ParcelTypeCode": 1,
+    "Shape.STArea()": 25957,
+    "CENTER_LAT": 34.05,
+    "CENTER_LON": -118.25
+   },
+   "geometry": {
+    "rings": [
+     [
+      [
+       -118.25032525929664,
+       34.0498190700199
+      ],
+      [
+       -118.25032525929664,
+       34.050180929980094
+      ],
+      [
+       -118.24967474070336,
+       34.050180929980094
+      ],
+      [
+       -118.24967474070336,
+       34.0498190700199
+      ],
+      [
+       -118.25032525929664,
+       34.0498190700199
+      ]
+     ]
+    ]
+   }
+  },
+  {
+   "attributes": {
+    "OBJECTID": 101,
+    "AIN": "9990000001",
+    "APN": "9990-000-001",
+    "SitusHouseNo": "7700",
+    "SitusDirection": " ",
+    "SitusFraction": " ",
+    "SitusUnit": "UNIT   2",
+    "SitusStreet": "SAMPLE CT",
+    "SitusAddress": "7700 SAMPLE CT   UNIT   2",
+    "SitusCity": "LOS ANGELES CA",
+    "SitusZIP": "90098-0001",
+    "SitusFullAddress": "7700 SAMPLE CT UNIT   2 LOS ANGELES CA 90098",
+    "UseCode": "010C",
+    "UseCode_2": "01",
+    "UseType": "Residential",
+    "UseDescription": "Single",
+    "DesignType1": "0131",
+    "YearBuilt1": "1982",
+    "EffectiveYear1": "1982",
+    "Units1": 1,
+    "Bedrooms1": 2,
+    "Bathrooms1": 2,
+    "SQFTmain1": 1150,
+    "DesignType2": null,
+    "YearBuilt2": null,
+    "EffectiveYear2": null,
+    "Units2": null,
+    "Bedrooms2": null,
+    "Bathrooms2": null,
+    "SQFTmain2": null,
+    "DesignType3": null,
+    "YearBuilt3": null,
+    "EffectiveYear3": null,
+    "Units3": null,
+    "Bedrooms3": null,
+    "Bathrooms3": null,
+    "SQFTmain3": null,
+    "DesignType4": null,
+    "YearBuilt4": null,
+    "EffectiveYear4": null,
+    "Units4": null,
+    "Bedrooms4": null,
+    "Bathrooms4": null,
+    "SQFTmain4": null,
+    "DesignType5": null,
+    "YearBuilt5": null,
+    "EffectiveYear5": null,
+    "Units5": null,
+    "Bedrooms5": null,
+    "Bathrooms5": null,
+    "SQFTmain5": null,
+    "LegalDescription": "*TR=99999 LOT 1 CONDOMINIUM*UNIT 2",
+    "ParcelTypeCode": 1,
+    "Shape.STArea()": 25957,
+    "CENTER_LAT": 34.05,
+    "CENTER_LON": -118.25
+   },
+   "geometry": {
+    "rings": [
+     [
+      [
+       -118.25032525929664,
+       34.0498190700199
+      ],
+      [
+       -118.25032525929664,
+       34.050180929980094
+      ],
+      [
+       -118.24967474070336,
+       34.050180929980094
+      ],
+      [
+       -118.24967474070336,
+       34.0498190700199
+      ],
+      [
+       -118.25032525929664,
+       34.0498190700199
+      ]
+     ]
+    ]
+   }
+  },
+  {
+   "attributes": {
+    "OBJECTID": 102,
+    "AIN": "9990000002",
+    "APN": "9990-000-002",
+    "SitusHouseNo": "7700",
+    "SitusDirection": " ",
+    "SitusFraction": " ",
+    "SitusUnit": "UNIT   10",
+    "SitusStreet": "SAMPLE CT",
+    "SitusAddress": "7700 SAMPLE CT   UNIT   10",
+    "SitusCity": "LOS ANGELES CA",
+    "SitusZIP": "90098-0001",
+    "SitusFullAddress": "7700 SAMPLE CT UNIT   10 LOS ANGELES CA 90098",
+    "UseCode": "010C",
+    "UseCode_2": "01",
+    "UseType": "Residential",
+    "UseDescription": "Single",
+    "DesignType1": "0131",
+    "YearBuilt1": "1982",
+    "EffectiveYear1": "1982",
+    "Units1": 1,
+    "Bedrooms1": 3,
+    "Bathrooms1": 2,
+    "SQFTmain1": 1310,
+    "DesignType2": null,
+    "YearBuilt2": null,
+    "EffectiveYear2": null,
+    "Units2": null,
+    "Bedrooms2": null,
+    "Bathrooms2": null,
+    "SQFTmain2": null,
+    "DesignType3": null,
+    "YearBuilt3": null,
+    "EffectiveYear3": null,
+    "Units3": null,
+    "Bedrooms3": null,
+    "Bathrooms3": null,
+    "SQFTmain3": null,
+    "DesignType4": null,
+    "YearBuilt4": null,
+    "EffectiveYear4": null,
+    "Units4": null,
+    "Bedrooms4": null,
+    "Bathrooms4": null,
+    "SQFTmain4": null,
+    "DesignType5": null,
+    "YearBuilt5": null,
+    "EffectiveYear5": null,
+    "Units5": null,
+    "Bedrooms5": null,
+    "Bathrooms5": null,
+    "SQFTmain5": null,
+    "LegalDescription": "*TR=99999 LOT 1 CONDOMINIUM*UNIT 3",
+    "ParcelTypeCode": 1,
+    "Shape.STArea()": 25957,
+    "CENTER_LAT": 34.05,
+    "CENTER_LON": -118.25
+   },
+   "geometry": {
+    "rings": [
+     [
+      [
+       -118.25032525929664,
+       34.0498190700199
+      ],
+      [
+       -118.25032525929664,
+       34.050180929980094
+      ],
+      [
+       -118.24967474070336,
+       34.050180929980094
+      ],
+      [
+       -118.24967474070336,
+       34.0498190700199
+      ],
+      [
+       -118.25032525929664,
+       34.0498190700199
+      ]
+     ]
+    ]
+   }
+  },
+  {
+   "attributes": {
+    "OBJECTID": 103,
+    "AIN": "9990000003",
+    "APN": "9990-000-003",
+    "SitusHouseNo": "7700",
+    "SitusDirection": " ",
+    "SitusFraction": " ",
+    "SitusUnit": "UNIT   11",
+    "SitusStreet": "SAMPLE CT",
+    "SitusAddress": "7700 SAMPLE CT   UNIT   11",
+    "SitusCity": "LOS ANGELES CA",
+    "SitusZIP": "90098-0001",
+    "SitusFullAddress": "7700 SAMPLE CT UNIT   11 LOS ANGELES CA 90098",
+    "UseCode": "010C",
+    "UseCode_2": "01",
+    "UseType": "Residential",
+    "UseDescription": "Single",
+    "DesignType1": "0131",
+    "YearBuilt1": "1982",
+    "EffectiveYear1": "1982",
+    "Units1": 1,
+    "Bedrooms1": 3,
+    "Bathrooms1": 2,
+    "SQFTmain1": 1310,
+    "DesignType2": null,
+    "YearBuilt2": null,
+    "EffectiveYear2": null,
+    "Units2": null,
+    "Bedrooms2": null,
+    "Bathrooms2": null,
+    "SQFTmain2": null,
+    "DesignType3": null,
+    "YearBuilt3": null,
+    "EffectiveYear3": null,
+    "Units3": null,
+    "Bedrooms3": null,
+    "Bathrooms3": null,
+    "SQFTmain3": null,
+    "DesignType4": null,
+    "YearBuilt4": null,
+    "EffectiveYear4": null,
+    "Units4": null,
+    "Bedrooms4": null,
+    "Bathrooms4": null,
+    "SQFTmain4": null,
+    "DesignType5": null,
+    "YearBuilt5": null,
+    "EffectiveYear5": null,
+    "Units5": null,
+    "Bedrooms5": null,
+    "Bathrooms5": null,
+    "SQFTmain5": null,
+    "LegalDescription": "*TR=99999 LOT 1 CONDOMINIUM*UNIT 4",
+    "ParcelTypeCode": 1,
+    "Shape.STArea()": 25957,
+    "CENTER_LAT": 34.05,
+    "CENTER_LON": -118.25
+   },
+   "geometry": {
+    "rings": [
+     [
+      [
+       -118.25032525929664,
+       34.0498190700199
+      ],
+      [
+       -118.25032525929664,
+       34.050180929980094
+      ],
+      [
+       -118.24967474070336,
+       34.050180929980094
+      ],
+      [
+       -118.24967474070336,
+       34.0498190700199
+      ],
+      [
+       -118.25032525929664,
+       34.0498190700199
+      ]
+     ]
+    ]
+   }
+  },
+  {
+   "attributes": {
+    "OBJECTID": 104,
+    "AIN": "9990000004",
+    "APN": "9990-000-004",
+    "SitusHouseNo": "7700",
+    "SitusDirection": " ",
+    "SitusFraction": " ",
+    "SitusUnit": "NO 18",
+    "SitusStreet": "SAMPLE CT",
+    "SitusAddress": "7700 SAMPLE CT   NO 18",
+    "SitusCity": "LOS ANGELES CA",
+    "SitusZIP": "90098-0001",
+    "SitusFullAddress": "7700 SAMPLE CT NO 18 LOS ANGELES CA 90098",
+    "UseCode": "010C",
+    "UseCode_2": "01",
+    "UseType": "Residential",
+    "UseDescription": "Single",
+    "DesignType1": "0131",
+    "YearBuilt1": "1982",
+    "EffectiveYear1": "1982",
+    "Units1": 1,
+    "Bedrooms1": 1,
+    "Bathrooms1": 1,
+    "SQFTmain1": 980,
+    "DesignType2": null,
+    "YearBuilt2": null,
+    "EffectiveYear2": null,
+    "Units2": null,
+    "Bedrooms2": null,
+    "Bathrooms2": null,
+    "SQFTmain2": null,
+    "DesignType3": null,
+    "YearBuilt3": null,
+    "EffectiveYear3": null,
+    "Units3": null,
+    "Bedrooms3": null,
+    "Bathrooms3": null,
+    "SQFTmain3": null,
+    "DesignType4": null,
+    "YearBuilt4": null,
+    "EffectiveYear4": null,
+    "Units4": null,
+    "Bedrooms4": null,
+    "Bathrooms4": null,
+    "SQFTmain4": null,
+    "DesignType5": null,
+    "YearBuilt5": null,
+    "EffectiveYear5": null,
+    "Units5": null,
+    "Bedrooms5": null,
+    "Bathrooms5": null,
+    "SQFTmain5": null,
+    "LegalDescription": "*TR=99999 LOT 1 CONDOMINIUM*UNIT 5",
+    "ParcelTypeCode": 1,
+    "Shape.STArea()": 25957,
+    "CENTER_LAT": 34.05,
+    "CENTER_LON": -118.25
+   },
+   "geometry": {
+    "rings": [
+     [
+      [
+       -118.25032525929664,
+       34.0498190700199
+      ],
+      [
+       -118.25032525929664,
+       34.050180929980094
+      ],
+      [
+       -118.24967474070336,
+       34.050180929980094
+      ],
+      [
+       -118.24967474070336,
+       34.0498190700199
+      ],
+      [
+       -118.25032525929664,
+       34.0498190700199
+      ]
+     ]
+    ]
+   }
+  },
+  {
+   "attributes": {
+    "OBJECTID": 105,
+    "AIN": "9990000005",
+    "APN": "9990-000-005",
+    "SitusHouseNo": "7700",
+    "SitusDirection": " ",
+    "SitusFraction": " ",
+    "SitusUnit": "UNIT   2B",
+    "SitusStreet": "SAMPLE CT",
+    "SitusAddress": "7700 SAMPLE CT   UNIT   2B",
+    "SitusCity": "LOS ANGELES CA",
+    "SitusZIP": "90098-0001",
+    "SitusFullAddress": "7700 SAMPLE CT UNIT   2B LOS ANGELES CA 90098",
+    "UseCode": "010C",
+    "UseCode_2": "01",
+    "UseType": "Residential",
+    "UseDescription": "Single",
+    "DesignType1": "0131",
+    "YearBuilt1": "1982",
+    "EffectiveYear1": "1982",
+    "Units1": 1,
+    "Bedrooms1": 2,
+    "Bathrooms1": 2,
+    "SQFTmain1": 1180,
+    "DesignType2": null,
+    "YearBuilt2": null,
+    "EffectiveYear2": null,
+    "Units2": null,
+    "Bedrooms2": null,
+    "Bathrooms2": null,
+    "SQFTmain2": null,
+    "DesignType3": null,
+    "YearBuilt3": null,
+    "EffectiveYear3": null,
+    "Units3": null,
+    "Bedrooms3": null,
+    "Bathrooms3": null,
+    "SQFTmain3": null,
+    "DesignType4": null,
+    "YearBuilt4": null,
+    "EffectiveYear4": null,
+    "Units4": null,
+    "Bedrooms4": null,
+    "Bathrooms4": null,
+    "SQFTmain4": null,
+    "DesignType5": null,
+    "YearBuilt5": null,
+    "EffectiveYear5": null,
+    "Units5": null,
+    "Bedrooms5": null,
+    "Bathrooms5": null,
+    "SQFTmain5": null,
+    "LegalDescription": "*TR=99999 LOT 1 CONDOMINIUM*UNIT 6",
+    "ParcelTypeCode": 1,
+    "Shape.STArea()": 25957,
+    "CENTER_LAT": 34.05,
+    "CENTER_LON": -118.25
+   },
+   "geometry": {
+    "rings": [
+     [
+      [
+       -118.25032525929664,
+       34.0498190700199
+      ],
+      [
+       -118.25032525929664,
+       34.050180929980094
+      ],
+      [
+       -118.24967474070336,
+       34.050180929980094
+      ],
+      [
+       -118.24967474070336,
+       34.0498190700199
+      ],
+      [
+       -118.25032525929664,
+       34.0498190700199
+      ]
+     ]
+    ]
+   }
+  },
+  {
+   "attributes": {
+    "OBJECTID": 106,
+    "AIN": "9990000006",
+    "APN": "9990-000-006",
+    "SitusHouseNo": "7700",
+    "SitusDirection": " ",
+    "SitusFraction": " ",
+    "SitusUnit": "UNIT   3",
+    "SitusStreet": "SAMPLE CT",
+    "SitusAddress": "7700 SAMPLE CT   UNIT   3",
+    "SitusCity": "LOS ANGELES CA",
+    "SitusZIP": "90098-0001",
+    "SitusFullAddress": "7700 SAMPLE CT UNIT   3 LOS ANGELES CA 90098",
+    "UseCode": "010C",
+    "UseCode_2": "01",
+    "UseType": "Residential",
+    "UseDescription": "Single",
+    "DesignType1": "0131",
+    "YearBuilt1": "1982",
+    "EffectiveYear1": "1982",
+    "Units1": 1,
+    "Bedrooms1": 2,
+    "Bathrooms1": 2,
+    "SQFTmain1": 1240,
+    "DesignType2": null,
+    "YearBuilt2": null,
+    "EffectiveYear2": null,
+    "Units2": null,
+    "Bedrooms2": null,
+    "Bathrooms2": null,
+    "SQFTmain2": null,
+    "DesignType3": null,
+    "YearBuilt3": null,
+    "EffectiveYear3": null,
+    "Units3": null,
+    "Bedrooms3": null,
+    "Bathrooms3": null,
+    "SQFTmain3": null,
+    "DesignType4": null,
+    "YearBuilt4": null,
+    "EffectiveYear4": null,
+    "Units4": null,
+    "Bedrooms4": null,
+    "Bathrooms4": null,
+    "SQFTmain4": null,
+    "DesignType5": null,
+    "YearBuilt5": null,
+    "EffectiveYear5": null,
+    "Units5": null,
+    "Bedrooms5": null,
+    "Bathrooms5": null,
+    "SQFTmain5": null,
+    "LegalDescription": "*TR=99999 LOT 1 CONDOMINIUM*UNIT 7",
+    "ParcelTypeCode": 1,
+    "Shape.STArea()": 25957,
+    "CENTER_LAT": 34.05,
+    "CENTER_LON": -118.25
+   },
+   "geometry": {
+    "rings": [
+     [
+      [
+       -118.25032525929664,
+       34.0498190700199
+      ],
+      [
+       -118.25032525929664,
+       34.050180929980094
+      ],
+      [
+       -118.24967474070336,
+       34.050180929980094
+      ],
+      [
+       -118.24967474070336,
+       34.0498190700199
+      ],
+      [
+       -118.25032525929664,
+       34.0498190700199
+      ]
+     ]
+    ]
+   }
+  },
+  {
+   "attributes": {
+    "OBJECTID": 107,
+    "AIN": "9990000007",
+    "APN": "9990-000-007",
+    "SitusHouseNo": "7700",
+    "SitusDirection": " ",
+    "SitusFraction": " ",
+    "SitusUnit": "UNIT   4",
+    "SitusStreet": "SAMPLE CT",
+    "SitusAddress": "7700 SAMPLE CT   UNIT   4",
+    "SitusCity": "LOS ANGELES CA",
+    "SitusZIP": "90098-0001",
+    "SitusFullAddress": "7700 SAMPLE CT UNIT   4 LOS ANGELES CA 90098",
+    "UseCode": "010C",
+    "UseCode_2": "01",
+    "UseType": "Residential",
+    "UseDescription": "Single",
+    "DesignType1": "0131",
+    "YearBuilt1": "1982",
+    "EffectiveYear1": "1982",
+    "Units1": 1,
+    "Bedrooms1": 2,
+    "Bathrooms1": 2,
+    "SQFTmain1": 1240,
+    "DesignType2": null,
+    "YearBuilt2": null,
+    "EffectiveYear2": null,
+    "Units2": null,
+    "Bedrooms2": null,
+    "Bathrooms2": null,
+    "SQFTmain2": null,
+    "DesignType3": null,
+    "YearBuilt3": null,
+    "EffectiveYear3": null,
+    "Units3": null,
+    "Bedrooms3": null,
+    "Bathrooms3": null,
+    "SQFTmain3": null,
+    "DesignType4": null,
+    "YearBuilt4": null,
+    "EffectiveYear4": null,
+    "Units4": null,
+    "Bedrooms4": null,
+    "Bathrooms4": null,
+    "SQFTmain4": null,
+    "DesignType5": null,
+    "YearBuilt5": null,
+    "EffectiveYear5": null,
+    "Units5": null,
+    "Bedrooms5": null,
+    "Bathrooms5": null,
+    "SQFTmain5": null,
+    "LegalDescription": "*TR=99999 LOT 1 CONDOMINIUM*UNIT 8",
+    "ParcelTypeCode": 1,
+    "Shape.STArea()": 25957,
+    "CENTER_LAT": 34.05,
+    "CENTER_LON": -118.25
+   },
+   "geometry": {
+    "rings": [
+     [
+      [
+       -118.25032525929664,
+       34.0498190700199
+      ],
+      [
+       -118.25032525929664,
+       34.050180929980094
+      ],
+      [
+       -118.24967474070336,
+       34.050180929980094
+      ],
+      [
+       -118.24967474070336,
+       34.0498190700199
+      ],
+      [
+       -118.25032525929664,
+       34.0498190700199
+      ]
+     ]
+    ]
+   }
+  },
+  {
+   "attributes": {
+    "OBJECTID": 108,
+    "AIN": "9990000008",
+    "APN": "9990-000-008",
+    "SitusHouseNo": "7700",
+    "SitusDirection": " ",
+    "SitusFraction": " ",
+    "SitusUnit": "UNIT   5",
+    "SitusStreet": "SAMPLE CT",
+    "SitusAddress": "7700 SAMPLE CT   UNIT   5",
+    "SitusCity": "LOS ANGELES CA",
+    "SitusZIP": "90098-0001",
+    "SitusFullAddress": "7700 SAMPLE CT UNIT   5 LOS ANGELES CA 90098",
+    "UseCode": "010C",
+    "UseCode_2": "01",
+    "UseType": "Residential",
+    "UseDescription": "Single",
+    "DesignType1": "0131",
+    "YearBuilt1": "1982",
+    "EffectiveYear1": "1982",
+    "Units1": 1,
+    "Bedrooms1": 1,
+    "Bathrooms1": 1,
+    "SQFTmain1": 905,
+    "DesignType2": null,
+    "YearBuilt2": null,
+    "EffectiveYear2": null,
+    "Units2": null,
+    "Bedrooms2": null,
+    "Bathrooms2": null,
+    "SQFTmain2": null,
+    "DesignType3": null,
+    "YearBuilt3": null,
+    "EffectiveYear3": null,
+    "Units3": null,
+    "Bedrooms3": null,
+    "Bathrooms3": null,
+    "SQFTmain3": null,
+    "DesignType4": null,
+    "YearBuilt4": null,
+    "EffectiveYear4": null,
+    "Units4": null,
+    "Bedrooms4": null,
+    "Bathrooms4": null,
+    "SQFTmain4": null,
+    "DesignType5": null,
+    "YearBuilt5": null,
+    "EffectiveYear5": null,
+    "Units5": null,
+    "Bedrooms5": null,
+    "Bathrooms5": null,
+    "SQFTmain5": null,
+    "LegalDescription": "*TR=99999 LOT 1 CONDOMINIUM*UNIT 9",
+    "ParcelTypeCode": 1,
+    "Shape.STArea()": 25957,
+    "CENTER_LAT": 34.05,
+    "CENTER_LON": -118.25
+   },
+   "geometry": {
+    "rings": [
+     [
+      [
+       -118.25032525929664,
+       34.0498190700199
+      ],
+      [
+       -118.25032525929664,
+       34.050180929980094
+      ],
+      [
+       -118.24967474070336,
+       34.050180929980094
+      ],
+      [
+       -118.24967474070336,
+       34.0498190700199
+      ],
+      [
+       -118.25032525929664,
+       34.0498190700199
+      ]
+     ]
+    ]
+   }
+  },
+  {
+   "attributes": {
+    "OBJECTID": 109,
+    "AIN": "9990000009",
+    "APN": "9990-000-009",
+    "SitusHouseNo": "7700",
+    "SitusDirection": " ",
+    "SitusFraction": " ",
+    "SitusUnit": "UNIT   6",
+    "SitusStreet": "SAMPLE CT",
+    "SitusAddress": "7700 SAMPLE CT   UNIT   6",
+    "SitusCity": "LOS ANGELES CA",
+    "SitusZIP": "90098-0001",
+    "SitusFullAddress": "7700 SAMPLE CT UNIT   6 LOS ANGELES CA 90098",
+    "UseCode": "010C",
+    "UseCode_2": "01",
+    "UseType": "Residential",
+    "UseDescription": "Single",
+    "DesignType1": "0131",
+    "YearBuilt1": "1982",
+    "EffectiveYear1": "1982",
+    "Units1": 1,
+    "Bedrooms1": 2,
+    "Bathrooms1": 2,
+    "SQFTmain1": 1005,
+    "DesignType2": null,
+    "YearBuilt2": null,
+    "EffectiveYear2": null,
+    "Units2": null,
+    "Bedrooms2": null,
+    "Bathrooms2": null,
+    "SQFTmain2": null,
+    "DesignType3": null,
+    "YearBuilt3": null,
+    "EffectiveYear3": null,
+    "Units3": null,
+    "Bedrooms3": null,
+    "Bathrooms3": null,
+    "SQFTmain3": null,
+    "DesignType4": null,
+    "YearBuilt4": null,
+    "EffectiveYear4": null,
+    "Units4": null,
+    "Bedrooms4": null,
+    "Bathrooms4": null,
+    "SQFTmain4": null,
+    "DesignType5": null,
+    "YearBuilt5": null,
+    "EffectiveYear5": null,
+    "Units5": null,
+    "Bedrooms5": null,
+    "Bathrooms5": null,
+    "SQFTmain5": null,
+    "LegalDescription": "*TR=99999 LOT 1 CONDOMINIUM*UNIT 10",
+    "ParcelTypeCode": 1,
+    "Shape.STArea()": 25957,
+    "CENTER_LAT": 34.05,
+    "CENTER_LON": -118.25
+   },
+   "geometry": {
+    "rings": [
+     [
+      [
+       -118.25032525929664,
+       34.0498190700199
+      ],
+      [
+       -118.25032525929664,
+       34.050180929980094
+      ],
+      [
+       -118.24967474070336,
+       34.050180929980094
+      ],
+      [
+       -118.24967474070336,
+       34.0498190700199
+      ],
+      [
+       -118.25032525929664,
+       34.0498190700199
+      ]
+     ]
+    ]
+   }
+  },
+  {
+   "attributes": {
+    "OBJECTID": 110,
+    "AIN": "9990000010",
+    "APN": "9990-000-010",
+    "SitusHouseNo": "7700",
+    "SitusDirection": " ",
+    "SitusFraction": " ",
+    "SitusUnit": "UNIT   7",
+    "SitusStreet": "SAMPLE CT",
+    "SitusAddress": "7700 SAMPLE CT   UNIT   7",
+    "SitusCity": "LOS ANGELES CA",
+    "SitusZIP": "90098-0001",
+    "SitusFullAddress": "7700 SAMPLE CT UNIT   7 LOS ANGELES CA 90098",
+    "UseCode": "010C",
+    "UseCode_2": "01",
+    "UseType": "Residential",
+    "UseDescription": "Single",
+    "DesignType1": "0131",
+    "YearBuilt1": "1982",
+    "EffectiveYear1": "1982",
+    "Units1": 1,
+    "Bedrooms1": 2,
+    "Bathrooms1": 2,
+    "SQFTmain1": 1100,
+    "DesignType2": null,
+    "YearBuilt2": null,
+    "EffectiveYear2": null,
+    "Units2": null,
+    "Bedrooms2": null,
+    "Bathrooms2": null,
+    "SQFTmain2": null,
+    "DesignType3": null,
+    "YearBuilt3": null,
+    "EffectiveYear3": null,
+    "Units3": null,
+    "Bedrooms3": null,
+    "Bathrooms3": null,
+    "SQFTmain3": null,
+    "DesignType4": null,
+    "YearBuilt4": null,
+    "EffectiveYear4": null,
+    "Units4": null,
+    "Bedrooms4": null,
+    "Bathrooms4": null,
+    "SQFTmain4": null,
+    "DesignType5": null,
+    "YearBuilt5": null,
+    "EffectiveYear5": null,
+    "Units5": null,
+    "Bedrooms5": null,
+    "Bathrooms5": null,
+    "SQFTmain5": null,
+    "LegalDescription": "*TR=99999 LOT 1 CONDOMINIUM*UNIT 11",
+    "ParcelTypeCode": 1,
+    "Shape.STArea()": 25957,
+    "CENTER_LAT": 34.05,
+    "CENTER_LON": -118.25
+   },
+   "geometry": {
+    "rings": [
+     [
+      [
+       -118.25032525929664,
+       34.0498190700199
+      ],
+      [
+       -118.25032525929664,
+       34.050180929980094
+      ],
+      [
+       -118.24967474070336,
+       34.050180929980094
+      ],
+      [
+       -118.24967474070336,
+       34.0498190700199
+      ],
+      [
+       -118.25032525929664,
+       34.0498190700199
+      ]
+     ]
+    ]
+   }
+  },
+  {
+   "attributes": {
+    "OBJECTID": 111,
+    "AIN": "9990000011",
+    "APN": "9990-000-011",
+    "SitusHouseNo": "7700",
+    "SitusDirection": " ",
+    "SitusFraction": " ",
+    "SitusUnit": "UNIT   9",
+    "SitusStreet": "SAMPLE CT",
+    "SitusAddress": "7700 SAMPLE CT   UNIT   9",
+    "SitusCity": "LOS ANGELES CA",
+    "SitusZIP": "90098-0001",
+    "SitusFullAddress": "7700 SAMPLE CT UNIT   9 LOS ANGELES CA 90098",
+    "UseCode": "010C",
+    "UseCode_2": "01",
+    "UseType": "Residential",
+    "UseDescription": "Single",
+    "DesignType1": "0131",
+    "YearBuilt1": "1982",
+    "EffectiveYear1": "1982",
+    "Units1": 1,
+    "Bedrooms1": 3,
+    "Bathrooms1": 3,
+    "SQFTmain1": 1425,
+    "DesignType2": null,
+    "YearBuilt2": null,
+    "EffectiveYear2": null,
+    "Units2": null,
+    "Bedrooms2": null,
+    "Bathrooms2": null,
+    "SQFTmain2": null,
+    "DesignType3": null,
+    "YearBuilt3": null,
+    "EffectiveYear3": null,
+    "Units3": null,
+    "Bedrooms3": null,
+    "Bathrooms3": null,
+    "SQFTmain3": null,
+    "DesignType4": null,
+    "YearBuilt4": null,
+    "EffectiveYear4": null,
+    "Units4": null,
+    "Bedrooms4": null,
+    "Bathrooms4": null,
+    "SQFTmain4": null,
+    "DesignType5": null,
+    "YearBuilt5": null,
+    "EffectiveYear5": null,
+    "Units5": null,
+    "Bedrooms5": null,
+    "Bathrooms5": null,
+    "SQFTmain5": null,
+    "LegalDescription": "*TR=99999 LOT 1 CONDOMINIUM*UNIT 12",
+    "ParcelTypeCode": 1,
+    "Shape.STArea()": 25957,
+    "CENTER_LAT": 34.05,
+    "CENTER_LON": -118.25
+   },
+   "geometry": {
+    "rings": [
+     [
+      [
+       -118.25032525929664,
+       34.0498190700199
+      ],
+      [
+       -118.25032525929664,
+       34.050180929980094
+      ],
+      [
+       -118.24967474070336,
+       34.050180929980094
+      ],
+      [
+       -118.24967474070336,
+       34.0498190700199
+      ],
+      [
+       -118.25032525929664,
+       34.0498190700199
+      ]
+     ]
+    ]
+   }
+  },
+  {
+   "attributes": {
+    "OBJECTID": 200,
+    "AIN": "9990000099",
+    "APN": "9990-000-099",
+    "SitusHouseNo": "7700",
+    "SitusDirection": " ",
+    "SitusFraction": " ",
+    "SitusUnit": "REAR",
+    "SitusStreet": "SAMPLE CT",
+    "SitusAddress": "7700 SAMPLE CT   REAR",
+    "SitusCity": "LOS ANGELES CA",
+    "SitusZIP": "90098-0001",
+    "SitusFullAddress": "7700 SAMPLE CT REAR LOS ANGELES CA 90098",
+    "UseCode": "010V",
+    "UseCode_2": "01",
+    "UseType": "Residential",
+    "UseDescription": "Single",
+    "DesignType1": null,
+    "YearBuilt1": null,
+    "EffectiveYear1": null,
+    "Units1": null,
+    "Bedrooms1": null,
+    "Bathrooms1": null,
+    "SQFTmain1": null,
+    "DesignType2": null,
+    "YearBuilt2": null,
+    "EffectiveYear2": null,
+    "Units2": null,
+    "Bedrooms2": null,
+    "Bathrooms2": null,
+    "SQFTmain2": null,
+    "DesignType3": null,
+    "YearBuilt3": null,
+    "EffectiveYear3": null,
+    "Units3": null,
+    "Bedrooms3": null,
+    "Bathrooms3": null,
+    "SQFTmain3": null,
+    "DesignType4": null,
+    "YearBuilt4": null,
+    "EffectiveYear4": null,
+    "Units4": null,
+    "Bedrooms4": null,
+    "Bathrooms4": null,
+    "SQFTmain4": null,
+    "DesignType5": null,
+    "YearBuilt5": null,
+    "EffectiveYear5": null,
+    "Units5": null,
+    "Bedrooms5": null,
+    "Bathrooms5": null,
+    "SQFTmain5": null,
+    "LegalDescription": "*COMMON AREA OF LOT 1",
+    "ParcelTypeCode": 0,
+    "Shape.STArea()": 25957
+   },
+   "geometry": {
+    "rings": [
+     [
+      [
+       -118.25032525929664,
+       34.0498190700199
+      ],
+      [
+       -118.25032525929664,
+       34.050180929980094
+      ],
+      [
+       -118.24967474070336,
+       34.050180929980094
+      ],
+      [
+       -118.24967474070336,
+       34.0498190700199
+      ],
+      [
+       -118.25032525929664,
+       34.0498190700199
+      ]
+     ]
+    ]
+   }
+  }
+ ]
+}

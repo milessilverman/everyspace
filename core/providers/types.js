@@ -28,7 +28,10 @@
 
 /**
  * Fields of a records provider (every entry is a Sourced value; a field the provider cannot supply is `unavailable`):
- * apn, lot_sqft, house_sqft, floors, beds, baths, year_built, property_type, use_code, units.
+ * apn, lot_sqft, house_sqft, floors, beds, baths, year_built, property_type, use_code, units (and, where the record has them: unit_label, complex_unit_count).
+ * A records provider may also take `query.unit` and `query.ownsWholeBuilding` (condominium units, docs/condos-and-buildings.md) and may answer
+ * `{ok:false, code:'needs_unit', needsUnit:true, units:[{unit,label}], complex:{address, unitCount}}` when several unit records share the address.
+ * A provider with `gatesLookup:true` is awaited before the photo, street-line and outline lookups start (its answer decides whether they are needed).
  * A field may carry `crossCheck` ({source, value, difference, differencePct, agreement}) when the provider itself holds a
  * second figure for it (e.g. the assessor's stored lot area next to the polygon-measured lot area).
  * @typedef {'apn'|'lot_sqft'|'house_sqft'|'floors'|'beds'|'baths'|'year_built'|'property_type'|'use_code'|'units'} RecordField

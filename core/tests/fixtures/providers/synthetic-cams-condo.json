@@ -1,0 +1,26 @@
+{
+ "_fixture_note": "SYNTHETIC: invented address, units and geometry shaped like the live LA County response (record shapes checked 2026-11-27); not a real property",
+ "spatialReference": {
+  "wkid": 4326
+ },
+ "candidates": [
+  {
+   "address": "7700 Sample Ct, Los Angeles, CA, 90098",
+   "location": {
+    "x": -118.2502,
+    "y": 34.049699999999994
+   },
+   "score": 100,
+   "attributes": {
+    "Match_addr": "7700 Sample Ct, Los Angeles, CA, 90098",
+    "StAddr": "7700 Sample Ct",
+    "StreetName": "Sample",
+    "SufType": "Ct",
+    "City": "Los Angeles",
+    "State": "CA",
+    "ZIP": "90098",
+    "Addr_type": "StreetAddress"
+   }
+  }
+ ]
+}

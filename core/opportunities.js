@@ -17,7 +17,7 @@
 // has a variable capacity: pass defaultResourceCapacity(profile) as constraints.resourceCapacity.
 // entire_home conflicts with everything inside or behind the home (private_room, backyard, pool, garage_storage,
 // kitchen, ...), ASSUMING a whole-home guest has the whole property, garage included.
-import { CATEGORIES, ATTRIBUTE_QUESTIONS } from './data/categories.js';
+import { CATEGORIES, ATTRIBUTE_QUESTIONS, CONDO_OWNER_KEYS, BUILDING_OWNER_KEYS } from './data/categories.js';
 import { checkFeasibility } from './regulatory.js';
 
 /** @typedef {import('./types.js').Opportunity} Opportunity */
@@ -26,6 +26,7 @@ import { checkFeasibility } from './regulatory.js';
 /** @typedef {import('./data/categories.js').Rule} Rule */
 /** @typedef {'yes'|'no'|'unknown'} Tri */
 
+export { CONDO_OWNER_KEYS, BUILDING_OWNER_KEYS };
 /** Resources whose capacity is always 1 in defaultResourceCapacity, so sharing one is a hard conflict. */
 const EXCLUSIVE_RESOURCES = ['home_interior', 'yard', 'pool', 'garage', 'roof'];
 /** Boolean `*_present` style attributes that observe the asset itself (an estimate of them still shows the asset). */
@@ -79,8 +80,8 @@ export function evaluateRule(rule, profile) {
     return { state, used, missing };
   }
   const a = read(profile, rule.attr);
-  // ownerOnly: only an owner-confirmed value counts; anything else is "ask the owner".
-  if (!a || a.value === 'unknown' || (rule.ownerOnly && a.tag !== 'owner-confirmed')) return { state: 'unknown', used, missing: new Set([rule.attr]) };
+  // ownerOnly / ownerConfirmed: only an owner-confirmed value counts; anything else is "ask the owner".
+  if (!a || a.value === 'unknown' || ((rule.ownerOnly || rule.ownerConfirmed) && a.tag !== 'owner-confirmed')) return { state: 'unknown', used, missing: new Set([rule.attr]) };
   const v = a.value;
   let ok = true;
   if ('equals' in rule) ok = v === rule.equals;
@@ -109,6 +110,29 @@ function conflictMap(categories) {
 }
 
 /**
+ * How many identical units an opportunity is offered as, from what the OWNER said (an assumed quantity is never used):
+ *  - apartment_unit of a multi-family building: units_available_to_rent (0 -> not offered; more than `units` -> `units`); unanswered -> `needed`, no quantity;
+ *  - parking_spot of a multi-family building: parking_spaces when owner-confirmed; of a condo: assigned_parking_spaces (already required by the rule).
+ * @param {string} key @param {PropertyProfile} profile
+ * @returns {{quantity?:number, needed?:{key:string, question:string}, drop?:boolean, note?:string}}
+ */
+function quantityFor(key, profile) {
+  const type = read(profile, 'property_type')?.value;
+  const owner = (/** @type {string} */ k) => { const a = read(profile, k); return a && a.tag === 'owner-confirmed' && typeof a.value === 'number' && Number.isFinite(a.value) ? Math.floor(a.value) : null; };
+  if (key === 'apartment_unit' && type === 'multi_family') {
+    const n = owner('units_available_to_rent');
+    if (n === null) return { needed: { key: 'units_available_to_rent', question: ATTRIBUTE_QUESTIONS.units_available_to_rent }, note: 'Tell us how many units you could offer this way; no number is assumed.' };
+    if (n < 1) return { drop: true };
+    const u = read(profile, 'units')?.value;
+    const total = typeof u === 'number' && Number.isFinite(u) ? Math.floor(u) : null;
+    return total !== null && n > total ? { quantity: total, note: `You said ${n} units; the building has ${total}, so ${total} is used.` } : { quantity: n };
+  }
+  if (key === 'parking_spot' && type === 'multi_family') { const n = owner('parking_spaces'); return n !== null && n >= 1 ? { quantity: n } : {}; }
+  if (key === 'parking_spot' && type === 'condo') { const n = owner('assigned_parking_spaces'); return n !== null && n >= 1 ? { quantity: n } : {}; }
+  return {};
+}
+
+/**
  * @param {PropertyProfile} profile
  * @param {{now:string, categories?:CategoryDef[], jurisdictions?:import('./data/jurisdictions.js').JurisdictionRule[], includeInvestmentIdeas?:boolean}} opts
  * @returns {Opportunity[]}
@@ -134,7 +158,9 @@ export function identifyOpportunities(profile, { now, categories = CATEGORIES, j
   }
 
   /** @type {Opportunity[]} */
-  const out = hits.map(({ cat, evidence, idea }) => {
+  const out = /** @type {Opportunity[]} */ (hits.map(({ cat, evidence, idea }) => {
+    const qf = idea ? {} : quantityFor(cat.key, profile);
+    if (qf.drop) return null;
     let basis = cat.basisDefault;
     if (idea) basis = /** @type {NonNullable<CategoryDef['evidence']['investment']>} */ (cat.evidence.investment).basis;
     else for (const o of cat.basisOverrides ?? []) {
@@ -159,6 +185,7 @@ export function identifyOpportunities(profile, { now, categories = CATEGORIES, j
     if (basis === 'setup') notes.push('Needs minor purchases or preparation first.');
     const est = evidence.filter((k) => read(profile, k)?.tag === 'estimated');
     if (est.length) notes.push(`Based on estimated values (${est.join(', ')}); confirm to improve accuracy.`);
+    if (qf.note) notes.push(qf.note);
     return {
       id: cat.key,
       categoryKey: cat.key,
@@ -174,8 +201,10 @@ export function identifyOpportunities(profile, { now, categories = CATEGORIES, j
       privacyImpact: cat.privacyImpact,
       strangersInHome: cat.strangersInHome,
       notes,
+      ...(qf.quantity !== undefined ? { quantity: qf.quantity } : {}),
+      ...(qf.needed ? { quantityNeeded: qf.needed } : {}),
     };
-  });
+  }).filter((o) => o !== null));
   return out.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
 
@@ -187,13 +216,21 @@ export function identifyOpportunities(profile, { now, categories = CATEGORIES, j
  */
 export function defaultResourceCapacity(profile) {
   const spaces = read(profile, 'parking_spaces');
+  const type = read(profile, 'property_type')?.value;
   let parking = 0;
-  if (spaces && (spaces.tag === 'owner-confirmed' || spaces.tag === 'measured') && typeof spaces.value === 'number' && Number.isFinite(spaces.value)) {
+  if (type === 'condo') {
+    // a condo owner has only the spaces assigned to the unit, as the owner confirmed (never a driveway or a guess)
+    const a = read(profile, 'assigned_parking_spaces');
+    if (a && a.tag === 'owner-confirmed' && typeof a.value === 'number' && Number.isFinite(a.value)) parking = Math.max(0, Math.floor(a.value));
+  } else if (spaces && (spaces.tag === 'owner-confirmed' || spaces.tag === 'measured') && typeof spaces.value === 'number' && Number.isFinite(spaces.value)) {
     parking = Math.max(0, Math.floor(spaces.value));
   } else if (spaces || read(profile, 'driveway_area_sqft')) {
     parking = 1;
   }
-  return { home_interior: 1, yard: 1, pool: 1, garage: 1, roof: 1, parking };
+  // a multi-family building has as many dwellings as units (apartment_unit uses `quantity` of them); a house or a condo has one
+  const u = read(profile, 'units')?.value;
+  const dwellings = type === 'multi_family' && typeof u === 'number' && Number.isFinite(u) && u >= 2 ? Math.floor(u) : 1;
+  return { home_interior: dwellings, yard: 1, pool: 1, garage: 1, roof: 1, parking };
 }
 
 /**
@@ -211,7 +248,9 @@ export function missingEvidence(profile, { categories = CATEGORIES } = {}) {
     const needs = [...r.missing].sort();
     const ownerKeys = cat.evidence?.ownerKeys ?? [];
     const generic = (/** @type {string} */ k) => ATTRIBUTE_QUESTIONS[/** @type {keyof typeof ATTRIBUTE_QUESTIONS} */ (k)] ?? `Can you tell us about ${k.replace(/_/g, ' ')}?`;
-    const question = needs.map((k) => (ownerKeys.includes(k) && cat.evidence.question ? cat.evidence.question : generic(k))).filter((q, i, a) => a.indexOf(q) === i).join(' ');
+    // the condo / building keys have their own plain-language question (a category's question would talk about a basement or a shed)
+    const own = (/** @type {string} */ k) => [...CONDO_OWNER_KEYS, ...BUILDING_OWNER_KEYS].find((x) => x.key === k)?.question;
+    const question = needs.map((k) => (own(k) ?? (ownerKeys.includes(k) && cat.evidence.question ? cat.evidence.question : generic(k)))).filter((q, i, a) => a.indexOf(q) === i).join(' ');
     out.push({ categoryKey: cat.key, label: cat.label, needs, question, evidenceClass: cat.evidence?.class ?? 'auto' });
   }
   return out.sort((a, b) => (a.categoryKey < b.categoryKey ? -1 : 1));

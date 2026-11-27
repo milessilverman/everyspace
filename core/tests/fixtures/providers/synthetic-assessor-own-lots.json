@@ -1,0 +1,181 @@
+{
+ "_fixture_note": "SYNTHETIC: invented address, units and geometry shaped like the live LA County response (record shapes checked 2026-11-27); not a real property",
+ "geometryType": "esriGeometryPolygon",
+ "spatialReference": {
+  "wkid": 4326
+ },
+ "features": [
+  {
+   "attributes": {
+    "OBJECTID": 100,
+    "AIN": "9992000000",
+    "APN": "9990-000-000",
+    "SitusHouseNo": "7720",
+    "SitusDirection": " ",
+    "SitusFraction": " ",
+    "SitusUnit": "NO 1",
+    "SitusStreet": "SAMPLE CT",
+    "SitusAddress": "7700 SAMPLE CT   UNIT   1",
+    "SitusCity": "LOS ANGELES CA",
+    "SitusZIP": "90098-0001",
+    "SitusFullAddress": "7720 SAMPLE CT NO 1 LOS ANGELES CA 90098",
+    "UseCode": "010D",
+    "UseCode_2": "01",
+    "UseType": "Residential",
+    "UseDescription": "Single",
+    "DesignType1": "0131",
+    "YearBuilt1": "1982",
+    "EffectiveYear1": "1998",
+    "Units1": 1,
+    "Bedrooms1": 2,
+    "Bathrooms1": 2,
+    "SQFTmain1": 1020,
+    "DesignType2": null,
+    "YearBuilt2": null,
+    "EffectiveYear2": null,
+    "Units2": null,
+    "Bedrooms2": null,
+    "Bathrooms2": null,
+    "SQFTmain2": null,
+    "DesignType3": null,
+    "YearBuilt3": null,
+    "EffectiveYear3": null,
+    "Units3": null,
+    "Bedrooms3": null,
+    "Bathrooms3": null,
+    "SQFTmain3": null,
+    "DesignType4": null,
+    "YearBuilt4": null,
+    "EffectiveYear4": null,
+    "Units4": null,
+    "Bedrooms4": null,
+    "Bathrooms4": null,
+    "SQFTmain4": null,
+    "DesignType5": null,
+    "YearBuilt5": null,
+    "EffectiveYear5": null,
+    "Units5": null,
+    "Bedrooms5": null,
+    "Bathrooms5": null,
+    "SQFTmain5": null,
+    "LegalDescription": "*TR=99999 LOT    1",
+    "ParcelTypeCode": 1,
+    "Shape.STArea()": 1200,
+    "CENTER_LAT": 34.05,
+    "CENTER_LON": -118.25
+   },
+   "geometry": {
+    "rings": [
+     [
+      [
+       -118.25006505953381,
+       34.05995476750497
+      ],
+      [
+       -118.25006505953381,
+       34.06004523249502
+      ],
+      [
+       -118.24993494046619,
+       34.06004523249502
+      ],
+      [
+       -118.24993494046619,
+       34.05995476750497
+      ],
+      [
+       -118.25006505953381,
+       34.05995476750497
+      ]
+     ]
+    ]
+   }
+  },
+  {
+   "attributes": {
+    "OBJECTID": 100,
+    "AIN": "9992000010",
+    "APN": "9990-000-000",
+    "SitusHouseNo": "7720",
+    "SitusDirection": " ",
+    "SitusFraction": " ",
+    "SitusUnit": "NO 2",
+    "SitusStreet": "SAMPLE CT",
+    "SitusAddress": "7700 SAMPLE CT   UNIT   1",
+    "SitusCity": "LOS ANGELES CA",
+    "SitusZIP": "90098-0001",
+    "SitusFullAddress": "7720 SAMPLE CT NO 2 LOS ANGELES CA 90098",
+    "UseCode": "010D",
+    "UseCode_2": "01",
+    "UseType": "Residential",
+    "UseDescription": "Single",
+    "DesignType1": "0131",
+    "YearBuilt1": "1982",
+    "EffectiveYear1": "1998",
+    "Units1": 1,
+    "Bedrooms1": 2,
+    "Bathrooms1": 2,
+    "SQFTmain1": 1020,
+    "DesignType2": null,
+    "YearBuilt2": null,
+    "EffectiveYear2": null,
+    "Units2": null,
+    "Bedrooms2": null,
+    "Bathrooms2": null,
+    "SQFTmain2": null,
+    "DesignType3": null,
+    "YearBuilt3": null,
+    "EffectiveYear3": null,
+    "Units3": null,
+    "Bedrooms3": null,
+    "Bathrooms3": null,
+    "SQFTmain3": null,
+    "DesignType4": null,
+    "YearBuilt4": null,
+    "EffectiveYear4": null,
+    "Units4": null,
+    "Bedrooms4": null,
+    "Bathrooms4": null,
+    "SQFTmain4": null,
+    "DesignType5": null,
+    "YearBuilt5": null,
+    "EffectiveYear5": null,
+    "Units5": null,
+    "Bedrooms5": null,
+    "Bathrooms5": null,
+    "SQFTmain5": null,
+    "LegalDescription": "*TR=99999 LOT    1",
+    "ParcelTypeCode": 1,
+    "Shape.STArea()": 1200,
+    "CENTER_LAT": 34.05,
+    "CENTER_LON": -118.25
+   },
+   "geometry": {
+    "rings": [
+     [
+      [
+       -118.25006506721209,
+       34.069954767504974
+      ],
+      [
+       -118.25006506721209,
+       34.070045232495026
+      ],
+      [
+       -118.24993493278791,
+       34.070045232495026
+      ],
+      [
+       -118.24993493278791,
+       34.069954767504974
+      ],
+      [
+       -118.25006506721209,
+       34.069954767504974
+      ]
+     ]
+    ]
+   }
+  }
+ ]
+}

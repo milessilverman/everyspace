@@ -81,7 +81,9 @@ test('condo gets only what a condo can offer', () => {
   const p = profile({ property_type: S('condo'), jurisdiction: S(LA), bedrooms: S(2), parking_spaces: S(1), yard_area_sqft: S(500), pool_present: S(true), roof_area_sqft: S(800) });
   const got = ids(identifyOpportunities(p, { now: NOW }));
   // CHANGED: ev_charging removed (owner-only).
-  assert.deepEqual(got, ['entire_home', 'parking_spot', 'private_room']);
+  // CHANGED 2026-11-27 (condos and buildings): a condo owner has no driveway or parking of their own, so `parking_spaces` no longer evidences a parking
+  // spot; only the owner-confirmed `assigned_parking_spaces` does (see tests/condo-building.test.mjs).
+  assert.deepEqual(got, ['entire_home', 'private_room']);
   for (const no of ['backyard', 'pool', 'rooftop_solar', 'adu']) assert.ok(!got.includes(no));
 });
 

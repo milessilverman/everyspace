@@ -64,3 +64,6 @@
 .lm-what, .lm-kindwrap .lm-what { font-size: 13px; min-height: 34px; padding: 3px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); max-width: 100%; }
 .lm-what:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .lm-kindwrap { display: inline-flex; align-items: center; gap: 6px; }
+/* the read-only picture for a condo owner (context-map.js): building outlines are thin, the shared lot is the one thing in the legend */
+.lm-ctx-bld { stroke: #fff; stroke-width: 1.8; stroke-linejoin: round; pointer-events: none; }
+.lm-context .lm-legend { grid-template-columns: 1fr; }

@@ -415,6 +415,27 @@ await scenario('homepage: a chosen suggestion that carries a point passes it to 
   assert.ok(Math.abs(Number(frag.get('lat')) - 41.88383) < 1e-5 && Math.abs(Number(frag.get('lng')) + 87.63195) < 1e-5, `point passed: ${page.url()}`);
 }, { mode: () => ({ status: 200, delay: 0, body: { suggestions: [] } }), photon: () => ({ status: 200, delay: 0, body: { features: CHI } }), allowConsole: /Failed to load resource/ });
 
+for (const [label, url] of PAGES) {
+  await scenario(`${label}: a unit the owner typed ("Apt 4") is not sent to the suggestions and is kept when a suggestion is chosen`, url, async (page, rec) => {
+    const a = page.locator('#address');
+    await typeSlow(page, '200 N Spring St Apt 4');
+    await page.waitForSelector('[role="option"]');
+    assert.equal(rec.suggests.at(-1).q, '200 N Spring St', 'the suggestions are asked for the address without its unit');
+    await a.press('ArrowDown');
+    await a.press('Enter');
+    assert.equal(await page.inputValue('#address'), '200 N Spring St, Los Angeles, CA'.replace('Spring St,', 'Spring St Apt 4,'), 'the unit stays in the natural place');
+    // a unit added AFTER choosing the suggestion stays too
+    await a.fill('');
+    await typeSlow(page, '200 N Spring St');
+    await page.waitForSelector('[role="option"]');
+    await a.press('ArrowDown');
+    await a.press('Enter');
+    await a.press('End');
+    await page.keyboard.type(' #7');
+    assert.equal(await page.inputValue('#address'), '200 N Spring St, Los Angeles, CA #7');
+  }, { mode: ({ q }) => ({ status: 200, delay: 0, body: { suggestions: [{ text: `${q}, Los Angeles, CA`, magicKey: 'k1' }] } }), allowConsole: /Failed to load resource/ });
+}
+
 await browser.close();
 server.close();
 console.log(`\n${passed} scenario(s) passed, ${failures.length} failure(s)`);

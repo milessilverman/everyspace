@@ -36,10 +36,17 @@
 //  Presence of a yard or lot is NOT evidence of a sport court, pasture, hives, kitchen, RV pad, film location etc.
 //  resourceUse (Everyspace modelling assumption): home_interior / yard (+pool) / parking / garage / roof, see opportunities.js.
 //
+// CONDOS AND BUILDINGS (2026-11-27, docs/condos-and-buildings.md): a condo owner owns one unit and shares the lot, yard, roof, garage and driveway with the
+// building, so a condo gets the unit itself (entire_home, private_room), an assigned parking space only when the owner confirms assigned_parking_spaces >= 1
+// (parking_spot, via `ownerConfirmed`: the category stays 'auto', but this branch counts only an owner-confirmed value), and storage only when the owner
+// confirms storage_unit_present (basement_storage). A multi-family building also gets apartment_unit (quantity = units_available_to_rent, see
+// opportunities.js) and roof options only with roof_access_present or a roof area that came from an owner-given roof type.
+// `ownerConfirmed` = like `ownerOnly` (only an owner-confirmed value counts) but allowed inside an 'auto' category for one branch.
+//
 // Conflicts are stored symmetrically here, and opportunities.js symmetrises again so a data entry added one-sided still works.
 
 /**
- * @typedef {{attr:string, equals?:any, in?:any[], notIn?:any[], min?:number, includes?:any, ownerOnly?:boolean}
+ * @typedef {{attr:string, equals?:any, in?:any[], notIn?:any[], min?:number, includes?:any, ownerOnly?:boolean, ownerConfirmed?:boolean}
  *   | {all:Rule[]} | {any:Rule[]} | {never:true}} Rule
  * @typedef {Object} EvidencePolicy
  * @property {'auto'|'owner'|'none'} class
@@ -302,8 +309,8 @@ export const CATEGORIES = [
     measure: "spot",
     sourceRef: "everyspace-demo index.html:5182",
     gatingRef: "everyspace-demo index.html:5317-5318 (HOME_ONLY/BUSINESS_ONLY), everyspace-demo index.html:17656-17664 (PROP_HAVE/allowedFor)",
-    requires: {"all":[{"attr":"property_type","in":["single_family","condo","multi_family","land","commercial"]},{"any":[{"attr":"parking_spaces"},{"attr":"driveway_area_sqft"}]}]},
-    evidence: {"class":"auto","attrs":["parking_spaces","driveway_area_sqft"]},
+    requires: {"any":[{"all":[{"attr":"property_type","in":["single_family","multi_family","land","commercial"]},{"any":[{"attr":"parking_spaces"},{"attr":"driveway_area_sqft"}]}]},{"all":[{"attr":"property_type","equals":"condo"},{"attr":"assigned_parking_spaces","min":1,"ownerConfirmed":true}]}]},
+    evidence: {"class":"auto","attrs":["parking_spaces","driveway_area_sqft","assigned_parking_spaces"]},
   },
   {
     key: "rv_parking",
@@ -392,7 +399,7 @@ export const CATEGORIES = [
     measure: "sqft",
     sourceRef: "everyspace-demo index.html:5194",
     gatingRef: "everyspace-demo index.html:5317-5318 (HOME_ONLY/BUSINESS_ONLY), everyspace-demo index.html:17656-17664 (PROP_HAVE/allowedFor)",
-    requires: {"all":[{"attr":"property_type","in":["single_family","condo","multi_family"]},{"attr":"garage_present","equals":true}]},
+    requires: {"all":[{"attr":"property_type","in":["single_family","multi_family"]},{"attr":"garage_present","equals":true}]},
     evidence: {"class":"auto","attrs":["garage_present"]},
   },
   {
@@ -428,8 +435,8 @@ export const CATEGORIES = [
     measure: "sqft",
     sourceRef: "everyspace-demo index.html:5198",
     gatingRef: "everyspace-demo index.html:5317-5318 (HOME_ONLY/BUSINESS_ONLY), everyspace-demo index.html:17656-17664 (PROP_HAVE/allowedFor)",
-    requires: {"all":[{"attr":"property_type","in":["single_family","condo","multi_family","commercial"]},{"any":[{"attr":"basement_present","equals":true,"ownerOnly":true},{"attr":"shed_present","equals":true,"ownerOnly":true}]}]},
-    evidence: {"class":"owner","ownerKeys":["basement_present","shed_present"],"question":"Do you have a basement or shed you could rent for storage?"},
+    requires: {"any":[{"all":[{"attr":"property_type","in":["single_family","multi_family","commercial"]},{"any":[{"attr":"basement_present","equals":true,"ownerOnly":true},{"attr":"shed_present","equals":true,"ownerOnly":true}]}]},{"all":[{"attr":"property_type","equals":"condo"},{"attr":"storage_unit_present","equals":true,"ownerOnly":true}]}]},
+    evidence: {"class":"owner","ownerKeys":["basement_present","shed_present","storage_unit_present"],"question":"Do you have a basement or shed you could rent for storage?"},
   },
   {
     key: "warehouse_storage",
@@ -518,8 +525,8 @@ export const CATEGORIES = [
     measure: "sqft",
     sourceRef: "everyspace-demo index.html:5212",
     gatingRef: "everyspace-demo index.html:5317-5318 (HOME_ONLY/BUSINESS_ONLY), everyspace-demo index.html:17656-17664 (PROP_HAVE/allowedFor)",
-    requires: {"all":[{"attr":"property_type","in":["single_family","multi_family","commercial"]},{"any":[{"attr":"roof_area_sqft"},{"attr":"building_footprint_sqft"}]}]},
-    evidence: {"class":"auto","attrs":["building_footprint_sqft","roof_area_sqft"]},
+    requires: {"any":[{"all":[{"attr":"property_type","in":["single_family","commercial"]},{"any":[{"attr":"roof_area_sqft"},{"attr":"building_footprint_sqft"}]}]},{"all":[{"attr":"property_type","equals":"multi_family"},{"any":[{"attr":"roof_area_sqft"},{"attr":"roof_access_present","equals":true,"ownerConfirmed":true}]}]}]},
+    evidence: {"class":"auto","attrs":["building_footprint_sqft","roof_area_sqft","roof_access_present"]},
   },
   {
     key: "battery_site",
@@ -795,7 +802,37 @@ export const ATTRIBUTE_QUESTIONS = {
   shed_present: 'Do you have a shed or storage closet?',
   waterfront_access: 'Do you have water access, such as a dock?',
   equipment_owned: 'Do you own gear you could rent out (ATV, kayak, bikes, boat, camper...)?',
+  assigned_parking_spaces: 'How many parking spaces are assigned to your unit?',
+  storage_unit_present: 'Do you have a storage unit or locker that belongs to your unit?',
+  balcony_present: 'Does your unit have a balcony or patio?',
+  hoa_allows_rentals: "Does your HOA allow you to rent out your unit or a room in it?",
+  units_available_to_rent: 'How many of the units in the building could you offer this way?',
+  laundry_room_present: 'Does the building have a laundry room?',
+  roof_access_present: 'Can you get to the roof, and is it yours to use?',
 };
+
+/**
+ * What the page asks a CONDO owner (one unit in a building). `type` says how to show the question: 'number' (whole number), 'yesno' (a yes or no),
+ * 'choice' (one of `choices`, stored as that string). The answers are owner-confirmed attributes with these keys.
+ * @type {ReadonlyArray<{key:string, question:string, type:'number'|'yesno'|'choice', choices?:string[]}>}
+ */
+export const CONDO_OWNER_KEYS = Object.freeze([
+  { key: 'assigned_parking_spaces', question: 'How many parking spaces are assigned to your unit?', type: /** @type {const} */ ('number') },
+  { key: 'storage_unit_present', question: 'Do you have a storage unit or locker that belongs to your unit?', type: /** @type {const} */ ('yesno') },
+  { key: 'balcony_present', question: 'Does your unit have a balcony or patio?', type: /** @type {const} */ ('yesno') },
+  { key: 'hoa_allows_rentals', question: 'Does your HOA allow you to rent out your unit or a room in it?', type: /** @type {const} */ ('choice'), choices: ['yes', 'no', 'unsure'] },
+].map((x) => Object.freeze(x)));
+
+/**
+ * What the page asks the owner of a whole multi-unit BUILDING (same shape as CONDO_OWNER_KEYS). `parking_spaces` is the existing key.
+ * @type {ReadonlyArray<{key:string, question:string, type:'number'|'yesno'|'choice', choices?:string[]}>}
+ */
+export const BUILDING_OWNER_KEYS = Object.freeze([
+  { key: 'units_available_to_rent', question: 'How many of the units in the building could you offer this way?', type: /** @type {const} */ ('number') },
+  { key: 'parking_spaces', question: 'How many parking spaces does the building have?', type: /** @type {const} */ ('number') },
+  { key: 'laundry_room_present', question: 'Does the building have a laundry room?', type: /** @type {const} */ ('yesno') },
+  { key: 'roof_access_present', question: 'Can you get to the roof, and is it yours to use?', type: /** @type {const} */ ('yesno') },
+].map((x) => Object.freeze(x)));
 
 /** Raw everyspace-demo index.html checklists (per category): the generic requirement lists used to seed core/data/jurisdictions.js. */
 export const CHECKLISTS = [

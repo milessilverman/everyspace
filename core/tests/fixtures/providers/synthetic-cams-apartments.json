@@ -1,0 +1,26 @@
+{
+ "_fixture_note": "SYNTHETIC: invented address, units and geometry shaped like the live LA County response (record shapes checked 2026-11-27); not a real property",
+ "spatialReference": {
+  "wkid": 4326
+ },
+ "candidates": [
+  {
+   "address": "8800 Fixture Way, Los Angeles, CA, 90097",
+   "location": {
+    "x": -118.26020000000001,
+    "y": 34.0597
+   },
+   "score": 100,
+   "attributes": {
+    "Match_addr": "8800 Fixture Way, Los Angeles, CA, 90097",
+    "StAddr": "8800 Fixture Way",
+    "StreetName": "Fixture",
+    "SufType": "Way",
+    "City": "Los Angeles",
+    "State": "CA",
+    "ZIP": "90097",
+    "Addr_type": "StreetAddress"
+   }
+  }
+ ]
+}

@@ -152,6 +152,139 @@ export function situsMatchesAddress(geocodedAddress, situs) {
   return sameStreetName(g, s);
 }
 
+// ---------------------------------------------------------------------------------------------------------------
+// Unit designators ("Apt 4", "#4", "Unit 4B", "No 18", "Ste 200", "- 4"). Added 2026-11-27 for condos and apartment buildings.
+// The unit is taken out of the address before any street matching or locator query, so it can never break either.
+// ---------------------------------------------------------------------------------------------------------------
+
+/** Designator words (upper case) that introduce a unit; the value is what the assessor would call SitusUnit once the word is removed. */
+const UNIT_WORDS = new Set(['APT', 'APARTMENT', 'UNIT', 'STE', 'SUITE', 'NO', 'NUMBER', 'NUM', 'SPC', 'SPACE', 'RM', 'ROOM']);
+const UNIT_WORD_RE = '(?:APARTMENT|APT|UNIT|SUITE|STE|NUMBER|NUM|NO|SPACE|SPC|ROOM|RM)';
+/** A unit value must contain a digit or be one or two letters ("4B", "18", "K-303", "A"); a word such as a city name is never a unit. */
+const unitValueOk = (/** @type {string} */ v) => /^[A-Z0-9][A-Z0-9-]{0,9}$/.test(v) && (/\d/.test(v) || v.length <= 2) && !/^\d{5}(-\d{4})?$/.test(v);
+
+/**
+ * Unit text as shown to a person: designator word removed, upper case, spaces collapsed ("UNIT   1F-1" -> "1F-1", "NO   101" -> "101").
+ * Null when nothing is left.
+ * @param {string|number|null|undefined} raw
+ */
+export function cleanUnit(raw) {
+  let t = String(raw ?? '').toUpperCase().replace(/[.,]/g, ' ').replace(/\s+/g, ' ').trim();
+  // strip designator prefixes (also stacked: "APT NO 4"); only when something follows, so a unit literally named "NO" stays
+  for (let i = 0; i < 3; i++) {
+    const m = new RegExp(`^(?:${UNIT_WORD_RE}|#)(?=[\\s#\\-:]|\\d|$)\\s*[#:\\-]?\\s*`).exec(t);
+    if (!m || m[0].length >= t.length) break;
+    t = t.slice(m[0].length).trim();
+  }
+  t = t.replace(/^#\s*/, '').replace(/\s*-\s*/g, '-').replace(/\s+/g, ' ').trim();
+  return t || null;
+}
+
+/**
+ * Comparison key of a unit: "NO 18" = "18" = "#18" = "Unit 18" = "018"; "4 B" = "4b" = "4-B". Letters and digits only, upper case; leading
+ * zeros of an all-digit unit are dropped. Null for an empty unit.
+ * @param {string|number|null|undefined} raw
+ */
+export function normalizeUnit(raw) {
+  const c = cleanUnit(raw);
+  if (!c) return null;
+  const k = c.replace(/[^A-Z0-9]/g, '');
+  if (!k) return null;
+  return /^\d+$/.test(k) ? String(Number(k)) : k;
+}
+
+/** Do two unit texts name the same unit? False when either is empty. @param {any} a @param {any} b */
+export function unitsMatch(a, b) {
+  const x = normalizeUnit(a), y = normalizeUnit(b);
+  return x !== null && y !== null && x === y;
+}
+
+/** Natural order of unit texts: "2" < "10" < "101" < "A" ; "1A" < "1B" < "2A". @param {any} a @param {any} b */
+export function compareUnits(a, b) {
+  const split = (/** @type {any} */ v) => (normalizeUnit(v) ?? '').match(/\d+|[A-Z]+/g) ?? [];
+  const x = split(a), y = split(b);
+  for (let i = 0; i < Math.min(x.length, y.length); i++) {
+    const nx = /^\d/.test(x[i]), ny = /^\d/.test(y[i]);
+    if (nx && ny) { const d = Number(x[i]) - Number(y[i]); if (d) return d; } else if (nx !== ny) return nx ? -1 : 1; else if (x[i] !== y[i]) return x[i] < y[i] ? -1 : 1;
+  }
+  return x.length - y.length;
+}
+
+/**
+ * Take the unit out of a typed address. A unit is a designator word ("Apt", "Unit", "Ste", "No", "Suite", "Number", "Spc", "Rm"), "#", or a
+ * standalone "-", followed by a unit value, AFTER the street (after its suffix when it has one: "100 No Name Rd" and "5 Unit Dr" have no
+ * unit); or a whole comma part such as ", Apt 4,". The rest of the address is returned unchanged ("123 Main St Apt 4, Los Angeles, CA" ->
+ * "123 Main St, Los Angeles, CA").
+ * @param {string} address
+ * @returns {{address:string, unit:string|null}}
+ */
+export function stripUnit(address) {
+  const original = String(address ?? '').trim();
+  if (!original) return { address: original, unit: null };
+  const parts = original.split(',');
+  const first = parts[0];
+  // tokens with spans in `first` ('#' is its own token, '.' separates)
+  /** @type {Array<{t:string, s:number, e:number}>} */
+  const toks = [];
+  for (const m of first.matchAll(/#|[^\s#.]+/g)) toks.push({ t: m[0].toUpperCase(), s: m.index ?? 0, e: (m.index ?? 0) + m[0].length });
+  if (toks.length >= 3 && /^\d/.test(toks[0].t)) {
+    // where the street ends: the first suffix word, as parseStreet reads it
+    const rest = toks.slice(1).map((x) => x.t);
+    const off = DIRS[rest[0] ?? ''] && rest.length >= 3 ? 1 : 0;
+    let sfx = -1;
+    for (let j = off + 1; j < rest.length; j++) if (SUFFIXES[rest[j]]) { sfx = j + 1; break; }
+    const from = sfx > 0 ? sfx + 1 : 2; // first token index a designator may take
+    for (let p = from; p < toks.length; p++) {
+      const w = toks[p].t;
+      const isWord = UNIT_WORDS.has(w), isHash = w === '#', isDash = w === '-' && sfx > 0 || w === '-' && p >= 2;
+      if (!isWord && !isHash && !isDash) continue;
+      let v = p + 1;
+      if (isWord && toks[v]?.t === '#') v++;
+      if (isWord && toks[v]?.t === '-') v++;
+      const val = toks[v]?.t;
+      if (!val || !unitValueOk(val)) continue;
+      const cut = first.slice(0, toks[p].s).trimEnd();
+      const tail = first.slice(toks[v].e).trim();
+      const line = [cut, tail].filter(Boolean).join(' ');
+      return { address: [line, ...parts.slice(1)].join(',').trim(), unit: cleanUnit(val) };
+    }
+  }
+  // a whole comma part: ", Apt 4," / ", #4" / ", Unit 4B"
+  for (let i = 1; i < parts.length; i++) {
+    const m = new RegExp(`^\\s*(?:${UNIT_WORD_RE}\\.?\\s*#?\\s*|#\\s*)([A-Za-z0-9][A-Za-z0-9-]{0,9})\\s*$`, 'i').exec(parts[i]);
+    if (m && unitValueOk(m[1].toUpperCase())) return { address: parts.filter((_, k) => k !== i).join(',').trim(), unit: cleanUnit(m[1]) };
+  }
+  return { address: original, unit: null };
+}
+
+/**
+ * Split a typed US address into its parts. The unit comes out of the street line first (see stripUnit), so it never disturbs the street name.
+ * Fields are null when absent: houseNumber (digits as typed), direction ('N'|'S'|'E'|'W'), street (upper-case name and suffix, "SPRING ST"),
+ * unit ("4B"), city (as typed), state (two letters), zip (five digits).
+ * @param {string} address
+ * @returns {{houseNumber:string|null, direction:string|null, street:string|null, unit:string|null, city:string|null, state:string|null, zip:string|null}}
+ */
+export function parseAddress(address) {
+  const { address: bare, unit } = stripUnit(address);
+  const parts = bare.split(',').map((x) => x.trim()).filter(Boolean);
+  const p = parseStreet(parts[0]);
+  let city = null, state = null, zip = null;
+  const tail = parts.slice(1);
+  const last = tail[tail.length - 1];
+  if (last) {
+    const m = /^(?:(.*?)\s+)?([A-Za-z]{2})(?:\s+(\d{5})(?:-\d{4})?)?$/.exec(last);
+    const z = /^(\d{5})(?:-\d{4})?$/.exec(last);
+    if (z) zip = z[1];
+    else if (m && (m[3] || tail.length >= 2 || m[1])) { state = m[2].toUpperCase(); zip = m[3] ?? null; if (m[1]) city = m[1]; }
+  }
+  if (!city && tail.length) {
+    const c = tail.find((x, i) => !(i === tail.length - 1 && (state || zip)) && !/^\d/.test(x) && !/^[A-Za-z]{2}(\s+\d{5}(-\d{4})?)?$/.test(x));
+    if (c) city = c;
+  }
+  if (parts.length === 1) { const m = /\b(?:([A-Za-z]{2})\s+)?(\d{5})(?:-\d{4})?\s*$/.exec(parts[0].slice(p?.num.length ?? 0)); if (m && !zip) { zip = m[2]; if (m[1] && !SUFFIXES[m[1].toUpperCase()] && !DIRS[m[1].toUpperCase()]) state = m[1].toUpperCase(); } }
+  return { houseNumber: p?.num ?? null, direction: p?.dir ?? null, street: p && p.core.length ? [...p.core, p.suffix].filter(Boolean).join(' ') : null, unit, city, state, zip };
+}
+
 /**
  * House number / street direction / street name comparison (from City Pretty addressMismatch), plus a missing-number check.
  * City, state and ZIP are not compared here.
@@ -435,9 +568,29 @@ export async function parcelAt(point, deps, opts = {}) {
 }
 
 /**
+ * Is the record a condominium unit, and why? Null when nothing in the record says so. Seen in the LA County assessor layer (checked live 2026-11-27):
+ * a "Single" residential use description (code starts "01") whose FOURTH character is "C" (010C, 012C, 01HC ...) is a unit-numbered record on a lot
+ * shared by the whole complex. Other fourth characters (D, E, G, H, V ...) are NOT read as condo by themselves: their meaning is not known. Their
+ * records are read as condos only when the assessor's own legal description names a condominium AND the record has a unit number.
+ * @param {{useCode?:string|null, useType?:string|null, useDescription?:string|null, legalDescription?:string|null, unit?:string|null}} a
+ * @returns {null|'use text'|'use code'|'legal description'}
+ */
+export function condoBasis(a) {
+  const code = String(a.useCode ?? '').toUpperCase();
+  if (/condo/i.test(`${a.useType ?? ''} ${a.useDescription ?? ''}`)) return 'use text';
+  if (/^01/.test(code) && code.length === 4 && code[3] === 'C') return 'use code';
+  if (/^01/.test(code) && String(a.unit ?? '').trim() && /\bCOND(?:O|OMINIUM)S?\b/i.test(String(a.legalDescription ?? ''))) return 'legal description';
+  return null;
+}
+
+/**
  * Port of classifyParcel (everyspace-demo index.html:8836) mapped to the PropertyProfile property types. LA use-code rules apply only
  * to services with useCodeScheme 'la-assessor'; other services are classified from the use-type text alone.
- * @param {{useCode?:string|null,useType?:string|null,useDescription?:string|null,livingAreaSqft?:number|null,units?:number|null}} a
+ * LA use codes (2026-11-27): the first two characters are the use group: 01 "Single", 02 "Two Units", 03 "Three Units (Any Combination)",
+ * 04 "Four Units (Any Combination)", 05 "Five or more apartments" (all multi_family), 07 mobile homes, 08 rooming houses, 09 mobile home parks
+ * (these three stay as before). A code ending in V is vacant land unless the record has a recorded building area (869 of 89,184 "010V" records do,
+ * unit-numbered airspace condos). Condo detection: see condoBasis.
+ * @param {{useCode?:string|null,useType?:string|null,useDescription?:string|null,livingAreaSqft?:number|null,units?:number|null,legalDescription?:string|null,unit?:string|null}} a
  * @param {{codeScheme?:string, hasSqftField?:boolean}} [opts]
  * @returns {'single_family'|'condo'|'multi_family'|'land'|'commercial'|'unknown'}
  */
@@ -448,8 +601,11 @@ export function classifyPropertyType(a, opts = {}) {
   /** @type {ReturnType<typeof classifyPropertyType>} */
   let kind = 'unknown';
   if (opts.codeScheme === 'la-assessor') {
-    if (/V$/.test(code) || /vacant/i.test(type)) kind = 'land';
-    else if (/^0[0-9]/.test(code) || /resid/i.test(type)) kind = units > 4 || /^05|apartment/i.test(code + type) ? 'multi_family' : /condo/i.test(type) || /^010[0-9]C/i.test(code) ? 'condo' : 'single_family';
+    if ((/V$/.test(code) && !(sqft > 0)) || /vacant/i.test(type)) kind = 'land';
+    else if (/^0[0-9]/.test(code) || /resid/i.test(type)) {
+      if (units > 4 || /^0[2-5]/.test(code) || /\b(?:two|three|four) units\b|apartment/i.test(type)) kind = 'multi_family';
+      else kind = condoBasis(a) ? 'condo' : 'single_family';
+    }
     else if (/^[12]/.test(code) || /commerc|industr|office|store|retail/i.test(type)) kind = 'commercial';
     else if (/^4/.test(code) || /agric|farm|ranch|pasture/i.test(type)) kind = 'land';
     if (kind === 'single_family' && sqft === 0 && opts.hasSqftField) kind = 'land'; // original rule: no building area = land
