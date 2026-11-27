@@ -66,12 +66,18 @@ export function streetsFromTiles(tiles, point, radiusM) {
   /** @type {Map<string, {props:any, kind:string, alley:boolean, parts:number[][][]}>} */
   const byId = new Map();
   let anon = 0;
+  /** @type {Array<{id:string, geometry:any}>} */ const drives = [];
   for (const { z, x, y, layer } of tiles) {
     if (!layer) continue;
     for (const f of layer.features) {
       counts.features++;
       if (f.type !== 2) { counts.notLine++; continue; }
       const c = classifySegment(f.props);
+      if (!c.keep && f.props.subtype === 'road' && f.props.class === 'service' && f.props.subclass === 'driveway') {
+        // not a street, but kept apart for core/driveway.js (a mapped driveway line is evidence of where the driveway runs)
+        const parts = f.rings.filter((l) => l.length >= 2).map((l) => l.map((p) => tilePointToLngLat(z, x, y, layer.ext, p)));
+        if (parts.length) drives.push({ id: typeof f.props.id === 'string' ? f.props.id : `drive-${drives.length}`, geometry: parts.length === 1 ? { type: 'LineString', coordinates: parts[0] } : { type: 'MultiLineString', coordinates: parts } });
+      }
       if (!c.keep) { counts.dropped[c.why] = (counts.dropped[c.why] ?? 0) + 1; continue; }
       const id = typeof f.props.id === 'string' && f.props.id ? f.props.id : `anon-${anon++}`;
       const parts = f.rings.filter((l) => l.length >= 2).map((l) => l.map((p) => tilePointToLngLat(z, x, y, layer.ext, p)));
@@ -94,7 +100,9 @@ export function streetsFromTiles(tiles, point, radiusM) {
     out.push({ name, geometry, class: String(s.props.class ?? ''), kind: s.kind, alley: s.alley, id, distanceM: Math.round(d * 10) / 10 });
   }
   out.sort((a, b) => a.distanceM - b.distanceM || (a.id < b.id ? -1 : 1));
-  return { streets: out, counts };
+  // driveway lines within the radius (pieces of one id across tiles are kept as separate lines; that does not matter here)
+  const driveways = drives.filter((d) => { const ls = d.geometry.type === 'LineString' ? [d.geometry.coordinates] : d.geometry.coordinates; return ls.some((l) => l.some((p) => { const q = proj.toXY(p); return Math.hypot(q[0], q[1]) <= radiusM; })); });
+  return { streets: out, driveways, counts };
 }
 
 /** Distance from the origin to segment ab (local metres). @param {number[]} a @param {number[]} b */
@@ -143,9 +151,9 @@ async function lookup(q, deps) {
       return fail(`could not decode tile ${z}/${x}/${y}: ${e instanceof Error ? e.message : String(e)}`, 'decode_error');
     }
   }
-  const { streets, counts } = streetsFromTiles(tiles, { lat: q.lat, lng: q.lng }, radiusM);
+  const { streets, driveways, counts } = streetsFromTiles(tiles, { lat: q.lat, lng: q.lng }, radiusM);
   return {
-    ok: /** @type {const} */ (true), streets, source: SOURCE_NAME, retrievedAt: at, attribution: ATTRIBUTION_TEXT, license: 'ODbL 1.0 (Overture Maps Foundation, transportation theme)',
+    ok: /** @type {const} */ (true), streets, driveways, source: SOURCE_NAME, retrievedAt: at, attribution: ATTRIBUTION_TEXT, license: 'ODbL 1.0 (Overture Maps Foundation, transportation theme)',
     counts: { ...counts, tiles: tiles.length, release: rel.release, requests: stats.requests, bytes: stats.bytes },
     ...(streets.length ? {} : { note: 'no mapped street within the search radius' }),
   };

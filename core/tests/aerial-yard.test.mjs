@@ -383,3 +383,89 @@ test('builder: deterministic and the estimated lot stays off unless asked', asyn
   const off = await buildPropertyProfile(Q, { registry: noParcel, fetch: async () => { throw new Error('x'); }, now: NOW, jurisdiction: J, splitYard });
   assert.equal(off.fields.front_yard_sqft.tag, 'unavailable'); assert.equal(off.geometry.parcel, null);
 });
+
+// ---------------------------------------------------------------- driveway and building kinds (2026-11-27, second pass)
+import { detectDriveway, drivewayAreaSqft } from '../driveway.js';
+import { kindFromSource } from '../building-kind.js';
+
+const GAR = rect(38, 75, 48, 95);
+/** lawn everywhere; a paved strip x 38..48 from the street to the rear garage; a paved patio behind the house that never reaches the street */
+const drivePaint = (opts = {}) => (x, y) => {
+  if (opts.strip !== false && x >= 38 && x <= 48 && y >= -20 && y < 75) return [150, 150, 150, 140];
+  if (x >= 5 && x <= 30 && y >= 68 && y <= 90) return [150, 150, 150, 140];
+  return [80, 130, 60, 200];
+};
+const dvRun = (paint, extra = {}) => {
+  const y = splitYard({ parcel: L50, buildings: [H50, GAR], streets: elm, streetName: 'ELM ST', mainBuildingIndex: 0 });
+  const im = synthImage(paint);
+  const c = classifyLot({ image: im, parcel: L50, buildings: [H50, GAR], zoneAt: yardZoneAt(y) });
+  return detectDriveway({ parcel: L50, buildings: [H50, GAR], mainBuildingIndex: 0, yard: y, image: im, classes: c.classes, ...extra });
+};
+
+test('driveway: a paved strip from the street to a rear garage is found (photo); width, length, the garage it reaches, few corners', () => {
+  const d = dvRun(drivePaint());
+  assert.equal(d.ok, true, d.reason); assert.equal(d.source, 'photo'); assert.equal(d.reachesBuildingIndex, 1, 'the garage');
+  near(d.widthFt, 10, 3, 'width'); near(d.lengthFt, 75, 5, 'length'); near(d.areaSqft, 750, 120, 'area');
+  assert.ok(d.polygon.coordinates[0].length - 1 <= 12); assert.ok(d.warnings.some((w) => /other than the house/.test(w)));
+  const xs = d.polygon.coordinates[0].map((p) => ((p[0] - LNG0) * KX) / FT);
+  assert.ok(Math.min(...xs) > 33, 'the patio behind the house is not part of it');
+  assert.deepEqual(dvRun(drivePaint()), d, 'deterministic');
+});
+
+test('driveway: a patio that never reaches the street is not a driveway; no photo and no line -> ok:false; a mapped line picks its strip', () => {
+  const none = dvRun(drivePaint({ strip: false }));
+  assert.equal(none.ok, false); assert.match(none.reason, /street side/);
+  const noPhoto = detectDriveway({ parcel: L50, buildings: [H50], yard: splitYard({ parcel: L50, buildings: [H50], streets: elm, streetName: 'ELM ST' }) });
+  assert.equal(noPhoto.ok, false);
+  const lineOnly = detectDriveway({ parcel: L50, buildings: [H50], yard: splitYard({ parcel: L50, buildings: [H50], streets: elm, streetName: 'ELM ST' }), driveways: [{ geometry: line([43, -20], [43, 75]) }] });
+  assert.equal(lineOnly.ok, false); assert.match(lineOnly.reason, /no aerial photo to show its width/); assert.ok(lineOnly.line, 'the line is handed back, no rectangle is guessed');
+  const map = dvRun(drivePaint(), { driveways: [{ geometry: line([43, -20], [43, 75]) }] });
+  assert.equal(map.source, 'map+photo'); assert.equal(map.confidence, 0.4);
+  assert.equal(detectDriveway({ parcel: L50 }).ok, false, 'no front line');
+});
+
+test('driveway area is clipped to the lot minus buildings; measureFromGeometry leaves the driveway out of the usable yard, not out of the yards', () => {
+  const dv = rect(38, -10, 48, 80); // runs off the lot at the front and under the garage
+  near(drivewayAreaSqft(dv, L50, [GAR]), 10 * 75, 25, 'on the lot, not under the garage');
+  const base = { parcel: L50, buildings: [{ polygon: H50, main: true }, { polygon: GAR }], streets: elm, streetName: 'ELM ST' };
+  const a = measureFromGeometry(base, { now: NOW }), b = measureFromGeometry({ ...base, driveway: { polygon: dv } }, { now: NOW });
+  assert.equal(a.driveway_area_sqft, null); near(b.driveway_area_sqft, 750, 25);
+  assert.deepEqual([b.front_yard_sqft, b.back_yard_sqft, b.yard_area_sqft], [a.front_yard_sqft, a.back_yard_sqft, a.yard_area_sqft]);
+  assert.ok(a.usable_yard_sqft - b.usable_yard_sqft >= 400, `usable ${a.usable_yard_sqft} -> ${b.usable_yard_sqft}`);
+});
+
+test('building kinds: only what a source says; measureFromGeometry totals and minor outlines', () => {
+  assert.deepEqual(kindFromSource({ buildingClass: 'garage' }), { kind: 'garage', source: 'Overture Maps building class', value: 'garage' });
+  assert.equal(kindFromSource({ buildingClass: 'residential' }).kind, null, 'a general class is not a kind');
+  assert.equal(kindFromSource({ kind: 'Building' }).kind, null, 'LARIAC says nothing');
+  assert.equal(kindFromSource({ osmBuilding: 'shed' }).kind, 'shed');
+  const speck = rect(2, 92, 8, 98); // 36 sq ft
+  const m = measureFromGeometry({ parcel: L50, buildings: [{ polygon: H50, main: true, kind: 'house' }, { polygon: GAR, kind: 'garage' }, { polygon: speck, kind: 'shed' }, { polygon: rect(5, 70, 15, 85), kind: 'adu' }], streets: elm, streetName: 'ELM ST' }, { now: NOW });
+  assert.deepEqual(m.buildings.map((b) => [b.kind, b.minor ?? false]), [['house', false], ['garage', false], ['shed', true], ['adu', false]]);
+  assert.equal(m.garage_present, true); near(m.garage_area_sqft, 200, 1); assert.equal(m.adu_present, true); near(m.adu_area_sqft, 150, 1); near(m.shed_area_sqft, 36, 1);
+  assert.equal(m.other_buildings_area_sqft, null);
+  const unknown = measureFromGeometry({ parcel: L50, buildings: [{ polygon: H50, main: true }, { polygon: GAR }], streets: elm, streetName: 'ELM ST' }, { now: NOW });
+  assert.deepEqual([unknown.garage_present, unknown.adu_present, unknown.garage_area_sqft], [null, null, null], 'no kind: unknown, never "no garage"');
+  assert.equal(measureFromGeometry({ parcel: L50, buildings: [{ polygon: H50, kind: 'castle' }], streets: elm, streetName: 'ELM ST' }, { now: NOW }).buildings[0].kind, null);
+});
+
+test('builder: driveway field and geometry.driveway; garage kind from the source; measureFromGeometry still reproduces the builder', async () => {
+  const foot2 = { ...baseP, id: 'f-foot', label: 'Fake outlines', kind: 'footprint', async lookup() { return { ok: true, buildings: [{ polygon: H50, areaSqft: footprintAreaSqft(H50) }, { polygon: GAR, areaSqft: footprintAreaSqft(GAR), buildingClass: 'garage' }] }; } };
+  const photo = { ...baseP, id: 'f-aerial', label: 'Fake photo', kind: 'aerial', async lookup() { const im = synthImage(drivePaint()); return { ok: true, image: im, source: 'USDA NAIP (test)', date: im.date, attribution: 'x' }; } };
+  const reg2 = (over = {}) => [recs(), foot2, street(), photo].reduce((r, p) => r.register(p), createRegistry());
+  const pj = await buildPropertyProfile(Q, { registry: reg2(), fetch: async () => { throw new Error('no fetch'); }, now: NOW, jurisdiction: J, splitYard });
+  assert.ok(pj.driveway_area_sqft > 500, `driveway ${pj.driveway_area_sqft}`); assert.equal(pj.fields.driveway_area_sqft.tag, 'estimated'); assert.match(pj.fields.driveway_area_sqft.method, /paved/);
+  const g = pj.geometry;
+  assert.deepEqual(Object.keys(g.driveway).sort(), ['areaSqft', 'confidence', 'polygon', 'source']); assert.equal(g.driveway.areaSqft, pj.driveway_area_sqft);
+  assert.deepEqual(g.buildings.map((b) => [b.main, b.kind]), [[true, 'house'], [false, 'garage']]); assert.equal(g.buildings[1].kindSource, 'Overture Maps building class');
+  assert.equal(pj.fields.garage_present.value, true); assert.equal(pj.fields.garage_present.tag, 'estimated');
+  const sp = toSourcedProfile(pj).attributes;
+  assert.equal(sp.garage_present.value, true); assert.equal(sp.adu_present, undefined, 'no source says ADU'); assert.equal(sp.driveway_area_sqft.value, pj.driveway_area_sqft);
+  assert.ok(!('parking_spaces' in pj.fields), 'no parking-space count');
+  const m = measureFromGeometry(g, { now: NOW });
+  assert.deepEqual([m.driveway_area_sqft, m.usable_yard_sqft, m.usable_front_yard_sqft, m.usable_back_yard_sqft, m.front_yard_sqft, m.back_yard_sqft, m.roof_area_sqft],
+    [pj.driveway_area_sqft, pj.usable_yard_sqft, pj.usable_front_yard_sqft, pj.usable_back_yard_sqft, pj.front_yard_sqft, pj.back_yard_sqft, pj.roof_sqft]);
+  assert.equal(m.garage_present, true);
+  const off = await buildPropertyProfile(Q, { registry: reg2(), fetch: async () => { throw new Error('no fetch'); }, now: NOW, jurisdiction: J, splitYard, detectDriveway: false });
+  assert.equal(off.fields.driveway_area_sqft.tag, 'unavailable'); assert.equal(off.geometry.driveway, null); assert.ok(off.usable_yard_sqft > pj.usable_yard_sqft);
+});

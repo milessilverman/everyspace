@@ -241,7 +241,7 @@ async function lookup(q, deps) {
     const kind = String(p.class || p.subtype || '') || 'building';
     buildings.push({
       polygon: b.polygon, areaSqft: round(b.areaSqft, 1), kind, ...(h !== null ? { heightFt: round(h * M_TO_FT, 1) } : {}), ...(fl !== null ? { floors: fl } : {}),
-      id: b.id, dataset: datasetOf(p), onParcel: Boolean(on), ...(b.partial ? { partial: true, fragments: b.fragments } : {}),
+      id: b.id, dataset: datasetOf(p), onParcel: Boolean(on), ...(typeof p.class === 'string' && p.class ? { buildingClass: p.class } : {}), ...(b.partial ? { partial: true, fragments: b.fragments } : {}),
       ...(typeof p['@name'] === 'string' && p['@name'] ? { name: p['@name'] } : {}),
     });
   }

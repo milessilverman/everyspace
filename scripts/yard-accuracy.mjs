@@ -23,6 +23,7 @@ import { centroid, polygonAreaSqft, pointInPolygon } from '../core/geometry.js';
 import { estimateLot, polygonIoU } from '../core/lot-estimate.js';
 import { naipAerial } from '../core/providers/naip-aerial.js';
 import { classifyLot } from '../core/aerial.js';
+import { detectDriveway } from '../core/driveway.js';
 
 const ADDRESSES = [
   '5847 S FIGUEROA ST LOS ANGELES CA 90003', '15739 MULHOLLAND PL LOS ANGELES CA 90049', '13300 MISSION TIERRA WAY LOS ANGELES CA 91344',
@@ -35,6 +36,8 @@ const arg = (k, d) => { const i = process.argv.indexOf(k); return i > 0 ? proces
 const CACHE = arg('--cache', null);
 const MAX = Number(arg('--max-requests', '160'));
 const JSON_OUT = arg('--json', null);
+/** --dump <dir>: per address, the photo, its classes and the driveway outline as JSON (for looking at them; keep it out of the repository). */
+const DUMP = arg('--dump', null);
 const NOW = new Date().toISOString();
 if (!CACHE) { console.error('pass --cache <dir> (answers are kept there; a second run makes no request)'); process.exit(2); }
 mkdirSync(CACHE, { recursive: true });
@@ -126,6 +129,10 @@ async function main() {
       const img = await naipAerial.lookup({ parcel: d.parcel, lat: d.pc.lat, lng: d.pc.lng }, deps);
       s3 = img.ok ? { img, cls: classifyLot({ image: img.image, parcel: d.parcel, buildings: s1.buildings, zoneAt: yardZoneAt(y) }) } : { img };
       s3.usable = usableYard({ parcel: d.parcel, buildings: s1.buildings, yard: y });
+      if (img.ok) {
+        s3.drive = detectDriveway({ parcel: d.parcel, buildings: s1.buildings, mainBuildingIndex: s1.main, yard: y, image: img.image, classes: s3.cls.classes, driveways: d.roads?.ok ? d.roads.driveways : [] });
+        if (DUMP) { mkdirSync(DUMP, { recursive: true }); const im = img.image; writeFileSync(join(DUMP, `drive${rows.length + 1}.json`), JSON.stringify({ w: im.width, h: im.height, bbox: im.bbox, r: [...im.r], g: [...im.g], b: [...im.b], cls: [...s3.cls.classes], parcel: d.parcel, buildings: s1.buildings, drive: s3.drive, lines: d.roads?.driveways ?? [] })); }
+      }
     }
     rows.push({ d, s1, s2, s3 });
   }
@@ -177,6 +184,8 @@ function report(rows) {
   });
   L.push('', 'USABLE YARD (open ground at least 10 ft wide; centreline split where available)', '', '| # | open sq ft | usable | usable front | usable back | front yard | back yard |', '|---|---|---|---|---|---|---|');
   rows.forEach((r, i) => { const u = r.s3?.usable; const y = r.s1.ok ? (r.s1.byLine.ok ? r.s1.byLine : r.s1.byPoint) : null; L.push(u?.ok ? `| ${i + 1} | ${u.openSqft} | ${u.usableSqft} | ${u.usableFrontSqft} | ${u.usableBackSqft} | ${y?.frontYardSqft ?? '-'} | ${y?.backYardSqft ?? '-'} |` : `| ${i + 1} | n/a | | | | | |`); });
+  L.push('', 'DRIVEWAY (checked by eye only; see docs/yard-accuracy.md)', '', '| # | found | source | area sq ft | width ft | length ft | reaches building | mapped lines near | warnings / reason |', '|---|---|---|---|---|---|---|---|---|');
+  rows.forEach((r, i) => { const v = r.s3?.drive; const nl = r.d.roads?.driveways?.length ?? 0; L.push(!v ? `| ${i + 1} | not run | | | | | | ${nl} | |` : v.ok ? `| ${i + 1} | yes | ${v.source} | ${v.areaSqft} | ${v.widthFt} | ${v.lengthFt} | ${v.reachesBuildingIndex} | ${nl} | ${v.warnings.join('; ')} |` : `| ${i + 1} | no | | | | | | ${nl} | ${v.reason} |`); });
   const imgReq = rows.map((r) => r.s3?.img?.counts?.requests ?? null), imgB = rows.map((r) => r.s3?.img?.counts?.bytes ?? null);
   L.push('', `imagery cost per property: requests median ${f0(med(imgReq))}, bytes median ${f0(med(imgB))}; roads: requests ${rows.map((r) => r.d.roads?.counts?.requests ?? '-').join(',')} bytes ${rows.map((r) => r.d.roads?.counts?.bytes ?? '-').join(',')}`);
   L.push(`remodeled_year: ${rows.filter((r) => r.d.rec.ok && r.d.rec.fields.remodeled_year?.value != null).length}/10 have an effective year later than the year built (built->effective: ${rows.map((r) => r.d.rec.ok ? `${r.d.rec.raw?.YearBuilt1 ?? '-'}->${r.d.rec.raw?.EffectiveYear1 ?? '-'}` : '-').join(', ')})`);

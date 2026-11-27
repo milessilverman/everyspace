@@ -66,5 +66,27 @@ Seen in the images: tree canopy and lawn are NOT told apart (the canopy rule put
 - Usable yard (`core/usable-yard.js`): open ground at least 10 ft wide (an Everyspace modelling assumption, `minWidthFt`), 0.25 m grid, morphological opening; pool excluded when given. On the ten lots: usable is 82-100% of the open ground (table printed by the script); test lot 50x100 ft: front 989, back 1,989 (the 10 ft disc cannot reach 5.4 sq ft per lot corner), the 15 ft side strip counts and the 5 ft strip does not. With the photo, `details.usable_yard.photo` gives the green/paved shares (nothing subtracted).
 - `result.geometry` and `core/measure.js` `measureFromGeometry` (same functions as the builder; a test proves identical numbers).
 
+## Driveway (2026-11-27, second pass): ON by default
+Method: `core/driveway.js`. Evidence order: (a) a mapped driveway line (Overture `service/driveway`, now kept apart by `overture-roads`) picks the paved strip it runs along ('map+photo'); (b) the photo alone: in the street's frame (along the front lot line / depth inward), each 0.3 m column's paving that runs unbroken from the front lot line into a building; adjacent columns form a strip; the widest strip >= 8 ft is the driveway ('photo'). Paving behind the house's rear line counts only where it runs into another building (a rear garage). (c) Nothing found: `{ok:false, reason}`; a line without a photo is never widened to a guessed rectangle. Outline simplified to <= 12 corners. Area = outline on the lot minus buildings (0.25 m grid), the same function in the builder and `measureFromGeometry`; the usable yard leaves it out, front/back yard totals do not change. No parking-space count.
+**Tuned on these ten, said plainly:** the first version (flood fill of all paving connected to the front) was looked at on #1 and rejected before tabulating: LA paving often wraps round the house, so it outlined the whole yard. The column version below was then run once on all ten. No mapped driveway line lay on any of the ten lots (Overture had 5 near #2, none on it), so every result is 'photo'. Checked by eye on ten lots (no ground truth):
+
+| # | found | area sq ft | width ft | by-eye verdict |
+|---|---|---|---|---|
+| 1 | yes | 652 | 33 | partly right: the paved front apron by the street, but 33 ft wide takes in the paved front yard |
+| 2 | yes | 214 | 9 | partly right: the strip to the door is real; most of the drive lies outside the parcel line (hillside) |
+| 3 | yes | 874 | 40 | right: a wide driveway with parked cars in front of the garage |
+| 4 | no | - | - | missed: tree canopy covers the street end; not a false positive |
+| 5 | yes | 490 | 23 | right: the paved area at the front corner leading to the garage, a car on it |
+| 6 | yes | 387 | 19 | partly right: the paved strip in front of the house with a car; whether it runs on along the side is hidden |
+| 7 | no | - | - | missed: dense canopy over the whole lot |
+| 8 | yes | 242 | 14 | partly right: the concrete pad at the corner by Centinela; a larger paved area on the side street was not taken |
+| 9 | yes | 200 | 15 | partly right: paving by the house at the cul-de-sac; its extent is uncertain |
+| 10 | yes | 488 | 12 | right: strip from Corbin Ave to the house with a car parked on it |
+
+Tally: right 3, partly right 5, missed 2, clear false positive on a lot with no visible driveway 0. DECISION RULE (>= 7 right or partly right, no clear false positive): MET, so detection is ON (`detectDriveway: false` switches it off). Confidence 0.3 (photo) / 0.4 (map+photo). Limits: canopy hides drives; a paved front yard looks the same as a driveway (warned when wider than 26 ft); shared driveways and drives mostly off the parcel are cut at the lot line.
+
+## Building kinds
+`core/building-kind.js`: the main building is 'house' (product rule); others get a kind only from the data (Overture building `class`, OSM `building` tag: garage, shed, carport, house); LARIAC outlines say nothing, so in LA County they stay `null`. `fields.garage_present` is `estimated` only when a source maps a garage; `adu_present` stays unavailable (no source states it). `measureFromGeometry` takes `kind` on each building and returns per-building `{index, kind, areaSqft, minor}` (minor under 100 sq ft) and kind totals.
+
 ## Limits and what would make it better
 Image recognition today gives an owner: how much of the open ground is green vs paved/bare, at 60 cm, from a 2024 photo, unvalidated. It does not give: trees vs lawn, pools reliably, fences, slope, sheds missing from outlines. Better: sharper licensed imagery (<= 15 cm county orthophotos or a paid source) or a vision model on the lot crop; both need the owner's approval (licence and per-lookup cost).
