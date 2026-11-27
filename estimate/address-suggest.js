@@ -17,11 +17,16 @@ export const MAX_ITEMS = 6;
 
 /** Query string with %20 for spaces (ArcGIS-safe). */
 const qs = (params) => new URLSearchParams(params).toString().replace(/\+/g, '%20');
+const US_STATES = new Set('AL AK AZ AR CA CO CT DE DC FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY'.split(' '));
+/** The US state the typed text ends with (", IL" or ", IL 60602"), or null. */
+const typedState = (t) => { const m = /,\s*([A-Za-z]{2})\b(?:\s+\d{5}(?:-\d{4})?)?\s*$/.exec(String(t).trim()); const st = m?.[1].toUpperCase(); return st && US_STATES.has(st) ? st : null; };
 const COUNTY_SUGGEST = 'https://public.gis.lacounty.gov/public/rest/services/CAMS_Locator/GeocodeServer/suggest';
 
 /** Los Angeles County's public address service (the CAMS locator `suggest` call; CORS verified for the site origin). */
 export const countySource = {
   id: 'la-county',
+  // The county service only knows Los Angeles County: when the typed text names another state (", IL", "Chicago, IL 60602") it is not asked.
+  appliesTo: (text) => { const st = typedState(text); return !st || st === 'CA'; },
   async suggest(text, signal) {
     const res = await fetch(`${COUNTY_SUGGEST}?${qs({ text: text.slice(0, 200), maxSuggestions: String(MAX_ITEMS), f: 'json' })}`, { signal, headers: { Accept: 'application/json' } });
     if (!res.ok) return [];
@@ -57,10 +62,41 @@ function loadProviderSources() {
   return providerSources;
 }
 
-/** Normalise any source answer to a list of strings. */
+/** Suggestion text -> its coordinates, for sources that return them (Photon). Session memory only. */
+const located = new Map();
+/** The suggestion the owner last chose, with its coordinates (null when it had none, or after the owner types again). */
+let picked = null;
+/**
+ * Coordinates of the chosen suggestion, if `text` is exactly that suggestion; otherwise null. The lookup uses them to skip geocoding.
+ * @param {string} text
+ * @returns {{text:string, lat:number, lng:number, precision?:string, source?:string}|null}
+ */
+export function getPickedLocation(text) {
+  return picked && typeof text === 'string' && picked.text === text.trim() ? { ...picked } : null;
+}
+
+/**
+ * Remember a location for an address that arrived already chosen (the homepage passes the chosen suggestion's coordinates to
+ * the estimator in the URL fragment so the lookup does not geocode it a second time). Ignored unless the numbers are valid.
+ * @param {{text:string, lat:number, lng:number, precision?:string, source?:string}} p
+ */
+export function setPickedLocation(p) {
+  const lat = Number(p?.lat), lng = Number(p?.lng), text = typeof p?.text === 'string' ? p.text.trim() : '';
+  if (!text || !Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return false;
+  picked = { text, lat, lng, ...(typeof p.precision === 'string' && p.precision ? { precision: p.precision.slice(0, 40) } : {}), ...(typeof p.source === 'string' && p.source ? { source: p.source.slice(0, 60) } : {}) };
+  return true;
+}
+
+/** Normalise any source answer to a list of strings (remembering the coordinates a suggestion carries). */
 function texts(got) {
   const arr = Array.isArray(got) ? got : Array.isArray(got?.suggestions) ? got.suggestions : [];
-  return arr.map((x) => (typeof x === 'string' ? x : x?.text)).filter((t) => typeof t === 'string' && t.trim()).map((t) => t.slice(0, 200));
+  return arr.map((x) => {
+    const t = typeof x === 'string' ? x : x?.text;
+    if (typeof t !== 'string' || !t.trim()) return null;
+    const text = t.slice(0, 200);
+    if (x && typeof x === 'object' && Number.isFinite(x.lat) && Number.isFinite(x.lng)) located.set(text, { text, lat: x.lat, lng: x.lng, ...(typeof x.precision === 'string' ? { precision: x.precision } : {}), ...(typeof x.source === 'string' ? { source: x.source } : {}) });
+    return text;
+  }).filter((t) => t !== null);
 }
 
 /** Session cache, shared by every field on the page: typed text (normalised) -> suggestions. */
@@ -144,6 +180,7 @@ export function attachAddressSuggest(input, opts = {}) {
     const t = items[i];
     if (typeof t !== 'string') return;
     input.value = t; // programmatic: fires no `input` event, so no new request and no submit
+    picked = located.get(t) ?? null; // a source that returned coordinates lets the lookup skip geocoding
     cancel(); close(); live.textContent = '';
   };
   const open = (found, typed) => {
@@ -165,7 +202,7 @@ export function attachAddressSuggest(input, opts = {}) {
   };
 
   input.addEventListener('input', () => {
-    cancel();
+    cancel(); picked = null;
     const text = input.value.trim();
     if (text.length < minChars) { close(); return; }
     const hit = cache.get(keyOf(text));

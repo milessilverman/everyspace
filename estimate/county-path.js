@@ -9,14 +9,20 @@
 // Overpass service, which is often slow: one attempt per mirror, a hard cap of EXTRAS_CAP_MS, and nothing is shown when
 // they do not arrive. Nothing here stores anything outside memory.
 //
+// Everywhere else (an address the county locator does not know, a typed state other than CA, or a suggestion chosen with coordinates) the
+// "nationwide path" runs through the same assembler: county from the map location (FCC, TIGERweb), building outline from Overture Maps,
+// roof / floors / yard derived from it, and the lot size from the county's own parcel service if it answers (tried with a short timeout,
+// in parallel; when it does not answer the lot-size line simply stays an empty input). The older path below is still the way an
+// address is located when nothing better can place it.
+//
 // runCountyPath -> {kind:'fallback', why} | {kind:'confirm', matchedAddress, reason}
 //                | {kind:'ok', profile, pending:[{keys, promise}], summary}
 // runOlderPath  -> {kind:'ok'|'none', profile, pending} | {kind:'confirm', matchedAddress, profile} | {kind:'candidates', candidates, profile}
 // Each pending promise resolves to {profile} (a fuller looked-up profile) or {attrs} (extra attributes) or null; it never rejects.
 import { buildPropertyProfile, toSourcedProfile } from '../core/property-profile.js';
-import { createBrowserRegistry, browserSplitYard } from '../core/providers/browser.js';
+import { createBrowserRegistry, browserSplitYard, setSuggestionBias } from '../core/providers/browser.js';
 import { splitYard } from '../core/yard.js';
-import { addressMismatch, overpassNear, poolNear, transitNear, buildingsNear, resolveAddress, BROWSER_GEOCODERS, CONFIDENCE } from '../core/parcel.js';
+import { addressMismatch, overpassNear, poolNear, transitNear, buildingsNear, resolveAddress, geocode, BROWSER_GEOCODERS, CONFIDENCE } from '../core/parcel.js';
 import { setAttribute, applyOwnerCorrection, createProfile } from '../core/profile.js';
 import { sourced } from '../core/provenance.js';
 import { yardAreaSqft, distanceM, pointInPolygon } from '../core/geometry.js';
@@ -36,7 +42,15 @@ export const BUILDING_KEYS = ['floors', 'roof_area_sqft', 'building_footprint_sq
 /** Attributes that come from the optional map extras. */
 export const EXTRA_KEYS = ['pool_present', 'transit_distance_m'];
 
+/** Nationwide path: facts that come with the building outline (first group), and those that wait for the parcel (second group). */
+export const NATIONAL_BUILDING_KEYS = ['floors', 'roof_area_sqft', 'building_footprint_sqft'];
+export const NATIONAL_LOT_KEYS = ['lot_area_sqft', 'front_yard_sqft', 'back_yard_sqft', 'side_yard_sqft', 'yard_area_sqft'];
+/** The parcel part is dropped silently if it has not arrived this long after the screen (a county service that never answers). */
+export const LOT_MAX_MS = 10000;
+
+const US_STATES = new Set('AL AK AZ AR CA CO CT DE DC FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY'.split(' '));
 const COUNTY_SOURCE = "Los Angeles County's public services";
+const NATIONAL_SOURCE = "public map services (OpenStreetMap, Overture Maps and the county's own parcel data)";
 const OSM_NAME = 'OpenStreetMap contributors via Overpass API';
 const title = (s) => String(s ?? '').toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase());
 const cityOf = (addr) => { const p = String(addr ?? '').split(',').map((x) => x.trim()); return p.length >= 3 ? p[1] : null; };
@@ -193,7 +207,8 @@ function countyProfile(pj, now) {
   strip('place_id'); // only a Google Places key could fill it; it is not shown
   const city = cityOf(pj.address);
   const jur = profile.attributes.jurisdiction;
-  if (city && jur?.value) profile = setAttribute(profile, 'jurisdiction', sourced({ ...jur.value, country: 'US', city: title(city) }, { tag: 'measured', source: jur.source, confidence: jur.confidence, retrievedAt: jur.retrievedAt, method: 'parcel in the LA County assessor layer; city from the county locator' }));
+  if (city && jur?.value) profile = setAttribute(profile, 'jurisdiction', sourced({ ...jur.value, country: 'US', city: title(city) }, { tag: 'measured', source: jur.source, confidence: jur.confidence, retrievedAt: jur.retrievedAt,
+    method: jur.value.countyFips === '06037' ? 'parcel in the LA County assessor layer; city from the county locator' : 'county of the map location; city from the address' }));
   const boundary = pj.details?.parcel_boundary;
   const buildings = pj.details?.buildings ?? [];
   const lot = profile.attributes.lot_area_sqft;
@@ -230,14 +245,23 @@ export async function runCountyPath(typed, ctx) {
 
   stage('address');
   let query = typed;
+  /** The nationwide path (see the header); null when it cannot place the address, so the caller falls back as before. */
+  const nationwide = (how) => runNationwide(typed, ctx, { how, f, deps, stopAll, stage, timeoutMs, mainLeft, giveUp });
+  if (!ctx.confirmedAddress && ctx.picked && Number.isFinite(ctx.picked.lat) && Number.isFinite(ctx.picked.lng)) return (await nationwide({ picked: ctx.picked })) ?? giveUp('the suggestion could not be used');
+  const typedSt = typedPlace(typed).state;
+  if (!ctx.confirmedAddress && typedSt && typedSt !== 'CA' && US_STATES.has(typedSt)) return (await nationwide({ geocode: true })) ?? giveUp(`the address says ${typedSt}, outside Los Angeles County`);
   if (ctx.confirmedAddress) query = ctx.confirmedAddress;
   else {
     const loc = registry.get('la-cams-address');
     if (!loc) return giveUp('no county locator');
     const r = await within(loc.resolve(typed, deps), mainLeft(), { ok: false, code: 'timeout', reason: 'timeout' });
-    if (!r.ok) return giveUp(`the county address locator ${r.code === 'no_match' ? 'found no match' : 'could not answer'} (${r.reason})`);
+    if (!r.ok) {
+      // not in the county's address list: a place elsewhere in California (or an address without a state) may still be located by OpenStreetMap
+      const elsewhere = r.code === 'no_match' && (!typedSt || US_STATES.has(typedSt)) ? await nationwide({ geocode: true, onlyOutsideLA: true }) : null;
+      return elsewhere ?? giveUp(`the county address locator ${r.code === 'no_match' ? 'found no match' : 'could not answer'} (${r.reason})`);
+    }
     const out = outsideCounty(typed, r);
-    if (out) return giveUp(out);
+    if (out) return ((!typedSt || US_STATES.has(typedSt)) ? await nationwide({ geocode: true, onlyOutsideLA: true }) : null) ?? giveUp(out);
     const mm = addressMismatch(typed, r.address);
     if (mm || r.note) { stopAll.abort(); return { kind: 'confirm', matchedAddress: r.address, reason: mm ?? r.note }; }
   }
@@ -271,6 +295,61 @@ export async function runCountyPath(typed, ctx) {
   return {
     kind: 'ok', profile, summary: `used ${COUNTY_SOURCE}`,
     pending: [{ keys: buildingKeys, part: 'buildings', promise: buildingsDone }, { keys: EXTRA_KEYS, part: 'extras', promise: extrasDone }],
+  };
+}
+
+/**
+ * The nationwide path: one assembler run (core/property-profile.js) whose partial results feed the page group by group.
+ * First screen: as soon as the address is located and the county is known (a few hundred ms). Then the building outline group (floors, roof,
+ * footprint) and, last, the parcel group (lot size and the yard split). Returns null when the address cannot be located or is in Los Angeles
+ * County (the classic path above serves that), so the caller falls back as before.
+ * @param {string} typed @param {any} ctx @param {any} env
+ */
+async function runNationwide(typed, ctx, env) {
+  const { how, f, stopAll, stage, timeoutMs, mainLeft } = env;
+  /** @type {any} */ let query;
+  if (how.picked) {
+    // a suggestion the owner chose already carries its point: no geocoder is asked
+    query = { address: how.picked.text, lat: how.picked.lat, lng: how.picked.lng, pointPrecision: how.picked.precision ?? 'rooftop', pointSource: 'Photon address search (OpenStreetMap contributors)', pointMethod: 'coordinates of the address suggestion you chose' };
+  } else {
+    const prev = ctx.nominatimLimiter?.lastAt ?? null;
+    const g = await within(geocode(typed, { fetch: f, now: ctx.now, geocoders: BROWSER_GEOCODERS, nominatimLimiter: ctx.nominatimLimiter, timeoutMs }), mainLeft(), { ok: false, reason: 'timeout' });
+    if (!g.ok || g.mismatch) return null; // a different place or no answer: the older path asks the owner or tries again
+    if (how.onlyOutsideLA && (!g.jurisdiction?.county || /los angeles/i.test(g.jurisdiction.county))) {
+      if (ctx.nominatimLimiter) ctx.nominatimLimiter.lastAt = prev; // the older path repeats this very request; it is answered from memory, so it need not wait a second
+      return null;
+    }
+    query = { address: g.matchedAddress, lat: g.lat, lng: g.lng, pointPrecision: /^\d/.test(g.matchedAddress) ? 'rooftop' : 'street', pointSource: 'OpenStreetMap Nominatim', pointMethod: 'geocoded from the typed address' };
+  }
+  const point = { lat: query.lat, lng: query.lng };
+  setSuggestionBias(point);
+  stage('address');
+  // the optional map extras start now, in parallel with everything else (capped; nothing is shown when they do not arrive)
+  const osmP = overpassCapped(point, { buildingRadiusM: 60 }, { fetch: ctx.fetch, now: ctx.now }, { capMs: ctx.extrasCapMs ?? EXTRAS_CAP_MS }).catch(() => ({ ok: false }));
+  const gate = () => { let ok; const p = new Promise((r) => { ok = r; }); return [p, ok]; };
+  const [firstP, onFirst] = gate(), [buildingsP, onBuildings] = gate(), [finalP, onFinal] = gate();
+  const registry = createBrowserRegistry({ tryUnverifiedParcelServices: true });
+  const build = buildPropertyProfile(query, { registry, fetch: f, now: ctx.now, keys: {}, splitYard: browserSplitYard(splitYard), timeoutMs, countyCache: ctx.countyCache ?? new Map(),
+    onPartial: (r, { stage: st }) => {
+      if (st === 'address') stage('records'); else if (st === 'records') stage('buildings');
+      onFirst(r);
+      if (st === 'footprints' || st === 'final') onBuildings(r);
+      if (st === 'final') onFinal(r);
+    } });
+  build.then((r) => { onFirst(r); onBuildings(r); onFinal(r); }, () => { onFirst(null); onBuildings(null); onFinal(null); });
+  const first = await within(firstP, mainLeft(), null);
+  if (!first || !first.fields?.address || first.fields.address.value === null) { stopAll.abort(); return null; }
+  const profile = countyProfile(first, ctx.now);
+  if (first.details?.county?.countyFips === '06037' && !how.picked) { stopAll.abort(); return null; } // Los Angeles County: the classic path has the richer records
+  const unfilled = (keys) => keys.filter((k) => !(profile.attributes[k] && profile.attributes[k].value !== null));
+  const asProfile = (pj) => (pj ? { profile: countyProfile(pj, ctx.now) } : null);
+  const buildingsDone = within(buildingsP.then(asProfile), ctx.buildingsMs ?? BUILDINGS_MAX_MS, null);
+  const lotDone = within(finalP.then(asProfile), ctx.lotMs ?? LOT_MAX_MS, null).then((v) => { if (!v) stopAll.abort(); return v; });
+  const extrasDone = Promise.all([osmP, within(finalP, ctx.lotMs ?? LOT_MAX_MS, null)])
+    .then(async ([osm, pj]) => (osm.ok ? { attrs: await poolAndTransit(osm, point, pj?.details?.parcel_boundary ?? null, { fetch: ctx.fetch, now: ctx.now }) } : null)).catch(() => null);
+  return {
+    kind: 'ok', profile, summary: `used ${NATIONAL_SOURCE}`,
+    pending: [{ keys: unfilled(NATIONAL_BUILDING_KEYS), part: 'buildings', promise: buildingsDone }, { keys: unfilled(NATIONAL_LOT_KEYS), part: 'lot', promise: lotDone }, { keys: EXTRA_KEYS, part: 'extras', promise: extrasDone }],
   };
 }
 

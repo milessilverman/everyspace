@@ -5,7 +5,7 @@
 // The property screen appears as soon as the address and the parcel records are in; building-derived values and the
 // optional map extras fill in afterwards without moving focus or replacing anything the owner typed.
 import { runCountyPath, runOlderPath, sessionFetch, mergeProfile } from './county-path.js';
-import { attachAddressSuggest } from './address-suggest.js';
+import { attachAddressSuggest, getPickedLocation, setPickedLocation } from './address-suggest.js';
 import { createProfile } from '../core/profile.js';
 import { confidenceLabel } from '../core/provenance.js';
 import { identifyOpportunities, missingEvidence, defaultResourceCapacity } from '../core/opportunities.js';
@@ -209,7 +209,7 @@ async function lookup(extra = {}) {
   const stayOld = Boolean(extra.parcelApn) || (extra.confirmMatchedAddress && S.path === 'fallback');
   if (!stayOld) {
     try {
-      const c = await runCountyPath(S.address, { fetch: lookupFetch, now, onStage, ...(extra.confirmMatchedAddress && S.countyMatched ? { confirmedAddress: S.countyMatched } : {}) });
+      const c = await runCountyPath(S.address, { fetch: lookupFetch, now, onStage, nominatimLimiter: S.limiter, ...(S.picked ? { picked: S.picked } : {}), ...(extra.confirmMatchedAddress && S.countyMatched ? { confirmedAddress: S.countyMatched } : {}) });
       if (c.kind === 'ok') { out = c; S.path = 'county'; }
       else if (c.kind === 'confirm') { out = c; S.path = 'county'; S.countyMatched = c.matchedAddress; }
     } catch { /* the older path below answers instead */ }
@@ -276,7 +276,7 @@ function follow(run, pending) {
 function resetSession() {
   S.result = null; S.confirmed = false; S.base = null; S.extra = {}; S.owner = {}; S.profile = null; S.loading = new Set(); S.notFound = false; S.hints = {};
   S.overrides = {}; S.editInput = null; S.phase = 'address'; S.error = ''; S.dirty = false; S.discardOk = false;
-  S.path = ''; S.countyMatched = '';
+  S.path = ''; S.countyMatched = ''; S.picked = null;
   progress.done();
 }
 
@@ -297,7 +297,7 @@ els.form.addEventListener('submit', (ev) => {
   if (S.busy) { announce('Still finding your property. One moment.'); return; }
   if (!q) { announce('Please type an address first.', true); els.input.focus(); return; }
   if (!canRestart()) return;
-  resetSession(); S.address = q; S.run++; renderAll();
+  resetSession(); S.address = q; S.picked = getPickedLocation(q); S.run++; renderAll();
   lookup();
 });
 $('#manual-start').addEventListener('click', () => {
@@ -931,12 +931,19 @@ attachAddressSuggest(els.input);
 // the query (?address=...). Start the lookup once, as if the button had been pressed, then clear it from the address bar.
 (function startFromUrl() {
   let addr = '';
+  /** @type {URLSearchParams|null} */
+  let frag = null;
   try {
-    addr = new URLSearchParams(location.hash.replace(/^#/, '')).get('address') || new URLSearchParams(location.search).get('address') || '';
+    frag = new URLSearchParams(location.hash.replace(/^#/, ''));
+    addr = frag.get('address') || new URLSearchParams(location.search).get('address') || '';
   } catch { addr = ''; }
   addr = addr.trim().slice(0, MAX_ADDRESS);
   if (!addr) return;
   try { history.replaceState(null, '', location.pathname); } catch { /* ignore */ }
   els.input.value = addr;
+  // A suggestion chosen on the homepage carries its coordinates in the fragment, so this lookup need not find the address again.
+  if (frag && frag.get('lat') !== null && frag.get('lng') !== null) {
+    setPickedLocation({ text: addr, lat: Number(frag.get('lat')), lng: Number(frag.get('lng')), precision: frag.get('precision') ?? undefined, source: frag.get('source') ?? undefined });
+  }
   els.form.requestSubmit();
 })();

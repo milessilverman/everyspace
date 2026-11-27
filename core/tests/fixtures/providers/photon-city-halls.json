@@ -1,0 +1,185 @@
+{
+ "_fixture_note": "recorded 2026-11-27 from the live Photon public instance (photon.komoot.io, 1 request each) for two PUBLIC buildings: Los Angeles City Hall (200 N Spring St) and Chicago City Hall (121 N LaSalle St). The body of each answer is exactly what the service returned (limit=8, lang=en); url is what was asked. Photon data is OpenStreetMap, ODbL.",
+ "la": {
+  "url": "https://photon.komoot.io/api/?q=200%20N%20Spring%20St%2C%20Los%20Angeles&limit=8&lang=en",
+  "status": 200,
+  "body": {
+   "type": "FeatureCollection",
+   "features": [
+    {
+     "type": "Feature",
+     "properties": {
+      "osm_type": "R",
+      "osm_id": 6333145,
+      "osm_key": "amenity",
+      "osm_value": "townhall",
+      "type": "house",
+      "housenumber": "200",
+      "name": "Los Angeles City Hall",
+      "street": "North Spring Street",
+      "locality": "Civic Center",
+      "district": "Downtown",
+      "city": "Los Angeles",
+      "county": "Los Angeles",
+      "state": "California",
+      "country": "United States",
+      "postcode": "90012",
+      "countrycode": "US",
+      "extent": [
+       -118.24353,
+       34.0543713,
+       -118.2420052,
+       34.0530141
+      ]
+     },
+     "geometry": {
+      "type": "Point",
+      "coordinates": [
+       -118.2429212,
+       34.0536961
+      ]
+     }
+    },
+    {
+     "type": "Feature",
+     "properties": {
+      "osm_type": "N",
+      "osm_id": 6818222557,
+      "osm_key": "amenity",
+      "osm_value": "restaurant",
+      "type": "house",
+      "housenumber": "200",
+      "name": "Homeboy Diner",
+      "street": "North Spring Street",
+      "locality": "Civic Center",
+      "district": "Downtown",
+      "city": "Los Angeles",
+      "county": "Los Angeles",
+      "state": "California",
+      "country": "United States",
+      "postcode": "90012",
+      "countrycode": "US"
+     },
+     "geometry": {
+      "type": "Point",
+      "coordinates": [
+       -118.2430291,
+       34.0536737
+      ]
+     }
+    }
+   ]
+  }
+ },
+ "chicago": {
+  "url": "https://photon.komoot.io/api/?q=121%20N%20LaSalle%20St%2C%20Chicago&limit=8&lang=en",
+  "status": 200,
+  "body": {
+   "type": "FeatureCollection",
+   "features": [
+    {
+     "type": "Feature",
+     "properties": {
+      "osm_type": "W",
+      "osm_id": 108240964,
+      "osm_key": "amenity",
+      "osm_value": "townhall",
+      "type": "house",
+      "housenumber": "121",
+      "name": "Chicago City Hall",
+      "street": "North LaSalle Street",
+      "locality": "Financial District",
+      "district": "The Loop",
+      "city": "Chicago",
+      "county": "Cook County",
+      "state": "Illinois",
+      "country": "United States",
+      "postcode": "60602",
+      "countrycode": "US",
+      "extent": [
+       -87.6322392,
+       41.8843508,
+       -87.6316661,
+       41.8833391
+      ]
+     },
+     "geometry": {
+      "type": "Point",
+      "coordinates": [
+       -87.6319503,
+       41.8838293
+      ]
+     }
+    },
+    {
+     "type": "Feature",
+     "properties": {
+      "osm_type": "W",
+      "osm_id": 210679376,
+      "osm_key": "building",
+      "osm_value": "apartments",
+      "type": "house",
+      "housenumber": "1211",
+      "name": "LaSalle Towers Apartments",
+      "street": "North LaSalle Drive",
+      "locality": "Gold Coast",
+      "district": "Near North Side",
+      "city": "Chicago",
+      "county": "Cook County",
+      "state": "Illinois",
+      "country": "United States",
+      "postcode": "60610",
+      "countrycode": "US",
+      "extent": [
+       -87.6327435,
+       41.9045296,
+       -87.632567,
+       41.9042748
+      ]
+     },
+     "geometry": {
+      "type": "Point",
+      "coordinates": [
+       -87.6326552,
+       41.9044022
+      ]
+     }
+    },
+    {
+     "type": "Feature",
+     "properties": {
+      "osm_type": "W",
+      "osm_id": 210680690,
+      "osm_key": "building",
+      "osm_value": "apartments",
+      "type": "house",
+      "housenumber": "1212",
+      "name": "1212 North Lasalle",
+      "street": "North LaSalle Drive",
+      "locality": "Gold Coast",
+      "district": "Near North Side",
+      "city": "Chicago",
+      "county": "Cook County",
+      "state": "Illinois",
+      "country": "United States",
+      "postcode": "60610",
+      "countrycode": "US",
+      "extent": [
+       -87.6343447,
+       41.9044114,
+       -87.6331366,
+       41.9039514
+      ]
+     },
+     "geometry": {
+      "type": "Point",
+      "coordinates": [
+       -87.633739,
+       41.9042539
+      ]
+     }
+    }
+   ]
+  }
+ }
+}

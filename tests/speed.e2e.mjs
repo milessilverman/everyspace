@@ -23,7 +23,14 @@ const SHOTS = '/tmp/claude-0/-home-user/bbdf9db1-6a70-50d8-8c4a-2fe889e65e9c/scr
 fs.mkdirSync(SHOTS, { recursive: true });
 const pfx = (n) => JSON.parse(fs.readFileSync(path.join(ROOT, 'core/tests/fixtures/providers', n), 'utf8'));
 const fx = (n) => JSON.parse(fs.readFileSync(path.join(ROOT, 'core/tests/fixtures/parcel', n), 'utf8'));
+import { overtureServer, OVERTURE_REAL } from '../core/tests/fixtures/providers/overture-mock.mjs';
 const SFR = '4321 Example Ave, Los Angeles, CA 90099';
+/** Chicago City Hall (a public building) typed with its state: outside Los Angeles County, so the nationwide path runs. */
+const CHICAGO = '121 N LaSalle St, Chicago, IL 60602';
+const chicagoOv = overtureServer('chicago');
+/** Synthetic Nominatim answer for Chicago City Hall (coordinates are the recorded Overture test point). */
+const nominatimChicago = [{ _fixture_note: 'synthetic, shaped like the recorded response; not a recorded response', place_id: 2, osm_type: 'way', osm_id: 2, lat: String(OVERTURE_REAL.chicago.point.lat), lon: String(OVERTURE_REAL.chicago.point.lng), category: 'building', type: 'civic',
+  display_name: '121, North LaSalle Street, Chicago, Cook County, Illinois, 60602, United States', address: { house_number: '121', road: 'North LaSalle Street', city: 'Chicago', county: 'Cook County', state: 'Illinois', 'ISO3166-2-lvl4': 'US-IL', postcode: '60602', country_code: 'us' } }];
 const VENICE = '99999 Venice Blvd, Los Angeles, CA 90034';
 const DELAY = 400;
 const BUILDING_ROWS = ['floors', 'roof_area_sqft', 'building_footprint_sqft', 'front_yard_sqft', 'back_yard_sqft', 'side_yard_sqft', 'yard_area_sqft'];
@@ -32,10 +39,19 @@ const OTHER_SOURCES = /(^|\.)(geo\.fcc\.gov|tigerweb\.geo\.census\.gov|stac\.ove
 
 let world = 'county';
 let slowOutlines = 0; // extra delay for the building outlines in one scenario
-function answer(urlStr) {
+function answer(urlStr, range = null) {
   const u = new URL(urlStr);
   const dec = decodeURIComponent(urlStr);
   if (u.hostname.includes('overpass')) return 'never';
+  if (world === 'chicago') {
+    if (u.hostname === 'nominatim.openstreetmap.org') return { status: 200, body: nominatimChicago };
+    if (u.hostname === 'geo.fcc.gov') return { status: 200, body: pfx('fcc-county-chicago-city-hall.json') };
+    if (u.hostname === 'gis.cookcountyil.gov') return 'never'; // the county's parcel service never answers
+    const o = chicagoOv.answer(urlStr, range);
+    if (o) return { status: o.status, raw: Buffer.from(typeof o.body === 'string' ? o.body : o.body), type: o.type };
+    if (u.hostname === 'photon.komoot.io') return { status: 200, body: { features: [] } };
+    return null;
+  }
   if (OTHER_SOURCES.test(u.hostname)) return { status: 404, body: {} };
   if (u.hostname === 'public.gis.lacounty.gov') {
     if (dec.includes('CAMS_Locator') && dec.includes('/suggest')) return { status: 200, body: pfx('la-cams-suggest.json') };
@@ -85,12 +101,12 @@ async function scenario(name, fn, { viewport = { width: 1280, height: 900 }, red
   await ctx.route('**/*', (route) => {
     const url = route.request().url();
     if (url.startsWith(ORIGIN) || url.startsWith('data:')) return route.continue();
-    const a = answer(url);
+    const a = answer(url, route.request().headers().range ?? null);
     if (!a) { rec.external.push(url); allExternal.push(url); return route.abort('failed'); }
     rec.mocked.push(url);
     if (a === 'never') { rec.pending.push(url); return undefined; } // Overpass: never answers
     const extraDelay = url.includes('LARIAC') ? slowOutlines : 0;
-    return new Promise((r) => setTimeout(r, DELAY + extraDelay)).then(() => route.fulfill({ status: a.status, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(a.body) }).catch(() => {}));
+    return new Promise((r) => setTimeout(r, DELAY + extraDelay)).then(() => route.fulfill({ status: a.status, contentType: a.type ?? 'application/json', headers: { 'access-control-allow-origin': '*', 'access-control-expose-headers': 'content-range' }, body: a.raw ?? JSON.stringify(a.body) }).catch(() => {}));
   });
   try {
     await fn(page, rec);
@@ -164,6 +180,34 @@ await scenario('county path: screen < 2.5 s, building lines < 4 s, settled < 8 s
   checkProgress(pv, 'county');
   assert.ok(pv.some((x) => /^Measuring buildings and yard/.test(x.label)) && pv.some((x) => /^Finishing up/.test(x.label)), 'stages advance to the end');
   timings.push(`county path (mocked 400 ms, Overpass never answers): screen ${Math.round(main)} ms, building lines ${Math.round(buildings)} ms, settled ${Math.round(settled)} ms`);
+});
+
+await scenario('non-LA path (Chicago City Hall, county lookup + Overture, parcel service never answers): screen < 2.5 s, footprint and roof lines < 4 s, lot size stays an empty input, settled < 8 s, no failure words', async (page, rec) => {
+  world = 'chicago';
+  const { main } = await timedLookup(page, CHICAGO, { shots: 'property-chicago' });
+  assert.ok(main < 2500, `property screen after ${Math.round(main)} ms`);
+  assert.ok(rec.pending.some((u) => u.includes('cookcountyil')), 'the county parcel service was asked (and never answered)');
+  assert.ok(rec.mocked.some((u) => u.includes('geo.fcc.gov')), 'the county came from the FCC lookup');
+  assert.equal(rec.mocked.some((u) => u.includes('CAMS_Locator') || u.includes('lacounty')), false, 'no Los Angeles County service is asked for an Illinois address');
+  assert.equal(await page.locator('#address-submit').isDisabled(), false, 'the button is free again');
+  assert.ok(await page.locator('.fact[data-key="building_footprint_sqft"][data-state="loading"]').count() >= 0);
+  const outline = await waitFilled(page, ['floors', 'roof_area_sqft', 'building_footprint_sqft']);
+  assert.ok(outline < 4000, `footprint, roof and floors lines filled after ${Math.round(outline)} ms`);
+  assert.ok(Number((await page.inputValue('#f-building_footprint_sqft')).replace(/,/g, '')) > 10000, 'City Hall is a large building');
+  // the lot-size line is simply an empty input while the parcel service is silent
+  assert.equal(await page.inputValue('#f-lot_area_sqft'), '');
+  await page.screenshot({ path: `${SHOTS}/property-chicago-outline.png`, fullPage: true });
+  const settled = await waitSettled(page);
+  assert.ok(settled < 8000, `settled after ${Math.round(settled)} ms`);
+  assert.equal(await page.inputValue('#f-lot_area_sqft'), '', 'lot size still an empty input');
+  assert.equal(await page.locator('.fact[data-key="lot_area_sqft"]').getAttribute('data-state'), 'empty');
+  const t = await page.locator('main').innerText();
+  assert.doesNotMatch(t, /fail|error|unavailable|not found/i, 'no failure words');
+  assert.doesNotMatch(t, /overpass|photon|overture|nominatim|fcc|cook county/i, 'no service names above the footer');
+  assert.match(await page.locator('#attribution').innerText(), /Overture Maps Foundation/);
+  await page.screenshot({ path: `${SHOTS}/property-chicago-loaded.png`, fullPage: true });
+  checkProgress(await page.evaluate(() => window.__pv), 'chicago');
+  timings.push(`non-LA path (Chicago, mocked 400 ms, parcel service never answers): screen ${Math.round(main)} ms, footprint/roof lines ${Math.round(outline)} ms, settled ${Math.round(settled)} ms`);
 });
 
 await scenario('older path: screen < 2.5 s and settled < 8 s with Overpass never answering', async (page, rec) => {

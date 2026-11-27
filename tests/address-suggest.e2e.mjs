@@ -38,17 +38,24 @@ const allExternal = [];
 
 /** What the mocked suggest service does; a scenario replaces it. */
 let suggestMode = null; // ({q, n}) => {status, body, delay}
+/** What the mocked Photon service (addresses outside LA County) does; by default it finds nothing. */
+let photonMode = null; // ({q, n}) => {status, body, delay}
+const photonFeature = (house, street, city, state, zip, lng, lat) => ({ type: 'Feature', geometry: { type: 'Point', coordinates: [lng, lat] }, properties: { countrycode: 'US', housenumber: house, street, city, state, postcode: zip } });
 const defaultSuggest = ({ q }) => ({ status: 200, delay: 0, body: { suggestions: [1, 2, 3, 4, 5].map((i) => ({ text: `${q} #${i}, Los Angeles, CA`, magicKey: `k${i}`, isCollection: false })) } });
 
-async function scenario(name, url, fn, { viewport = { width: 1280, height: 900 }, allowConsole = null, mode = null } = {}) {
+async function scenario(name, url, fn, { viewport = { width: 1280, height: 900 }, allowConsole = null, mode = null, photon = null } = {}) {
   const ctx = await browser.newContext({ viewport });
   const page = await ctx.newPage();
   page.setDefaultTimeout(15000);
-  const rec = { external: [], other: [], suggests: [], live: 0, maxLive: 0, failed: 0, consoleErrors: [], pageErrors: [] };
-  suggestMode = mode;
+  const rec = { photonLive: 0, photonMax: 0, external: [], other: [], photon: [], suggests: [], live: 0, maxLive: 0, failed: 0, consoleErrors: [], pageErrors: [] };
+  suggestMode = mode; photonMode = photon;
   page.on('console', (m) => { if (m.type() === 'error') rec.consoleErrors.push(m.text()); });
   page.on('pageerror', (e) => rec.pageErrors.push(String(e)));
   const isSuggest = (r) => r.url().includes('CAMS_Locator/GeocodeServer/suggest');
+  const isPhoton = (r) => r.url().startsWith('https://photon.komoot.io/');
+  page.on('request', (r) => { if (isPhoton(r)) { rec.photonLive++; rec.photonMax = Math.max(rec.photonMax, rec.photonLive); } });
+  page.on('requestfinished', (r) => { if (isPhoton(r)) rec.photonLive--; });
+  page.on('requestfailed', (r) => { if (isPhoton(r)) rec.photonLive--; });
   page.on('request', (r) => { if (isSuggest(r)) { rec.live++; rec.maxLive = Math.max(rec.maxLive, rec.live); } });
   page.on('requestfinished', (r) => { if (isSuggest(r)) rec.live--; });
   page.on('requestfailed', (r) => { if (isSuggest(r)) { rec.live--; rec.failed++; } });
@@ -60,6 +67,13 @@ async function scenario(name, url, fn, { viewport = { width: 1280, height: 900 }
       const q = parsed.searchParams.get('text') ?? '';
       rec.suggests.push({ q, at: Date.now(), max: parsed.searchParams.get('maxSuggestions') });
       const a = (suggestMode ?? defaultSuggest)({ q, n: rec.suggests.length });
+      if (a.delay) await new Promise((r) => setTimeout(r, a.delay));
+      try { return await route.fulfill({ status: a.status, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(a.body) }); } catch { return undefined; }
+    }
+    if (parsed.hostname === 'photon.komoot.io') {
+      const q = parsed.searchParams.get('q') ?? '';
+      rec.photon.push({ q, at: Date.now(), url: u });
+      const a = (photonMode ?? (() => ({ status: 200, delay: 0, body: { features: [] } })))({ q, n: rec.photon.length });
       if (a.delay) await new Promise((r) => setTimeout(r, a.delay));
       try { return await route.fulfill({ status: a.status, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(a.body) }); } catch { return undefined; }
     }
@@ -320,6 +334,59 @@ for (const [label, url] of PAGES) {
   }, { mode: () => ({ status: 200, delay: 0, body: { suggestions: ['200 North Spring St, East Rancho Dominguez, CA', '200 North Spring St, Los Angeles, CA', '200 North Spring St, Compton, CA', '200 South Spring St, Los Angeles, CA'].map((t, i) => ({ text: t, magicKey: `k${i}` })) } }) });
 }
 
+// ---- Photon: address suggestions outside Los Angeles County (the county source is asked first) ------------------------------------------
+const CHI = [photonFeature('121', 'North LaSalle Street', 'Chicago', 'Illinois', '60602', -87.63195, 41.88383), photonFeature('1211', 'North LaSalle Drive', 'Chicago', 'Illinois', '60610', -87.63265, 41.9044),
+  { ...photonFeature('5', 'Somewhere Road', 'Toronto', 'Ontario', 'M5V', -79.38, 43.65), properties: { countrycode: 'CA', housenumber: '5', street: 'Somewhere Road', city: 'Toronto', state: 'Ontario' } },
+  { type: 'Feature', geometry: { type: 'Point', coordinates: [-87.6, 41.9] }, properties: { countrycode: 'US', name: 'LaSalle Park', city: 'Chicago', state: 'Illinois' } }];
+for (const [label, url] of PAGES) {
+  await scenario(`${label}: Photon answers only after the county has nothing; US addresses with a number only; the county is not asked for another state`, url, async (page, rec) => {
+    await typeSlow(page, '121 N LaSalle St, Chicago, IL');
+    await page.waitForSelector('[role="option"]');
+    assert.deepEqual(await opts(page).allInnerTexts(), ['121 North LaSalle Street, Chicago, IL 60602', '1211 North LaSalle Drive, Chicago, IL 60610'], 'Canadian and street-less results are dropped');
+    assert.equal(rec.suggests.length, 0, 'text that names Illinois never goes to the county service');
+    assert.ok(rec.photon.length >= 1);
+    assert.ok(rec.photon.every((x) => x.q.length >= 4), 'no Photon request under 4 characters');
+    const u = new URL(rec.photon[0].url);
+    assert.equal(u.searchParams.get('lang'), 'en'); assert.ok(u.searchParams.get('limit'));
+    assert.match(await page.locator('#attribution').innerText(), /Address suggestions © OpenStreetMap contributors \(via Photon\)/);
+    await page.screenshot({ path: `${SHOTS}/suggest-photon-${label}.png` });
+  }, { photon: () => ({ status: 200, delay: 0, body: { features: CHI } }) });
+
+  await scenario(`${label}: county first: a typed Los Angeles address is answered by the county and Photon is not asked`, url, async (page, rec) => {
+    await typeSlow(page, '200 N Spring');
+    await page.waitForSelector('[role="option"]');
+    assert.equal(rec.photon.length, 0);
+    assert.ok(rec.suggests.length >= 1);
+  });
+
+  await scenario(`${label}: no state typed and the county has nothing: Photon is asked (once at most per 250 ms, one in flight)`, url, async (page, rec) => {
+    await typeSlow(page, '121 N LaSalle', 40);
+    await page.waitForSelector('[role="option"]');
+    for (let i = 1; i < rec.photon.length; i++) assert.ok(rec.photon[i].at - rec.photon[i - 1].at >= 240, `Photon requests ${rec.photon[i].at - rec.photon[i - 1].at} ms apart`);
+    assert.equal(rec.photonMax, 1, 'one Photon request in flight at most');
+  }, { mode: () => ({ status: 200, delay: 0, body: { suggestions: [] } }), photon: () => ({ status: 200, delay: 60, body: { features: CHI } }) });
+
+  await scenario(`${label}: Photon failing or answering nonsense is silent`, url, async (page, rec) => {
+    await typeSlow(page, '121 N LaSalle St, Chicago, IL');
+    await page.waitForTimeout(1200);
+    assert.ok(rec.photon.length >= 1);
+    assert.equal(await opts(page).count(), 0);
+    assert.equal(await page.locator('[role="alert"], .err').count(), 0);
+    await typeSlow(page, ' 60602');
+    assert.equal(await page.inputValue('#address'), '121 N LaSalle St, Chicago, IL 60602', 'the field still works');
+  }, { photon: ({ n }) => (n % 2 ? { status: 503, delay: 0, body: {} } : { status: 200, delay: 0, body: { nope: true } }), allowConsole: /Failed to load resource: the server responded with a status of 503/ });
+
+  await scenario(`${label}: markup in a Photon name is shown as text`, url, async (page) => {
+    await typeSlow(page, '121 N LaSalle St, Chicago, IL');
+    await page.waitForSelector('[role="option"]');
+    assert.equal(await opts(page).first().innerText(), '1 <img src=x onerror=window.__pwn=1> Road, <b>Town</b>, IL 60602');
+    assert.equal(await page.locator('[role="listbox"] img, [role="listbox"] b').count(), 0);
+    await opts(page).first().click();
+    assert.equal(await page.inputValue('#address'), '1 <img src=x onerror=window.__pwn=1> Road, <b>Town</b>, IL 60602');
+    assert.equal(await page.evaluate(() => window.__pwn), undefined);
+  }, { photon: () => ({ status: 200, delay: 0, body: { features: [photonFeature('1', '<img src=x onerror=window.__pwn=1> Road', '<b>Town</b>', 'Illinois', '60602', -87.6, 41.9)] } }) });
+}
+
 await scenario('homepage: after a suggestion is chosen, submitting (Enter again) is what starts the lookup', PAGES[0][1], async (page) => {
   const a = page.locator('#address');
   await typeSlow(page, '200 N Spring');
@@ -331,6 +398,21 @@ await scenario('homepage: after a suggestion is chosen, submitting (Enter again)
   await page.waitForURL(/\/estimate\//);
   assert.equal(await page.inputValue('#address'), '200 N Spring #1, Los Angeles, CA');
 }, { mode: null, allowConsole: /Failed to load resource/ });
+
+await scenario('homepage: a chosen suggestion that carries a point passes it to the estimator in the URL fragment', PAGES[0][1], async (page) => {
+  // stop at the hand-off: the estimator page itself is covered by tests/estimate.e2e.mjs
+  await page.route('**/estimate/', (route) => route.fulfill({ status: 200, contentType: 'text/html', body: '<!doctype html><title>stub</title><input id="address">' }));
+  const a = page.locator('#address');
+  await typeSlow(page, '121 N LaSalle St, Chicago, IL');
+  await page.waitForSelector('[role="option"]');
+  await a.press('ArrowDown');
+  await a.press('Enter');
+  await a.press('Enter');
+  await page.waitForURL(/\/estimate\//);
+  const frag = new URLSearchParams(new URL(page.url()).hash.slice(1));
+  assert.equal(frag.get('address'), '121 North LaSalle Street, Chicago, IL 60602');
+  assert.ok(Math.abs(Number(frag.get('lat')) - 41.88383) < 1e-5 && Math.abs(Number(frag.get('lng')) + 87.63195) < 1e-5, `point passed: ${page.url()}`);
+}, { mode: () => ({ status: 200, delay: 0, body: { suggestions: [] } }), photon: () => ({ status: 200, delay: 0, body: { features: CHI } }), allowConsole: /Failed to load resource/ });
 
 await browser.close();
 server.close();

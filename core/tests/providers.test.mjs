@@ -505,7 +505,7 @@ test('default registry order: LARIAC (with its Overture fallback) in LA County; 
   assert.equal(covers({ national: true }, { state: 'CA', countyFips: '06037' }), true);
 });
 
-test('browser registry: Overture is in (CORS verified), the parcel registry skips untested services, opt-in tries them; suggestionSources is empty', async () => {
+test('browser registry: Overture is in (CORS verified), the parcel registry skips untested services, opt-in tries them; suggestionSources lists only Photon (after the county source)', async () => {
   const { createBrowserRegistry, suggestionSources } = await import('../providers/browser.js');
   const reg = createBrowserRegistry();
   assert.equal(reg.get('overture-buildings').needsKey, false);
@@ -522,5 +522,5 @@ test('browser registry: Overture is in (CORS verified), the parcel registry skip
   const tried = createBrowserRegistry({ tryUnverifiedParcelServices: true }).get('parcel-registry');
   const r3 = await tried.lookup({ lat: 33.45, lng: -112.07, jurisdiction: { state: 'AZ', countyFips: az.coverage.countyFips } }, { fetch: f, now: NOW });
   assert.equal(calls.length, 1, 'the opt-in asked the one county service'); assert.equal(r3.ok, false); assert.match(r3.reason, /no network in this test/);
-  assert.deepEqual(suggestionSources(), []);
+  assert.deepEqual(suggestionSources().map((x) => x.id), ['photon']);
 });

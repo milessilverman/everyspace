@@ -14,6 +14,7 @@ import { identifyOpportunities, defaultResourceCapacity } from '../core/opportun
 import { defaultInputs, withOverrides, estimateOpportunity } from '../core/revenue.js';
 import { optimize } from '../core/optimizer.js';
 import { runCountyPath, settleProfile } from '../estimate/county-path.js';
+import { overtureServer, OVERTURE_REAL } from '../core/tests/fixtures/providers/overture-mock.mjs';
 
 const require = createRequire(import.meta.url);
 let pw;
@@ -42,10 +43,10 @@ const nominatimSpring = () => {
 };
 /** Fixture answer for a mocked external URL, or null when the host is not one we mock. */
 let override = null; // a scenario may replace one host's answer: (url, decodedUrl) => {status, body} | undefined
-function answer(urlStr) {
+function answer(urlStr, range = null) {
   const u = new URL(urlStr);
   const dec = decodeURIComponent(urlStr);
-  const o = override?.(urlStr, dec);
+  const o = override?.(urlStr, dec, range);
   if (o) return o;
   if (u.hostname === 'nominatim.openstreetmap.org') {
     const q = u.searchParams.get('q') ?? '';
@@ -61,6 +62,7 @@ function answer(urlStr) {
     return { status: 200, body: fx('arcgis-la-parcel.json') };
   }
   if (u.hostname.includes('overpass')) return { status: 200, body: dec.includes('34.0516') ? fx('overpass-no-features.json') : fx('overpass-la.json') };
+  if (u.hostname === 'photon.komoot.io') return { status: 200, body: { features: [] } }; // address suggestions outside LA County: finds nothing here
   if (OTHER_SOURCES.test(u.hostname)) return { status: 404, body: {} };
   return null;
 }
@@ -118,10 +120,10 @@ async function scenario(name, fn, viewport = { width: 1280, height: 900 }, dsf =
   await ctx.route('**/*', (route) => {
     const url = route.request().url();
     if (url.startsWith(ORIGIN) || url.startsWith('data:')) { rec.localRequests.push(url); return route.continue(); }
-    const a = answer(url);
+    const a = answer(url, route.request().headers().range ?? null);
     if (!a) { rec.external.push(url); return route.abort('failed'); }
     rec.mocked.push(url);
-    return route.fulfill({ status: a.status, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(a.body) });
+    return route.fulfill({ status: a.status, contentType: a.type ?? 'application/json', headers: { 'access-control-allow-origin': '*', 'access-control-expose-headers': 'content-range' }, body: a.raw ?? JSON.stringify(a.body) });
   });
   try {
     await fn(page, rec, ctx);
@@ -186,15 +188,15 @@ console.log('estimate e2e');
 await scenario('load: no request and no storage before submit; accessible shell; browser autofill kept', async (page, rec) => {
   await page.goto(URL_PAGE);
   await page.waitForSelector('#address');
-  assert.equal(rec.mocked.length + rec.external.length, 0, 'no external request before submit');
+  assert.equal(rec.mocked.length + rec.external.length, 0, `no external request before submit: ${[...rec.mocked, ...rec.external].join(' ')}`);
   assert.equal(await page.locator('label[for="address"]').count(), 1);
   assert.equal(await page.getAttribute('#status', 'aria-live'), 'polite');
   assert.equal(await page.locator('#address').getAttribute('autocomplete'), 'street-address', 'the browser can still fill the address');
-  // typing alone must not start a lookup: it may only ask the county's address service for suggestions
+  // typing alone must not start a lookup: it may only ask the address services (the county's, then Photon's) for suggestions
   await page.type('#address', '99999 Venice Blv', { delay: 5 });
   await page.waitForTimeout(800);
   assert.equal(rec.external.length, 0);
-  assert.ok(rec.mocked.length >= 1 && rec.mocked.every((u) => u.includes('CAMS_Locator/GeocodeServer/suggest')), `typing sends only suggest requests: ${rec.mocked.join(' ')}`);
+  assert.ok(rec.mocked.length >= 1 && rec.mocked.every((u) => u.includes('CAMS_Locator/GeocodeServer/suggest') || u.startsWith('https://photon.komoot.io/api/?')), `typing sends only suggest requests: ${rec.mocked.join(' ')}`);
   assert.equal(await text(page, '#address-help'), 'Start typing and pick your address');
   assert.doesNotMatch(await text(page, 'main'), /Los Angeles County's public address service|Nominatim|Overpass/, 'no service names above the footer');
   assert.match(await text(page, '#privacy-line'), /Nothing you enter here is saved\. While you type an address, the text is sent to Los Angeles County's public address service/);
@@ -735,6 +737,119 @@ for (const [name, over, addr, expectList] of FALLBACKS) {
     }
   }), { width: 1280, height: 900 }, 1, /^Failed to load resource: the server responded with a status of 5\d\d/);
 }
+
+// ---- outside Los Angeles County: Chicago City Hall (a public building), county lookup + Overture + the county's own parcel service --------------------------
+const CHICAGO = '121 N LaSalle St, Chicago, IL 60602';
+const CHI_PT = OVERTURE_REAL.chicago.point;
+const chiOv = overtureServer('chicago');
+const LOT_RINGS = (() => { // a synthetic parcel 90 m x 70 m around the point, as Esri rings (clockwise)
+  const dLng = 45 / (111320 * Math.cos((CHI_PT.lat * Math.PI) / 180)), dLat = 35 / 110540;
+  return [[[CHI_PT.lng - dLng, CHI_PT.lat - dLat], [CHI_PT.lng - dLng, CHI_PT.lat + dLat], [CHI_PT.lng + dLng, CHI_PT.lat + dLat], [CHI_PT.lng + dLng, CHI_PT.lat - dLat], [CHI_PT.lng - dLng, CHI_PT.lat - dLat]]];
+})();
+/** override() for the nationwide path. `parcel`: 'none' (404) | 'answer'. `photon`: features for the suggestion service. */
+function chicagoWorld({ parcel = 'none', photon = [] } = {}) {
+  const nominatim = [{ _fixture_note: 'synthetic, shaped like the recorded response; not a recorded response', place_id: 2, osm_type: 'way', osm_id: 2, lat: String(CHI_PT.lat), lon: String(CHI_PT.lng), category: 'building', type: 'civic',
+    display_name: '121, North LaSalle Street, Chicago, Cook County, Illinois, 60602, United States', address: { house_number: '121', road: 'North LaSalle Street', city: 'Chicago', county: 'Cook County', state: 'Illinois', 'ISO3166-2-lvl4': 'US-IL', postcode: '60602', country_code: 'us' } }];
+  return (url, dec, range) => {
+    const h = new URL(url).hostname;
+    if (h === 'nominatim.openstreetmap.org') return { status: 200, body: nominatim };
+    if (h === 'geo.fcc.gov') return { status: 200, body: pfx('fcc-county-chicago-city-hall.json') };
+    if (h === 'photon.komoot.io') return { status: 200, body: { features: photon } };
+    if (h === 'gis.cookcountyil.gov') return parcel === 'answer' ? { status: 200, body: { geometryType: 'esriGeometryPolygon', features: [{ attributes: { PIN14: '17-09-999-001' }, geometry: { rings: LOT_RINGS } }] } } : { status: 404, body: {} };
+    const o = chiOv.answer(url, range);
+    if (o) return { status: o.status, raw: Buffer.from(o.body), type: o.type };
+    if (h.includes('overpass')) return { status: 200, body: fx('overpass-no-features.json') };
+    return undefined;
+  };
+}
+const withChicago = (opts, fn) => async (page, rec, ctx) => { override = chicagoWorld(opts); try { await fn(page, rec, ctx); } finally { override = null; } };
+const FAILURE_WORDS = /fail|error|unavailable|not found|warning/i;
+
+await scenario('non-LA address: county lookup + Overture fill footprint, roof and floors; the lot-size line is an empty input; no failure words; no Los Angeles County service asked', withChicago({}, async (page, rec) => {
+  await page.goto(URL_PAGE);
+  await search(page, CHICAGO);
+  await page.waitForSelector('#facts');
+  await settled(page);
+  assert.equal(rec.mocked.some((u) => u.includes('lacounty')), false, 'no Los Angeles County service');
+  assert.ok(rec.mocked.some((u) => u.includes('geo.fcc.gov')) && rec.mocked.some((u) => u.includes('amazonaws.com')) && rec.mocked.some((u) => u.includes('cookcountyil.gov')));
+  assert.ok(Number((await page.inputValue('#f-building_footprint_sqft')).replace(/,/g, '')) > 10000, 'footprint');
+  assert.match(await page.inputValue('#f-roof_area_sqft'), /^[\d,]+$/); assert.match(await page.inputValue('#f-floors'), /^\d+$/);
+  assert.equal(await page.inputValue('#f-lot_area_sqft'), '', 'lot size: simply an empty input');
+  assert.equal(await page.locator(row('lot_area_sqft')).getAttribute('data-state'), 'empty');
+  for (const k of ['front_yard_sqft', 'back_yard_sqft', 'side_yard_sqft']) assert.equal(await page.inputValue(`#f-${k}`), '', `${k}: no street reference, so no front is guessed`);
+  assert.doesNotMatch(await text(page, 'main'), FAILURE_WORDS);
+  assert.doesNotMatch(await ownerText(page), FORBIDDEN);
+  assert.equal(await page.getAttribute('#f-lot_area_sqft', 'placeholder'), 'Add', 'the owner can type the lot size');
+  assert.match(await text(page, '#attribution'), /Overture Maps Foundation/);
+  assert.equal(await page.evaluate(() => localStorage.length + sessionStorage.length + document.cookie.length), 0, 'nothing stored');
+}));
+
+await scenario('non-LA address with an answering county parcel service: the lot size is filled', withChicago({ parcel: 'answer' }, async (page) => {
+  await page.goto(URL_PAGE);
+  await search(page, CHICAGO);
+  await page.waitForSelector('#facts');
+  await settled(page);
+  const lot = Number((await page.inputValue('#f-lot_area_sqft')).replace(/,/g, ''));
+  assert.ok(lot > 60000 && lot < 70000, `lot ${lot} sq ft (a 90 m x 70 m parcel is about 67,800)`);
+  assert.doesNotMatch(await ownerText(page), FORBIDDEN);
+  // the county service maps no use code, so the property type is left for the owner to choose (earnings ideas follow that choice)
+  assert.match(await text(page, 'main'), /Choose a property type to see more ideas/);
+}));
+
+await scenario('Photon suggestion: picking it fills the field; the lookup then asks no geocoder (no Nominatim, no county locator) and uses the suggestion\'s point', withChicago({ photon: [
+  { type: 'Feature', geometry: { type: 'Point', coordinates: [CHI_PT.lng, CHI_PT.lat] }, properties: { countrycode: 'US', housenumber: '121', street: 'North LaSalle Street', city: 'Chicago', state: 'Illinois', postcode: '60602', name: 'Chicago City Hall' } },
+  { type: 'Feature', geometry: { type: 'Point', coordinates: [-79.38, 43.65] }, properties: { countrycode: 'CA', housenumber: '5', street: 'Elsewhere Road', city: 'Toronto', state: 'Ontario' } }] }, async (page, rec) => {
+  await page.goto(URL_PAGE);
+  await page.type('#address', '121 N LaSalle St, Chicago, IL', { delay: 5 });
+  await page.waitForSelector('[role="option"]');
+  assert.deepEqual(await page.locator('[role="option"]').allInnerTexts(), ['121 North LaSalle Street, Chicago, IL 60602']);
+  await page.locator('[role="option"]').first().click();
+  assert.equal(await page.inputValue('#address'), '121 North LaSalle Street, Chicago, IL 60602');
+  const before = rec.mocked.length;
+  await page.click('#address-submit');
+  await page.waitForSelector('#facts');
+  await settled(page);
+  const lookup = rec.mocked.slice(before);
+  assert.equal(lookup.some((u) => u.includes('nominatim') || u.includes('CAMS_Locator') || u.includes('geocoding.geo.census.gov')), false, `no geocoder was asked: ${lookup.map((u) => new URL(u).hostname).join(' ')}`);
+  assert.ok(lookup.some((u) => u.includes('geo.fcc.gov')), 'only the county of the point was looked up');
+  assert.match(await page.inputValue('#f-building_footprint_sqft'), /^[\d,]+$/);
+  assert.match(await text(page, '#status, main'), /Chicago/);
+  // editing the text after picking drops the suggestion's point: the typed text is then located by the geocoder as usual
+  await page.fill('#address', '121 North LaSalle Street, Chicago, IL 60602 ');
+  await page.fill('#address', '121 N LaSalle St, Chicago, IL 60602');
+  const mark = rec.mocked.length;
+  await page.click('#address-submit');
+  await page.waitForSelector('#facts');
+  await settled(page);
+  assert.ok(rec.mocked.slice(mark).some((u) => u.includes('nominatim')), 'a typed address is geocoded');
+}));
+
+await scenario('arriving from the homepage with a chosen suggestion: its point comes in the URL fragment, no geocoder is asked, and the URL is cleaned', withChicago({ photon: [] }, async (page, rec) => {
+  const before = rec.mocked.length;
+  await page.goto(`${URL_PAGE}#address=${encodeURIComponent('121 North LaSalle Street, Chicago, IL 60602')}&lat=${CHI_PT.lat}&lng=${CHI_PT.lng}&source=photon`);
+  await page.waitForSelector('#facts');
+  await settled(page);
+  const lookup = rec.mocked.slice(before);
+  assert.equal(lookup.some((u) => u.includes('nominatim') || u.includes('CAMS_Locator') || u.includes('geocoding.geo.census.gov')), false, `no geocoder was asked: ${lookup.map((u) => new URL(u).hostname).join(' ')}`);
+  assert.ok(lookup.some((u) => u.includes('geo.fcc.gov')), 'the county of the passed point was looked up');
+  assert.match(await page.inputValue('#f-building_footprint_sqft'), /^[\d,]+$/);
+  assert.equal(new URL(page.url()).hash, '', 'address and point are removed from the URL');
+  // a malformed point is ignored: the address is then located the usual way
+  const mark = rec.mocked.length;
+  await page.goto('about:blank'); // a hash-only change on an open page does not reload it, so leave first
+  await page.goto(`${URL_PAGE}#address=${encodeURIComponent('121 N LaSalle St, Chicago, IL 60602')}&lat=abc&lng=999`);
+  await page.waitForSelector('#facts');
+  await settled(page);
+  assert.ok(rec.mocked.slice(mark).some((u) => u.includes('nominatim')), 'a bad point falls back to geocoding');
+}));
+
+await scenario('Photon: an LA-looking address with no state still gets the county first; typing an Illinois address never asks the county service', async (page, rec) => {
+  await page.goto(URL_PAGE);
+  await page.type('#address', '121 N LaSalle St, Chicago, IL', { delay: 5 });
+  await page.waitForTimeout(700);
+  assert.equal(rec.mocked.filter((u) => u.includes('CAMS_Locator')).length, 0);
+  assert.ok(rec.mocked.some((u) => u.startsWith('https://photon.komoot.io/api/?')));
+});
 
 // no lookup request may ever carry a broken number (regression: an outline of type Polygon produced "around:NaN")
 const brokenUrls = allRecs.flatMap((r) => r.mocked).filter((u) => /NaN|undefined/.test(decodeURIComponent(u)));

@@ -77,6 +77,6 @@ export async function createDefaultRegistry() {
     import('./rentcast.js'), import('./google-solar.js'), import('./overture-buildings.js'), import('./parcel-registry.js'),
   ]);
   const r = createRegistry();
-  for (const p of [laCamsAddress, censusAddress, rentcast, laAssessor, parcelRegistry, googleSolar, withOvertureFallback(lariacBuildings), overtureBuildings]) r.register(p);
+  for (const p of [laCamsAddress, censusAddress, rentcast, laAssessor, { ...parcelRegistry, needsPointInParcel: true }, googleSolar, { ...withOvertureFallback(lariacBuildings), needsParcel: true }, overtureBuildings]) r.register(p);
   return r;
 }
