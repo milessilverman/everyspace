@@ -25,10 +25,11 @@
   </ul>
 </main>
 <script>
-// On a GitHub Pages project site the app lives under the first path segment; elsewhere it is at the root.
+// On a GitHub Pages project site, and at www.milessilverman.com/everyspace/ (which shows the same pages), the app lives
+// under the first path segment; elsewhere it is at the root.
 (function () {
   var seg = location.pathname.split('/')[1];
-  var base = /\.github\.io$/.test(location.hostname) && seg ? '/' + seg + '/' : '/';
+  var base = seg && (/\.github\.io$/.test(location.hostname) || seg === 'everyspace') ? '/' + seg + '/' : '/';
   document.getElementById('home').href = base;
   document.getElementById('host').href = base + 'host/';
 })();

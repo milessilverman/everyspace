@@ -4,6 +4,8 @@ Find out how much more your property could be earning, and manage what you rent 
 
 **Live site:** https://milessilverman.github.io/everyspace/
 
+The same pages are meant to show at https://www.milessilverman.com/everyspace/ as well. That address is not a second copy: the portfolio site ([milessilverman/milessilverman](https://github.com/milessilverman/milessilverman), `vercel.json`) passes it through to GitHub Pages, so it shows whatever is published here, within about 10 minutes of a change. It starts working once that `vercel.json` change is on the portfolio's `main`. Every link in these pages is relative so they work under either address; keep it that way.
+
 The homepage (`index.html`) is a single address box. Submitting it opens the income estimator (`estimate/`) with the address in the URL fragment, which the estimator reads once and then removes from the address bar. Without JavaScript the form falls back to a plain GET to `estimate/?address=`. The homepage itself makes no lookups and stores nothing.
 
 The earlier single-file demo (earnings quiz, earnings map, marketplace screens, simulated site sync) has moved to [milessilverman/everyspace-demo](https://github.com/milessilverman/everyspace-demo), live at https://milessilverman.github.io/everyspace-demo/. `everyspace.html` redirects there so old links keep working.

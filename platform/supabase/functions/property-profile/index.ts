@@ -9,7 +9,7 @@
 // The service role is used ONLY for three RPCs: get_cached_property_profile, store_property_profile, reserve_provider_call.
 //
 // Secrets (set per project, never in a file): RENTCAST_API_KEY, GOOGLE_SOLAR_API_KEY, RENTCAST_DAILY_CAP, GOOGLE_SOLAR_DAILY_CAP,
-// ALLOWED_ORIGINS (comma-separated; default https://milessilverman.github.io). Supabase provides SUPABASE_URL and
+// ALLOWED_ORIGINS (comma-separated; default https://milessilverman.github.io and https://www.milessilverman.com). Supabase provides SUPABASE_URL and
 // SUPABASE_SERVICE_ROLE_KEY to functions.
 //
 // Known limits: no per-visitor rate limit (only the global daily caps protect paid providers); a reserved budget unit is spent

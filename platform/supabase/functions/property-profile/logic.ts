@@ -2,7 +2,8 @@
 // Erasable TypeScript only (no enums, no parameter properties) so Node can run it directly in tests.
 
 export const MAX_BODY_BYTES = 4096;
-export const DEFAULT_ORIGIN = 'https://milessilverman.github.io';
+/** Where the public site is served: GitHub Pages, and the same pages under https://www.milessilverman.com/everyspace/. */
+export const DEFAULT_ORIGINS = ['https://milessilverman.github.io', 'https://www.milessilverman.com'];
 /** Retention for a provider that states no limit (retentionDays null/undefined). */
 export const UNLIMITED_RETENTION_DAYS = 90;
 /** A profile no provider contributed to is kept only briefly, so a later run with keys enabled is not shadowed. */
@@ -50,7 +51,7 @@ export function addressKey(address: string): string {
 
 export function allowedOrigins(raw: string | undefined): string[] {
   const list = (raw ?? '').split(',').map((s) => s.trim()).filter((s) => s && s !== '*');
-  return list.length ? list : [DEFAULT_ORIGIN];
+  return list.length ? list : [...DEFAULT_ORIGINS];
 }
 
 /** CORS headers for an allowed origin; never a wildcard. Always varies on Origin. */
