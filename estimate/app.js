@@ -120,8 +120,10 @@ const S = {
   goal: 'max_net_income', maxUpfront: '', noStrangers: false, onlyKnownRules: false,
   open: new Set(['steplog']), focusId: null, error: '',
   limiter: { lastAt: null }, yardYes: false, selectOnFocus: null, keepStatus: false,
+  dirty: false, discardOk: false, // dirty = the owner has typed a correction this session; discardOk = they were warned that searching again drops it
 };
 
+const MAX_ADDRESS = 300; // same cap as the input's maxlength; a street address is never longer
 const els = { form: $('#address-form'), input: $('#address'), submit: $('#address-submit'), status: $('#status'), lookup: $('#lookup'), results: $('#results') };
 
 function announce(msg, isError = false) {
@@ -158,9 +160,11 @@ async function lookup(extra = {}) {
   } else if (res.ok) {
     S.phase = 'results'; S.manual = false; S.profile = res.profile;
     announce('Property found. Review the details and answer a few questions below.');
+    S.focusId = 'h-profile';
   } else {
     S.phase = 'results'; S.manual = true; S.profile = res.profile ?? createProfile(); S.open.add('missing-attrs');
     announce('We could not look up your property. Enter the basics below and we can still estimate.');
+    S.focusId = 'h-profile';
   }
   S.keepStatus = S.phase === 'results';
   renderAll();
@@ -168,20 +172,34 @@ async function lookup(extra = {}) {
 
 function resetSession() {
   S.result = null; S.confirmed = false; S.profile = null; S.steps = []; S.manual = false; S.overrides = {};
-  S.editAttr = null; S.editInput = null; S.phase = 'address'; S.error = '';
+  S.editAttr = null; S.editInput = null; S.phase = 'address'; S.error = ''; S.dirty = false; S.discardOk = false;
+}
+
+/** Start a new search or manual session only when nothing typed by the owner would be lost silently. */
+function canRestart() {
+  if (S.busy) { announce('Still looking up your address. Please wait a few seconds.'); return false; }
+  if (S.dirty && !S.discardOk) {
+    S.discardOk = true;
+    announce('You have corrections on this page. Starting again discards them. Press the same button again to start over, or keep working below.', true);
+    return false;
+  }
+  return true;
 }
 
 els.form.addEventListener('submit', (ev) => {
   ev.preventDefault();
-  const q = els.input.value.trim();
+  const q = els.input.value.trim().slice(0, MAX_ADDRESS);
+  if (S.busy) { announce('Still looking up your address. Please wait a few seconds.'); return; }
   if (!q) { announce('Please type an address first.', true); els.input.focus(); return; }
+  if (!canRestart()) return;
   resetSession(); S.address = q; renderAll();
   lookup();
 });
 $('#manual-start').addEventListener('click', () => {
+  if (!canRestart()) return;
   resetSession(); S.address = els.input.value.trim(); S.phase = 'results'; S.manual = true; S.profile = createProfile(); S.open.add('missing-attrs');
   announce('Enter the basics about your property below. Nothing is looked up.');
-  S.keepStatus = true;
+  S.keepStatus = true; S.focusId = 'h-profile';
   renderAll();
 });
 
@@ -272,6 +290,7 @@ function renderResults() {
   S.error = '';
   els.results.innerHTML = `<div class="stack">
     <div class="callout warn" id="plan-note"><strong>These are planning estimates, not promises.</strong> Prices and bookings are Everyspace planning defaults unless you enter your own.</div>
+    <p class="small muted" id="session-note">Nothing is saved. If you reload or leave this page, everything you entered here is cleared and you start again.</p>
     ${err}
     ${profileHtml(view)}
     ${oppsHtml(view)}
@@ -302,7 +321,7 @@ function valueText(key, v, unit) {
 }
 
 function badge(tag) {
-  return `<span class="chip ${TAG_CLASS[tag] ?? ''}" title="${esc(TAG_HELP[tag] ?? '')}">${TAG_WORDS[tag] ?? tag}</span>`;
+  return `<span class="chip ${TAG_CLASS[tag] ?? ''}" title="${esc(TAG_HELP[tag] ?? '')}">${esc(TAG_WORDS[tag] ?? tag)}</span>`;
 }
 const confText = (label) => `${CONF_WORDS[label] ?? label} confidence`;
 
@@ -311,13 +330,13 @@ function editorHtml(key, current) {
   const id = `ed-${safeId(key)}`;
   const v = current?.value;
   let control = '';
-  if (kind === 'number') control = `<input id="${id}" type="number" min="0" step="any" inputmode="decimal" value="${v ?? ''}" aria-label="${esc(attrLabel(key))}">${UNIT_OF[key] === 'sqft' ? '<span class="small muted">sq ft</span>' : UNIT_OF[key] === 'm' ? '<span class="small muted">m</span>' : ''}`;
+  if (kind === 'number') control = `<input id="${id}" type="number" min="0" step="any" inputmode="decimal" value="${esc(v ?? '')}" aria-label="${esc(attrLabel(key))}">${UNIT_OF[key] === 'sqft' ? '<span class="small muted">sq ft</span>' : UNIT_OF[key] === 'm' ? '<span class="small muted">m</span>' : ''}`;
   else if (kind === 'text') control = `<input id="${id}" type="text" value="${esc(v ?? '')}" aria-label="${esc(attrLabel(key))}">`;
   else if (kind === 'bool') control = `<select id="${id}" aria-label="${esc(attrLabel(key))}"><option value="yes"${v === true ? ' selected' : ''}>Yes</option><option value="no"${v === false ? ' selected' : ''}>No</option></select>`;
   else if (kind === 'type') control = `<select id="${id}" aria-label="Property type"><option value="">Choose&hellip;</option>${PROPERTY_TYPES.map(([k, l]) => `<option value="${k}"${v === k ? ' selected' : ''}>${l}</option>`).join('')}</select>`;
   else if (kind === 'jurisdiction') control = `<input id="${id}-state" type="text" maxlength="2" value="${esc(v?.state ?? '')}" aria-label="State (2 letters)" placeholder="State, e.g. CA" style="width:7em"><input id="${id}-city" type="text" value="${esc(v?.city ?? '')}" aria-label="City" placeholder="City">`;
   else if (kind === 'equipment') control = EQUIPMENT.map(([k, l]) => `<label class="check"><input type="checkbox" id="${id}-${k}" value="${k}"${Array.isArray(v) && v.includes(k) ? ' checked' : ''}>${l}</label>`).join('');
-  return `<div class="edit-inline">${control}<button class="btn sm primary" id="save-${safeId(key)}" type="button" data-act="save-attr" data-key="${esc(key)}">Save</button><button class="btn sm" id="cancel-${safeId(key)}" type="button" data-act="cancel-attr">Cancel</button></div>`;
+  return `<div class="edit-inline">${control}<button class="btn sm primary" id="save-${safeId(key)}" type="button" data-act="save-attr" data-key="${esc(key)}">Apply</button><button class="btn sm" id="cancel-${safeId(key)}" type="button" data-act="cancel-attr">Cancel</button></div>`;
 }
 
 function profileHtml(view) {
@@ -348,7 +367,7 @@ function profileHtml(view) {
     <thead><tr><th scope="col">Attribute</th><th scope="col">Where it came from</th><th scope="col">Why</th><th scope="col">Fill in</th></tr></thead><tbody>${noneRows}</tbody></table></div>`) : '';
 
   return `<section class="card" aria-labelledby="h-profile">
-    <div class="section-title"><h2 id="h-profile">Your property</h2><span class="small muted">Correct anything that is wrong. Everything below updates at once.</span></div>
+    <div class="section-title"><h2 id="h-profile" tabindex="-1">Your property</h2><span class="small muted">Correct anything that is wrong. Everything below updates at once.</span></div>
     ${S.manual ? manualHtml() : ''}
     ${profileTable}
     <div style="margin-top:12px">${noneTable}</div>
@@ -480,7 +499,7 @@ function inputEditor(o, key, idp) {
   const id = `${idp}-${safeId(o.id)}-${key}`;
   const unit = CENTS_KEYS.has(key) ? '$' : RATE_KEYS.has(key) ? '%' : '';
   return `<div class="edit-inline"><label class="sr-only" for="${id}">${esc(INPUT_LABEL(key, o.unit))}</label>${unit === '$' ? '<span aria-hidden="true">$</span>' : ''}<input id="${id}" type="number" min="0" step="any" inputmode="decimal" data-input-edit="${esc(o.id)}|${key}">${unit === '%' ? '<span aria-hidden="true">%</span>' : ''}
-    <button class="btn sm primary" id="${idp}-save-${safeId(o.id)}-${key}" type="button" data-act="save-input" data-oid="${esc(o.id)}" data-key="${key}" data-field="${id}">Save</button>
+    <button class="btn sm primary" id="${idp}-save-${safeId(o.id)}-${key}" type="button" data-act="save-input" data-oid="${esc(o.id)}" data-key="${key}" data-field="${id}">Apply</button>
     ${idp === 'ei' ? `<button class="btn sm" id="ei-cancel-${safeId(o.id)}-${key}" type="button" data-act="cancel-input">Cancel</button>` : ''}</div>`;
 }
 
@@ -583,7 +602,7 @@ function comboHtml(view) {
     const head = SCENARIO_NAMES.map((s) => `<th scope="col">${cap(s)}</th>`).join('');
     const shown = (f, t) => (f === 'upfrontCents' && t.upfrontUnknownIds.length ? (t[f] === 0 ? 'Unknown' : `${money(t[f])} + unknown`) : money(t[f]));
     const row = (title, f, cls = '', attr = '') => `<tr><th scope="row">${title}</th>${totals.map(({ s, t }) => `<td class="${cls}" ${attr ? `data-scenario="${s}" data-period="${attr}" data-cents="${t[f]}"` : ''}>${shown(f, t)}</td>`).join('')}</tr>`;
-    const sel = opt.selected.map((id) => `<li><strong>${esc(label(id))}</strong> <span class="muted small">(${esc(BASIS_WORDS[byId[id]?.basis] ?? '')}, baseline ${money(estimates[id].scenarios.baseline.noiCentsPerYear)} a year on its own)</span></li>`).join('');
+    const sel = opt.selected.map((id) => `<li><strong>${esc(label(id))}</strong> <span class="muted small">(${esc(BASIS_WORDS[byId[id]?.basis] ?? '')}, ${money(estimates[id].scenarios.conservative.noiCentsPerYear)} to ${money(estimates[id].scenarios.optimistic.noiCentsPerYear)} a year on its own, baseline ${money(estimates[id].scenarios.baseline.noiCentsPerYear)})</span></li>`).join('');
     // Only compare the two totals when something eligible was left out; the naive sum covers exactly `eligibleIds`.
     const sameSet = opt.eligibleIds.length === opt.selected.length && opt.eligibleIds.every((id) => opt.selected.includes(id));
     result = `<div style="margin-top:14px"><h3>Best combination for you</h3>
@@ -631,12 +650,33 @@ function readEditor(key) {
   if (kind === 'bool') return { value: raw === 'yes' };
   if (kind === 'type') return raw ? { value: raw } : { error: 'Choose a property type.' };
   if (kind === 'text') return raw ? { value: raw } : { error: 'Type a value first.' };
+  return checkNumber(key, raw);
+}
+
+const INT_KEYS = new Set(['year_built', 'bedrooms', 'units', 'parking_spaces']);
+/** One place that decides whether a number typed for a property attribute is acceptable. */
+function checkNumber(key, raw) {
   const n = Number(raw);
-  if (raw === '' || !Number.isFinite(n) || n < 0) return { error: 'Enter a number that is zero or more.' };
+  if (String(raw).trim() === '' || !Number.isFinite(n) || n < 0) return { error: 'Enter a number that is zero or more.' };
+  if (n > 1e9) return { error: 'That number is too large. Check it and try again.' };
+  if (INT_KEYS.has(key) && !Number.isInteger(n)) return { error: 'Enter a whole number.' };
+  if (key === 'year_built' && (n < 1600 || n > new Date().getUTCFullYear() + 2)) return { error: `Enter a year between 1600 and ${new Date().getUTCFullYear() + 2}.` };
+  if (key === 'units' && n < 1) return { error: 'A property has at least one unit.' };
   return { value: n };
+}
+/** Show a rejected value next to the control as well as in the status line, so it is seen where the person is looking. */
+function inlineError(el, msg) {
+  if (!el) return;
+  const host = el.closest('.edit-inline') ?? el.parentElement;
+  host?.querySelector(':scope > .inline-err')?.remove();
+  const p = document.createElement('p');
+  p.className = 'inline-err'; p.setAttribute('role', 'alert'); p.textContent = msg;
+  host?.append(p);
+  el.setAttribute('aria-invalid', 'true');
 }
 
 function setOwner(key, value) {
+  S.dirty = true;
   S.profile = applyOwnerCorrection(S.profile, key, value, nowIso(), UNIT_OF[key]);
 }
 
@@ -657,7 +697,7 @@ document.addEventListener('click', (ev) => {
   if (act === 'pick') { lookup({ confirmMatchedAddress: S.confirmed, parcelApn: b.dataset.apn }); return; }
   if (act === 'cand-none') {
     S.phase = 'results'; S.manual = true; S.profile = S.result?.profile ?? createProfile(); S.open.add('missing-attrs');
-    announce('Enter the basics about your property below.'); S.keepStatus = true; renderAll(); return;
+    announce('Enter the basics about your property below.'); S.keepStatus = true; S.focusId = 'h-profile'; renderAll(); return;
   }
   if (act === 'edit-attr') { S.editAttr = b.dataset.key; if (S.profile.attributes[S.editAttr]?.tag === 'unavailable') S.open.add('missing-attrs'); S.focusId = `ed-${safeId(b.dataset.key)}${b.dataset.key === 'jurisdiction' ? '-state' : ''}`; S.selectOnFocus = S.focusId; renderAll(); return; }
   if (act === 'cancel-attr') { const k = S.editAttr; S.editAttr = null; S.focusId = `edit-${safeId(k)}`; renderAll(); return; }
@@ -674,7 +714,7 @@ document.addEventListener('click', (ev) => {
 
 function saveAttr(key) {
   const r = readEditor(key);
-  if (r.error) { announce(r.error, true); return; }
+  if (r.error) { announce(r.error, true); inlineError(document.getElementById(`ed-${safeId(key)}${key === 'jurisdiction' ? '-state' : ''}`), r.error); return; }
   setOwner(key, r.value);
   S.editAttr = null; S.focusId = `edit-${safeId(key)}`;
   renderAll();
@@ -682,8 +722,8 @@ function saveAttr(key) {
 function saveInput(oppId, key, fieldId) {
   const el = document.getElementById(fieldId);
   const r = parseInputRaw(key, el?.value ?? '');
-  if (r.error) { announce(r.error, true); el?.focus(); return; }
-  S.overrides[oppId] = { ...(S.overrides[oppId] ?? {}), [key]: r.value };
+  if (r.error) { announce(r.error, true); inlineError(el, r.error); el?.focus(); return; }
+  S.dirty = true; S.overrides[oppId] = { ...(S.overrides[oppId] ?? {}), [key]: r.value };
   S.editInput = null; S.focusId = `ei-edit-${safeId(oppId)}-${key}`;
   renderAll();
 }
@@ -707,7 +747,11 @@ document.addEventListener('change', (ev) => {
     else if (kind === 'text') { if (t.value.trim()) setOwner(key, t.value.trim()); }
     else if (kind === 'number') {
       const raw = t.value.trim();
-      if (raw !== '') { const n = Number(raw); if (Number.isFinite(n) && n >= 0) setOwner(key, n); else announce('Enter a number that is zero or more.', true); }
+      if (raw !== '') {
+        const r = checkNumber(key, raw);
+        if (r.error) { announce(r.error, true); inlineError(t, r.error); return; } // keep the field as typed, do not rebuild the page over the message
+        setOwner(key, r.value);
+      }
     } else if (kind === 'yard') {
       S.yardYes = t.value === 'yes';
       if (t.value === 'no') setOwner('yard_area_sqft', 0);
@@ -716,7 +760,11 @@ document.addEventListener('change', (ev) => {
       setOwner('equipment_owned', checked);
     } else if (kind === 'investments') S.includeInvestments = t.checked;
     else if (kind === 'goal') S.goal = t.value;
-    else if (kind === 'maxUpfront') S.maxUpfront = t.value.trim();
+    else if (kind === 'maxUpfront') {
+      S.maxUpfront = t.value.trim();
+      const mu = Number(S.maxUpfront);
+      if (S.maxUpfront !== '' && (!Number.isFinite(mu) || mu < 0)) { S.maxUpfront = ''; S.error = 'Enter the most you would spend as a number that is zero or more, or leave it empty for no limit. No limit is applied for now.'; }
+    }
     else if (kind === 'noStrangers') S.noStrangers = t.checked;
     else if (kind === 'onlyKnown') S.onlyKnownRules = t.checked;
     renderAll();
@@ -739,7 +787,7 @@ renderAll();
   try {
     addr = new URLSearchParams(location.hash.replace(/^#/, '')).get('address') || new URLSearchParams(location.search).get('address') || '';
   } catch { addr = ''; }
-  addr = addr.trim();
+  addr = addr.trim().slice(0, MAX_ADDRESS);
   if (!addr) return;
   try { history.replaceState(null, '', location.pathname); } catch { /* ignore */ }
   els.input.value = addr;
