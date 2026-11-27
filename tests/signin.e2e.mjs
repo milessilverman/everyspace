@@ -67,7 +67,9 @@ window.supabase = { createClient(url, key) {
 } };`;
 
 class Backend {
+  static all = [];
   constructor(data = {}) {
+    Backend.all.push(this);
     this.db = structuredClone(data); this.log = []; this.unmocked = []; this.fail = {}; this.fn = {}; this.delay = 0; this.seq = 0;
     this.users = { [EMAIL]: PASSWORD }; this.unconfirmed = new Set(); this.restDown = null; this.jwtExpired = false;
   }
@@ -223,7 +225,7 @@ try {
     await page.unroute('**/auth/v1/token**');
 
     // ---------------------------------------------------------------- 5. create account
-    await page.click('a[data-act=authmode]'); // "Create an account"
+    await page.click('a[data-act=authmode]:not([data-mode])'); // "Create an account"
     check((await text(page, 'h1')) === 'Create your host account', 'Create an account switches to the sign-up form');
     check(await page.locator('#authForm input[name=name]').count() === 1, 'sign-up asks for a name');
     await page.fill('#authForm input[name=email]', 'new@example.test'); await page.fill('#authForm input[name=password]', 'longenough1');
@@ -242,9 +244,9 @@ try {
     check(suBody.data?.full_name === 'New Host' && suBody.email === 'new@example.test', 'sign-up sends the name and email');
     check(decodeURIComponent(su.query.split('redirect_to=')[1]) === PAGE, `confirmation link returns to this same page (${decodeURIComponent(su.query.split('redirect_to=')[1])})`);
     check((await text(page, 'h1')) === 'Sign in' && /check your email/i.test(await text(page, '#authMsg')), 'after sign-up the page says to check email and shows Sign in');
-    await page.click('a[data-act=authmode]');
+    await page.click('a[data-act=authmode]:not([data-mode])');
     check((await text(page, 'h1')) === 'Create your host account', 'the "Create an account" link still works after a sign-up message');
-    await page.click('a[data-act=authmode]');
+    await page.click('a[data-act=authmode]:not([data-mode])');
     check((await text(page, 'h1')) === 'Sign in', 'the "Sign in" link goes back to Sign in');
 
     // ---------------------------------------------------------------- 6. forgot password never reveals whether the email exists
@@ -306,14 +308,12 @@ try {
     check(await signedOut(page), 'expired session shows no console');
     // back in, then the data service rejects the token mid-use
     await page.fill('#authForm input[name=email]', EMAIL); await page.fill('#authForm input[name=password]', PASSWORD); await page.click('#authForm button[type=submit]'); await dashboard(page);
-    check((await text(page, '#authMsg').catch(() => '')) === '' || true, 'signing in again works');
     b.fn['calendar-sync'] = async () => ({ status: 401, body: { code: 401, message: 'Invalid JWT' } });
     await page.click('[data-act=syncall]'); await page.waitForSelector('#authForm');
     check(/session ended/i.test(await text(page, '#authMsg')), 'a 401 from an action returns to sign-in with a message');
     await page.fill('#authForm input[name=email]', EMAIL); await page.fill('#authForm input[name=password]', PASSWORD); await page.click('#authForm button[type=submit]'); await dashboard(page);
     await page.reload(); await page.waitForSelector('.tabs'); b.jwtExpired = true; // the token is rejected on the next load
     await page.reload(); await page.waitForSelector('#authForm');
-    check(/session ended/i.test(await text(page, '#authMsg')) || true, 'an expired token on load returns to sign-in');
     check(await signedOut(page) && /session ended/i.test(await text(page, '#authMsg')), 'an expired token on load explains why');
     expected(/401|Failed to load resource/);
     await context.close();
@@ -363,7 +363,8 @@ try {
   }
 
   check(errors.length === 0, `zero console errors and unhandled rejections${errors.length ? ': ' + errors.join(' | ') : ''}`);
-  check(seen.other.length === 0, `zero unmocked requests to other hosts${seen.other.length ? ': ' + seen.other.join(' | ') : ''}`);
+  const unmocked = [...seen.other, ...Backend.all.flatMap((x) => x.unmocked)];
+  check(unmocked.length === 0, `zero unmocked requests${unmocked.length ? ': ' + unmocked.join(' | ') : ''}`);
   check(seen.supabase > 0, `backend requests were intercepted (${seen.supabase})`);
 } catch (e) { check(false, 'test crashed: ' + e.stack); }
 finally { await browser.close(); server.close(); }

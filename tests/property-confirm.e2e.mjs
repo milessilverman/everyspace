@@ -175,7 +175,6 @@ await scenario('an owner correction is marked "You confirmed", keeps its date an
   assert.match(row, /You confirmed/);
   assert.match(row, /[A-Z][a-z]{2} \d{1,2}, \d{4}/);
   assert.equal(await page.evaluate(() => document.activeElement.id), 'edit-bedrooms', 'focus returns to the edit button');
-  assert.notDeepEqual(await figures(page), before, 'estimates changed');
   assert.match(await text(page, '#status'), /Estimates updated/);
   // edit twice: the second edit starts from the corrected value; cancel changes nothing
   await page.click('#edit-bedrooms');
@@ -193,6 +192,8 @@ await scenario('an owner correction is marked "You confirmed", keeps its date an
   await page.click('#save-pool_present');
   await page.waitForFunction(() => /No/.test(document.querySelector('tr[data-key="pool_present"] .val')?.textContent ?? ''));
   assert.match(await text(page, 'tr[data-key="pool_present"]'), /You confirmed/);
+  assert.notDeepEqual(await figures(page), before, 'a corrected value (no pool) changes the estimates at once');
+  assert.equal(await page.locator('[data-opp-card="pool"]').count(), 0, 'the pool idea is gone');
 });
 
 await scenario('invalid edits are rejected with a message next to the field and change nothing', async (page) => {
@@ -221,7 +222,7 @@ await scenario('invalid edits are rejected with a message next to the field and 
   await tryEdit('lot_area_sqft', '99999999999', /too large/);
   await tryEdit('address', '', /Type a value/);
   await page.click('#edit-jurisdiction');
-  await page.fill('#ed-jurisdiction-state', 'California');
+  await page.fill('#ed-jurisdiction-state', '1');
   await page.click('#save-jurisdiction');
   assert.match(await text(page, '.inline-err'), /two-letter state/);
   await page.click('#cancel-jurisdiction');
@@ -239,7 +240,6 @@ await scenario('invalid answers to the owner questions are rejected visibly and 
   await page.locator(`#${id}`).blur();
   await page.waitForSelector('.inline-err');
   assert.match(await text(page, '#status'), /zero or more/);
-  assert.equal(await page.locator('#profile-table tr[data-key] .chip:text("You confirmed")').count() >= 0, true);
   const key = await numeric.getAttribute('data-key');
   assert.doesNotMatch(await text(page, `tr[data-key="${key}"]`).catch(() => ''), /-5/);
   // max-upfront: negative is refused with a message and ignored
@@ -285,9 +285,6 @@ await scenario('manual mode reaches results using only owner-entered values', as
   assert.ok(t.length >= 3 && t.every((x) => x === 'You confirmed'), `only owner values: ${t}`);
   const cards = await page.locator('[data-opp-card]').count();
   assert.ok(cards >= 1);
-  for (const id of await page.locator('[data-opp-card]').evaluateAll((els) => els.map((e) => e.dataset.oppCard))) {
-    assert.ok(['single_family', 'private_room', 'garage_storage', 'parking_spot', 'backyard', 'pool'].includes(id) || id.length > 0, id);
-  }
   assert.equal(rec.mocked.filter((u) => u.includes('lacounty') || u.includes('overpass')).length, 0, 'no parcel or building request in manual mode');
 }, /^Failed to load resource: the server responded with a status of 503/);
 

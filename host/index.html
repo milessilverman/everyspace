@@ -148,6 +148,7 @@ input:focus, select:focus, .btn:focus-visible, .tabs button:focus-visible { outl
 .empty { text-align: center; padding: 26px 16px; color: var(--muted); }
 details.more > summary { cursor: pointer; color: var(--accent); font-weight: 600; font-size: 13px; list-style: none; }
 details.more > summary::-webkit-details-marker { display: none; }
+main a[data-tab] { display: inline-flex; align-items: center; min-height: 32px; padding: 0 6px; }
 .kpi { font-family: var(--display); font-size: 28px; font-weight: 700; }
 dialog { border: 1px solid var(--line); border-radius: 16px; padding: 0; background: var(--surface); color: var(--ink); width: min(560px, calc(100% - 32px)); box-shadow: 0 20px 60px rgba(0,0,0,.25); }
 dialog::backdrop { background: rgba(10, 15, 20, .45); }
@@ -842,6 +843,7 @@ function start() {
     if (event === 'PASSWORD_RECOVERY') { S.recovering = true; S.authMode = 'newpw'; }
     if (!S.user) {
       if (was && !S.signingOut) notify(SESSION_ENDED); // signed out by the server (expired or revoked), not by the host
+      if (S.authMode === 'newpw') S.authMode = 'signin';
       S.recovering = false; resetData(); render(); return;
     }
     if (S.recovering) { render(); return; }

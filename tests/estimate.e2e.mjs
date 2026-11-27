@@ -672,6 +672,26 @@ await scenario('a second search does not silently discard owner corrections', as
   assert.equal(nominatimQs(rec).length, before + 1, 'second press searches again');
 });
 
+await scenario('keyboard only: type, Enter, focus lands on the results heading, edit with Enter, status announces', async (page, rec) => {
+  await page.goto(URL_PAGE);
+  await page.keyboard.press('Tab'); // skip link
+  assert.equal(await page.evaluate(() => document.activeElement.className), 'skip');
+  await page.keyboard.press('Tab');
+  assert.equal(await page.evaluate(() => document.activeElement.tagName), 'A', 'Start over link comes next');
+  await page.focus('#address');
+  await page.keyboard.type(VENICE);
+  await page.keyboard.press('Enter');
+  await page.waitForSelector('#profile-table');
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'h-profile', 'focus moves to the results heading');
+  assert.match(await text(page, '#status'), /Estimates updated|Property found/);
+  assert.equal(await page.getAttribute('#status', 'aria-atomic'), 'true');
+  await page.focus('#edit-bedrooms');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('4');
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => document.activeElement.id === 'edit-bedrooms' && /4/.test(document.querySelector('tr[data-key="bedrooms"] .val').textContent));
+});
+
 // zero unmocked external requests across every scenario
 const totalExternal = allRecs.flatMap((r) => r.external);
 if (totalExternal.length) failures.push(`unmocked external requests: ${totalExternal.join(', ')}`);
