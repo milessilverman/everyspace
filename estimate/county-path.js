@@ -114,7 +114,9 @@ export async function runCountyPath(typed, ctx) {
   let osmReason = point ? null : 'no map location';
   let osm = null;
   if (point) {
-    const far = Math.max(...boundary.coordinates.flatMap((p) => p[0]).map((c) => distanceM(point, { lat: c[1], lng: c[0] })));
+    // The outline may be a Polygon (rings) or a MultiPolygon (polygons of rings): take every outer ring's vertices.
+    const outer = boundary?.type === 'MultiPolygon' ? boundary.coordinates.flatMap((poly) => poly[0] ?? []) : (boundary?.coordinates?.[0] ?? []);
+    const far = Math.max(0, ...outer.map((c) => distanceM(point, { lat: c[1], lng: c[0] })).filter(Number.isFinite));
     osm = await overpassNear(point, { buildingRadiusM: Math.min(400, Math.max(40, Math.ceil(far) + 15)) }, deps);
     if (!osm.ok) osmReason = osm.reason;
   }

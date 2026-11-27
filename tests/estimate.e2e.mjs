@@ -887,6 +887,10 @@ await scenario('county path: desktop screenshot of "Your property" with the new 
   await page.locator('section[aria-labelledby="h-profile"]').screenshot({ path: `${SHOTS}/wire/your-property-1280.png` });
 }), { width: 1280, height: 1100 });
 
+// no lookup request may ever carry a broken number (regression: an outline of type Polygon produced "around:NaN")
+const brokenUrls = allRecs.flatMap((r) => r.mocked).filter((u) => /NaN|undefined/.test(decodeURIComponent(u)));
+if (brokenUrls.length) failures.push(`lookup requests with a broken value: ${brokenUrls.slice(0, 3).join(', ')}`);
+
 // zero unmocked external requests across every scenario
 const totalExternal = allRecs.flatMap((r) => r.external);
 if (totalExternal.length) failures.push(`unmocked external requests: ${totalExternal.join(', ')}`);
