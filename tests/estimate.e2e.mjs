@@ -692,6 +692,31 @@ await scenario('keyboard only: type, Enter, focus lands on the results heading, 
   await page.waitForFunction(() => document.activeElement.id === 'edit-bedrooms' && /4/.test(document.querySelector('tr[data-key="bedrooms"] .val').textContent));
 });
 
+await scenario('small fixes: no-JavaScript notice, Overpass disclosure, "Apply" label, range per selected idea, step count wording', async (page, rec, ctx) => {
+  const nojs = await ctx.browser().newContext({ javaScriptEnabled: false });
+  const p2 = await nojs.newPage();
+  await p2.goto(URL_PAGE);
+  assert.match((await p2.locator('noscript').first().innerText().catch(() => '')) || (await p2.locator('main').innerText()), /needs JavaScript/);
+  await nojs.close();
+  await page.goto(URL_PAGE);
+  assert.match(await text(page, '#address-help'), /map location is then sent to OpenStreetMap's Overpass service/);
+  await search(page, FAIL);
+  await page.waitForSelector('#manual-basics');
+  assert.match(await text(page, 'details[data-dk="steplog"] summary'), /\(5 steps, 5 failed\)/);
+  await page.goto(URL_PAGE);
+  await search(page, SPRING_N);
+  await page.waitForSelector('#confirm-yes');
+  assert.match(await text(page, 'details[data-dk="steplog"] summary'), /\(1 step\)/, 'singular for one step');
+  await page.goto(URL_PAGE);
+  await search(page, VENICE);
+  await page.waitForSelector('#profile-table');
+  assert.equal(await page.locator('#save-bedrooms, [data-act="save-attr"]').count(), 0, 'no editor open yet');
+  await page.click('#edit-bedrooms');
+  assert.equal(await text(page, '#save-bedrooms'), 'Apply');
+  const li = await text(page, '#combo-selected li');
+  assert.match(li, /\$[\d,]+ to \$[\d,]+ a year on its own, baseline \$[\d,]+/, 'a range, not a lone number');
+}, { width: 1280, height: 900 }, 1, /^Failed to load resource: the server responded with a status of 503/);
+
 // zero unmocked external requests across every scenario
 const totalExternal = allRecs.flatMap((r) => r.external);
 if (totalExternal.length) failures.push(`unmocked external requests: ${totalExternal.join(', ')}`);

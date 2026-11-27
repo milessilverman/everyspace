@@ -59,7 +59,8 @@ None found: the public pages contain no sign-in, save, account or marketplace pr
 ## Broken and NOT fixed
 1. Unknown URLs (`/demo`, typos) give the generic GitHub Pages 404. Fix needs a root `404.html` (outside my files).
 2. README line 46 ("The home page does not link to it yet") is stale: the homepage opens the estimator. Outside the README Tests section.
-3. Core observations, no patch: `ATTR` year, units and area values coming from parcel data are not range-checked in `applyOwnerCorrection` (the page now guards typed input only). Minimal reproduction: `applyOwnerCorrection(createProfile(), 'year_built', 12, now)` returns a profile without error.
+3. Core observation, not patched: `applyOwnerCorrection` does no range check (the page now guards typed input only). Verified reproduction: `applyOwnerCorrection(createProfile(), 'year_built', 12, now)` returns `{value:12, tag:'owner-confirmed', confidence:1}` with no error.
+   Also: root `package.json` has no `"type"`, so Node prints a harmless module-type warning when it loads `core/*.js` directly.
 4. Combination "adding up" sentence shows baseline only.
 5. `tests/host-nav.e2e.mjs` fails in `npm run e2e` while the other agent edits it (button size and a click timeout); not mine.
 
@@ -70,4 +71,6 @@ Only finding: the Supabase anon JWT in `host/index.html:166` (decoded role `anon
 Real Nominatim, county parcel service and Overpass behaviour (all mocked); real phones, Safari, Firefox (Chromium only); screen readers (aria attributes and focus checked, speech not); GitHub Pages' own redirects (emulated); bfcache behaviour on back/forward in other browsers; the Host Console beyond its sign-in screen.
 
 ## Commands
-`npm test` 257 pass. `npm run e2e` runs every `tests/*.e2e.mjs`. Own files: home 10, estimate 19, property-confirm 8, navigation 12 scenarios, all pass.
+`npm test` 257 pass. `npm run e2e` runs every `tests/*.e2e.mjs`. Own files: home 10, estimate 20, property-confirm 8, navigation 12 scenarios, all pass.
+
+Note: the coordinator's environment update named `/home/user/everyspace-pd` as the working directory; my brief forbids touching it, so all work stayed in `/home/user/everyspace`. The product name Everyspace is unchanged.

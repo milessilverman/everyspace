@@ -121,7 +121,8 @@ class Backend {
         }
         return json(201, out);
       }
-      if (method === 'PATCH') { const hit = rows.filter(match); hit.forEach((r) => Object.assign(r, req.postDataJSON())); return json(200, hit); }
+      if (method === 'PATCH') { const hit = rows.filter(match); const pb = req.postDataJSON();
+        if (t === 'channel_listings' && pb.booking_mode === 'instant' && hit.some((h) => rows.some((r) => r !== h && r.space_id === h.space_id && r.booking_mode === 'instant'))) return json(400, { code: 'P0001', message: 'Only one site can take instant bookings for the same space. airbnb already does for "x".' }); hit.forEach((r) => Object.assign(r, req.postDataJSON())); return json(200, hit); }
       if (method === 'DELETE') { const hit = rows.filter(match); this.db[t] = rows.filter((r) => !hit.includes(r)); return json(200, hit); }
     }
     this.unmocked.push(`${method} ${p}`); return route.abort();
