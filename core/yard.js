@@ -413,6 +413,48 @@ function nearestEdge(edges, target, exclude) {
   return { best: tied[0], tied, D, scored };
 }
 
+/** Edges shorter than this never seed the front by the facing rule (corner chamfers, digitising noise). */
+const MIN_FACING_EDGE_M = 1.5;
+/** Fractions along an edge from which the outward rays are cast. */
+const RAY_AT = [0.2, 0.5, 0.8];
+
+/** Distance along the ray p + s*d (s > 0) to segment ab, or Infinity. */
+function rayHit(p, d, a, b) {
+  const ex = b[0] - a[0], ey = b[1] - a[1];
+  const den = d[0] * ey - d[1] * ex;
+  if (Math.abs(den) < 1e-12) return Infinity;
+  const wx = a[0] - p[0], wy = a[1] - p[1];
+  const s = (wx * ey - wy * ex) / den, t = (wx * d[1] - wy * d[0]) / den;
+  return s > 1e-9 && t >= 0 && t <= 1 ? s : Infinity;
+}
+
+/**
+ * The edge facing the street: for each edge (CCW ring, so outward = right of the edge) rays are cast outward, square to the edge, from
+ * RAY_AT points; the edge's facing distance is the median of the hits when at least two of the three rays meet the street. Smallest
+ * facing distance wins; edges within FRONT_TIE_M of it are tied and the longer edge wins. Null when no edge faces the street within
+ * MAX_STREET_DISTANCE_M. @param {any[]} edges @param {number[][][]} lines
+ */
+function rayFront(edges, lines) {
+  const all = [];
+  for (const e of edges) {
+    if (e.len < MIN_FACING_EDGE_M) continue;
+    const out = [e.uy, -e.ux];
+    const hits = [];
+    for (const f of RAY_AT) {
+      const p = [e.a[0] + f * (e.b[0] - e.a[0]), e.a[1] + f * (e.b[1] - e.a[1])];
+      let best = Infinity;
+      for (const l of lines) for (let k = 0; k + 1 < l.length; k++) best = Math.min(best, rayHit(p, out, l[k], l[k + 1]));
+      if (best <= K.MAX_STREET_DISTANCE_M) hits.push(best);
+    }
+    if (hits.length >= 2) { hits.sort((x, y) => x - y); all.push({ e, d: hits.length === 3 ? hits[1] : (hits[0] + hits[1]) / 2 }); }
+  }
+  if (!all.length) return null;
+  all.sort((x, y) => x.d - y.d || y.e.len - x.e.len || x.e.i - y.e.i);
+  const D = all[0].d;
+  const tied = all.filter((h) => h.d <= D + K.FRONT_TIE_M).sort((x, y) => y.e.len - x.e.len || x.e.i - y.e.i);
+  return { e: tied[0].e, d: tied[0].d, all };
+}
+
 const angleDirected = (e, f) => Math.acos(Math.max(-1, Math.min(1, e.ux * f.ux + e.uy * f.uy))) * DEG;
 const angleUndirected = (ux, uy, vx, vy) => Math.acos(Math.min(1, Math.abs(ux * vx + uy * vy))) * DEG;
 const bearingOf = (x, y) => ((Math.atan2(x, y) * DEG) % 360 + 360) % 360; // compass: 0 = north, clockwise
@@ -456,7 +498,13 @@ function frontOfPart(part, streets, proj) {
     }
   }
   const ranked = nearestEdge(edges, target, new Set());
-  const star = ranked.best;
+  // With a centreline, the edge that FACES the street wins over the edge that merely comes nearest to it: near a junction the
+  // centreline curves round the corner (or a junction connector is drawn there), so the corner vertex is nearest to it and a short
+  // corner edge or the side edge could be taken. "Faces" = a ray cast outward, square to the edge, from points along it, meets the
+  // street (rayFront). Measured on Los Angeles corner lots (docs/yard-accuracy.md, Stage 1). Falls back to the nearest edge when no
+  // edge faces the street within MAX_STREET_DISTANCE_M.
+  const facing = target.lines ? rayFront(edges, target.lines) : null;
+  const star = facing ? (ranked.scored.find((s) => s.e.i === facing.e.i) ?? ranked.best) : ranked.best;
   const what = streets.mode === 'centreline' ? 'street centreline' : 'front point';
   if (star.d > K.MAX_STREET_DISTANCE_M) {
     return { ok: false, reason: `the ${what} is ${star.d.toFixed(1)} m from the parcel (more than ${K.MAX_STREET_DISTANCE_M} m): not treated as its frontage` };
@@ -487,8 +535,10 @@ function frontOfPart(part, streets, proj) {
   const frontFraction = frontLen / lotWidth;
 
   let ambiguous = false;
-  const rival = ranked.tied.find((s) => !gSet.has(s.e.i));
-  if (rival && rival.m <= star.m + K.AMBIGUOUS_MID_M && angleUndirected(rival.e.ux, rival.e.uy, ux, uy) > K.FRONT_GROUP_MAX_ANGLE_DEG) {
+  const rival = facing
+    ? facing.all.find((h) => !gSet.has(h.e.i) && h.d <= facing.d + K.FRONT_TIE_M && angleUndirected(h.e.ux, h.e.uy, ux, uy) > K.FRONT_GROUP_MAX_ANGLE_DEG)
+    : ((r) => (r && r.m <= star.m + K.AMBIGUOUS_MID_M ? r : null))(ranked.tied.find((s) => !gSet.has(s.e.i)));
+  if (rival && angleUndirected(rival.e.ux, rival.e.uy, ux, uy) > K.FRONT_GROUP_MAX_ANGLE_DEG) {
     ambiguous = true;
     warnings.push('front ambiguous: another parcel edge is about as near the street in a different direction');
     factors.push({ name: 'AMBIGUOUS_FRONT', factor: C.AMBIGUOUS_FRONT });
@@ -681,6 +731,7 @@ export function splitYard(input) {
 
   const precise = { lotSqft: m2ToSqft(lotM2), buildingSqft: m2ToSqft(builtM2), openSqft: m2ToSqft(openM2), frontYardSqft: null, backYardSqft: null, sideYardSqft: null };
   let yardReason = null, houseInfo = null;
+  /** @type {any} */ let bands = null;
   const method = `front line = ${f.report.how}; depth bands at the house's front and rear building lines; `
     + 'areas by exact half-plane clipping (Sutherland-Hodgman) of the parcel with signed fan triangles of each footprint'
     + `${overlapCount ? ' and inclusion-exclusion for overlaps' : ''}; local equirectangular frame around the parcel centroid`;
@@ -705,6 +756,7 @@ export function splitYard(input) {
     precise.backYardSqft = m2ToSqft(band([hiOut]));
     precise.sideYardSqft = m2ToSqft(band([loOut, hi]));
     houseInfo = { index: house.index, frontSetbackM: d1, rearLineDepthM: d2 };
+    bands = { origin: proj.origin, nx, ny, depth0, d1, d2 };
   }
   const rnd = (v) => (v == null ? null : Math.round(v));
   return {
@@ -724,6 +776,24 @@ export function splitYard(input) {
     confidenceFactors: factors,
     warnings,
     precise,
+    ...(bands ? { bands } : {}),
+  };
+}
+
+/**
+ * The yard zone of a point, with the same depth bands splitYard measured (front: depth < d1, back: depth > d2, side: between). For
+ * pixels of an aerial photo (core/aerial.js). Returns null for a failed or unsplit result. Does not test whether the point is on the lot.
+ * @param {any} result splitYard output
+ * @returns {((lng:number, lat:number)=>('front'|'back'|'side'))|null}
+ */
+export function yardZoneAt(result) {
+  const b = result && result.ok ? result.bands : null;
+  if (!b) return null;
+  const proj = localProjection(b.origin);
+  return (lng, lat) => {
+    const [x, y] = proj.toXY([lng, lat]);
+    const d = x * b.nx + y * b.ny - b.depth0;
+    return d < b.d1 ? 'front' : d > b.d2 ? 'back' : 'side';
   };
 }
 

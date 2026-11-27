@@ -26,7 +26,7 @@ const FAIL = '1 Failville Rd, Nowhere, ZZ 00000';
 const APN = '5149007006';
 
 /** Hosts other data sources may ask (county lookup, Overture): answered "not here". */
-const OTHER_SOURCES = /(^|\.)(geo\.fcc\.gov|tigerweb\.geo\.census\.gov|stac\.overturemaps\.org|amazonaws\.com)$/;
+const OTHER_SOURCES = /(^|\.)(geo\.fcc\.gov|tigerweb\.geo\.census\.gov|stac\.overturemaps\.org|amazonaws\.com|imagery\.nationalmap\.gov|planetarycomputer\.microsoft\.com)$/;
 const SHOTS = '/tmp/claude-0/-home-user/bbdf9db1-6a70-50d8-8c4a-2fe889e65e9c/scratchpad/ux';
 fs.mkdirSync(SHOTS, { recursive: true });
 let override = null; // a scenario may replace the county services' answers: (url, decodedUrl) => {status, body} | undefined
@@ -124,7 +124,16 @@ const ownerText = (page) => page.evaluate(() => {
   const t = main.innerText; main.remove(); return t;
 });
 /** every dollar figure on the page, in document order: changes when the results change */
-const figures = (page) => page.locator('[data-cents]').evaluateAll((els) => els.map((e) => `${e.dataset.opp ?? 'combo'}|${e.dataset.scenario}|${e.dataset.period}|${e.dataset.cents}`));
+/** (they live on page 2: this goes there and comes back to the property list) */
+async function toEarn(page) { if (!(await page.locator('#view-earn').isVisible())) await page.click('#next-earn'); await page.waitForSelector('#earn-headline'); }
+async function toProperty(page) { if (await page.locator('#view-earn').isVisible()) await page.click('#back-property'); await page.waitForSelector('#facts'); }
+async function figures(page) {
+  await toEarn(page);
+  const f = await page.locator('[data-cents]').evaluateAll((els) => els.map((e) => `${e.dataset.opp ?? 'combo'}|${e.dataset.scenario}|${e.dataset.period}|${e.dataset.cents}`));
+  await toProperty(page);
+  return f;
+}
+const hasCard = async (page, id) => { await toEarn(page); const n = await page.locator(`[data-opp-card="${id}"]`).count(); await toProperty(page); return n; };
 
 console.log('property confirm e2e');
 
@@ -172,7 +181,7 @@ await scenario('parcel picker: several matches -> pick yours; "None of these" gi
 await scenario('the list: plain lines in the owner order, values are inputs, internals hidden, address and parcel once in the heading', async (page) => {
   await happy(page);
   const keys = await page.locator('#facts .fact').evaluateAll((els) => els.map((e) => e.dataset.key));
-  const ORDER = ['lot_area_sqft', 'living_area_sqft', 'bedrooms', 'bathrooms', 'floors', 'year_built', 'roof_area_sqft', 'front_yard_sqft', 'back_yard_sqft', 'side_yard_sqft', 'yard_area_sqft', 'building_footprint_sqft', 'pool_present', 'parking_spaces', 'garage_present'];
+  const ORDER = ['lot_area_sqft', 'living_area_sqft', 'bedrooms', 'bathrooms', 'floors', 'year_built', 'remodeled_year', 'roof_area_sqft', 'front_yard_sqft', 'back_yard_sqft', 'side_yard_sqft', 'yard_area_sqft', 'building_footprint_sqft', 'pool_present', 'parking_spaces', 'garage_present'];
   assert.deepEqual(keys.slice(0, ORDER.length), ORDER, 'owner order');
   for (const k of ['address', 'location', 'parcel_boundary', 'use_code', 'use_type', 'buildings', 'parcel_id', 'jurisdiction']) assert.ok(!keys.includes(k), `${k} hidden`);
   assert.match(await text(page, '#h-profile'), /Venice/);
@@ -219,7 +228,6 @@ await scenario('inline edit: type over a value, Enter applies, commas accepted, 
   assert.equal(await page.inputValue('#f-bedrooms'), '9');
   assert.match(await text(page, `${row('bedrooms')} .fact-meta`), /Edited by you\s*Undo/);
   assert.equal(await page.evaluate(() => document.activeElement.id), 'f-bedrooms', 'focus stays on the value');
-  assert.match(await text(page, '#status'), /Estimates updated/);
   // commas, applied by leaving the field
   await typeFact(page, 'lot_area_sqft', '7,250', 'blur');
   await page.waitForSelector(`${row('lot_area_sqft')}[data-state="edited"]`);
@@ -233,11 +241,11 @@ await scenario('inline edit: type over a value, Enter applies, commas accepted, 
   await page.waitForSelector(`${row('pool_present')}[data-state="edited"]`);
   assert.equal(await page.getAttribute('#f-pool_present-no', 'aria-pressed'), 'true');
   assert.equal(await page.getAttribute('#f-pool_present-yes', 'aria-pressed'), 'false');
-  assert.equal(await page.locator('[data-opp-card="pool"]').count(), 0, 'no pool idea');
+  assert.equal(await hasCard(page, 'pool'), 0, 'no pool idea');
   await page.click('#f-pool_present-yes');
   await page.waitForFunction(() => document.querySelector('#f-pool_present-yes').getAttribute('aria-pressed') === 'true');
   assert.equal(await page.evaluate(() => document.activeElement.id), 'f-pool_present-yes', 'focus stays on the toggle');
-  assert.equal(await page.locator('[data-opp-card="pool"]').count(), 1, 'a yes adds the pool idea');
+  assert.equal(await hasCard(page, 'pool'), 1, 'a yes adds the pool idea');
   // a property type from the list
   await page.selectOption('#f-property_type', 'condo');
   await page.waitForSelector(`${row('property_type')}[data-state="edited"]`);
@@ -335,6 +343,7 @@ await scenario('owner questions: yes/no answers are toggles in the same style; a
     await page.waitForSelector('details[data-dk="questions"] .fact-hint');
     assert.equal(await page.inputValue(`#${id}`), '');
   }
+  await toEarn(page);
   await page.fill('#max-upfront', '-100');
   await page.locator('#max-upfront').blur();
   await page.waitForSelector('#input-error');
@@ -376,6 +385,7 @@ await scenario('every lookup fails: one actionable sentence, the same list with 
   await page.waitForSelector(`${row('property_type')}[data-state="edited"]`);
   await typeFact(page, 'bedrooms', '3');
   await page.click('#f-garage_present-yes');
+  await toEarn(page);
   await page.waitForSelector('[data-opp-card]');
   assert.equal(rec.mocked.filter((u) => u.includes('overpass')).length, 0, 'no map extras without a location');
 }, /^Failed to load resource: the server responded with a status of 503/);
@@ -404,6 +414,7 @@ await scenario('skip the lookup: the same list, nothing looked up, owner values 
   await page.selectOption('#f-property_type', 'single_family');
   await page.waitForSelector(`${row('property_type')}[data-state="edited"]`);
   await typeFact(page, 'yard_area_sqft', '1,200');
+  await toEarn(page);
   await page.waitForSelector('[data-opp-card]');
   assert.equal(rec.mocked.length, 0, 'nothing was asked of any service');
 });

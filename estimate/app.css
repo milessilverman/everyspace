@@ -49,6 +49,9 @@ button, input, select { font: inherit; color: inherit; }
 main { padding: 22px 0 40px; }
 main > section, main > div { margin-top: 22px; }
 main > :first-child { margin-top: 0; }
+#view-property > * { margin-top: 22px; }
+#view-property > :first-child { margin-top: 0; }
+#view-property[hidden], #view-earn[hidden], .next-bar[hidden] { display: none; }
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 18px; box-shadow: var(--shadow); }
 .card.flat { box-shadow: none; }
 .section-title { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin: 0 0 12px; flex-wrap: wrap; }
@@ -205,4 +208,31 @@ footer p + p { margin-top: 6px; }
   .fact-meta { grid-column: 2; }
   .approx:empty { display: none; }
   .fact:not([data-state="edited"]) .fact-meta { display: none; }
+}
+
+/* two pages: the property list, then what it could earn */
+.next-bar { display: flex; justify-content: flex-end; padding-bottom: 8px; }
+.btn.lg { min-height: 48px; padding: 11px 22px; font-size: 16px; border-radius: 12px; }
+.next-top { display: none; margin-top: 10px; }
+.back { display: inline-block; font-weight: 600; font-size: 14px; padding: 4px 0; }
+#h-earn:focus, #h-address:focus { outline: none; }
+#h-earn:focus-visible, #h-address:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+.headcard { border-color: var(--accent-line); background: var(--accent-soft); }
+.headline { font-family: var(--display); font-size: 26px; line-height: 1.25; font-weight: 600; letter-spacing: -.01em; }
+.headline strong { font-weight: 800; white-space: nowrap; }
+.headline.none { font-size: 19px; }
+.headcard > p + p { margin-top: 8px; }
+.notice p + p { margin-top: 6px; }
+.opp.compact { padding: 14px 16px; }
+.opp.compact > header { margin-bottom: 4px; }
+.opp .range { font-family: var(--display); font-size: 18px; font-weight: 700; margin-bottom: 6px; font-variant-numeric: tabular-nums; }
+.opp .reason { margin-bottom: 8px; }
+.opp.compact > details.panel { margin-top: 8px; }
+.opp.compact > .callout { margin: 8px 0; }
+#h-incl, #h-left, #h-inv, #h-goal { font-size: 18px; }
+#view-earn .section-title { margin-bottom: 8px; }
+@media (max-width: 680px) {
+  .next-bar .btn { width: 100%; }
+  .next-top { display: inline-flex; width: 100%; }
+  .headline { font-size: 22px; }
 }

@@ -51,6 +51,8 @@ export function createOvertureCache() {
 let shared = createOvertureCache();
 /** Forget the module-level cache (tests, or to force a fresh catalog read). */
 export function clearOvertureCache() { shared = createOvertureCache(); }
+/** The module-level cache (shared with the Overture roads provider, so one catalog read serves both). */
+export function sharedOvertureCache() { return shared; }
 
 /**
  * One polygon's rings (open, in decoding order: outer then holes) -> GeoJSON rings: closed, outer counter-clockwise, holes clockwise.
@@ -87,7 +89,7 @@ function mainCentroid(g) {
  * The current release name from the catalog (cached one day), refreshing when asked.
  * @returns {Promise<{ok:true, release:string, fromCache:boolean}|{ok:false, reason:string, code:string}>}
  */
-async function resolveRelease(deps, cache, nowMs, stats, force = false) {
+export async function resolveRelease(deps, cache, nowMs, stats, force = false) {
   if (!force && cache.release && nowMs - cache.release.atMs < DAY_MS) return { ok: true, release: cache.release.release, fromCache: true };
   const ctl = new AbortController();
   const timeoutMs = deps.timeoutMs ?? 12000;

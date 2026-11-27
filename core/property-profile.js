@@ -35,6 +35,7 @@ import { estimateRoof } from './roof.js';
 import { estimateFloors } from './building-size.js';
 import { overpassNear } from './parcel.js';
 import { summarizeTransit, transitAttributes } from './transit.js';
+import { streetReference } from './street-ref.js';
 
 /** Los Angeles County (the first jurisdiction with richer providers). Kept as an export; the assembler no longer assumes it. */
 export const LA_COUNTY = { state: 'CA', countyFips: '06037', county: 'Los Angeles County' };
@@ -141,7 +142,7 @@ export async function buildPropertyProfile(query, ctx) {
   // ---- collected state (everything assemble() reads) ----------------------------------------------------------------------
   const S = /** @type {any} */ ({
     addr: null, streetSide: null, addrDetails: [], jurisdiction: jur, jurisdictionHow: jur ? 'supplied by the caller' : null, jurisdictionWhy: null,
-    recs: /** @type {Array<{p:any,r:any}>|null} */ (null), fps: /** @type {Array<{p:any,r:any}>|null} */ (null), streetGeom: undefined, streetDone: false, osm: undefined, transitDone: false,
+    recs: /** @type {Array<{p:any,r:any}>|null} */ (null), fps: /** @type {Array<{p:any,r:any}>|null} */ (null), streets: /** @type {any[]|null} */ (null), streetSource: null, streetDone: false, osm: undefined, transitDone: false,
   });
   if (isNum(q.lat) && isNum(q.lng)) S.addr = { address: typed, lat: q.lat, lng: q.lng, placeId: q.placeId, source: q.pointSource ?? 'caller-supplied coordinates', confidence: 0.7, provider: 'caller', precision: q.pointPrecision ?? null, ...(q.pointMethod ? { methodNote: q.pointMethod } : {}) };
   const wantStreetSide = typeof ctx.splitYard === 'function';
@@ -246,7 +247,10 @@ export async function buildPropertyProfile(query, ctx) {
     // ---- street reference ----
     const sp = parseStreet(typed.split(',')[0]);
     const streetName = sp ? [...sp.core, sp.suffix].filter(Boolean).join(' ') : undefined;
-    const streetGeom = S.streetGeom;
+    // centrelines first (the address's street when a line of that name is near, else the nearest street); the geocoder street-side point
+    // is the fallback (docs/yard-accuracy.md, Stage 1: on ten LA lots the centreline split was produced for 10, the point split for 8)
+    const sref = S.streets ? streetReference({ streets: S.streets, address: typed }) : null;
+    if (sref && S.streetSource?.attribution) attribute(S.streetSource.attribution);
     if (streetSide && boundary) {
       const d = distanceToPolygonM(streetSide, boundary);
       if (d > MAX_STREET_SIDE_DISTANCE_M) { warnings.push(`street-side point from ${/** @type {any} */ (streetSide).from} is ${Math.round(d)} m from the parcel (wrong block or side?); not used as the front reference`); streetSide = null; }
@@ -360,17 +364,29 @@ export async function buildPropertyProfile(query, ctx) {
     else if (!boundary) yardWhy = recsLoaded ? 'no parcel polygon' : 'parcel still loading';
     else if (!main) yardWhy = fpsLoaded ? 'no building footprint on the parcel' : 'building outlines still loading';
     /** @type {any} */ let yard = null;
+    /** @type {'centreline'|'point'|null} */ let yardRef = null;
     if (!yardWhy) {
       const memo = S.yardMemo;
-      if (memo && memo.boundary === boundary && memo.fp === fp && memo.streetSide === streetSide && memo.streetGeom === streetGeom && memo.buildings.length === buildings.length) { yard = memo.yard; yardWhy = memo.yardWhy; }
+      if (memo && memo.boundary === boundary && memo.fp === fp && memo.streetSide === streetSide && memo.streets === S.streets && memo.buildings.length === buildings.length) { yard = memo.yard; yardWhy = memo.yardWhy; yardRef = memo.yardRef; }
       else {
         const onParcel = buildings.map((b) => b.polygon);
-        try {
-          yard = await /** @type {Function} */ (ctx.splitYard)({ parcel: boundary, buildings: onParcel, ...(streetGeom ? { street: streetGeom } : {}), ...(streetName ? { streetName } : {}),
-            ...(streetSide ? { frontPoint: { lat: streetSide.lat, lng: streetSide.lng } } : {}), mainBuildingIndex: mainIdx });
-        } catch (e) { yardWhy = `yard splitter threw: ${e instanceof Error ? e.message : String(e)}`; }
-        if (yard && !yard.ok) { yardWhy = `yard split failed: ${yard.reason}`; yard = null; }
-        S.yardMemo = { boundary, fp, streetSide, streetGeom, buildings, yard, yardWhy };
+        const base = { parcel: boundary, buildings: onParcel, mainBuildingIndex: mainIdx };
+        /** @type {string[]} */ const tried = [];
+        const attempt = async (/** @type {any} */ args, /** @type {'centreline'|'point'|null} */ how) => {
+          try {
+            const y = await /** @type {Function} */ (ctx.splitYard)({ ...base, ...args });
+            if (y && y.ok) { yard = y; yardRef = how; return true; }
+            tried.push(`${how ?? 'no street reference'}: ${y?.reason ?? 'no result'}`);
+          } catch (e) { tried.push(`${how ?? 'no street reference'}: yard splitter threw: ${e instanceof Error ? e.message : String(e)}`); }
+          return false;
+        };
+        let done = false;
+        if (sref) done = await attempt({ streets: sref.streets, ...(sref.streetName ? { streetName: sref.streetName } : {}) }, 'centreline');
+        if (!done && streetSide) done = await attempt({ frontPoint: { lat: streetSide.lat, lng: streetSide.lng }, ...(streetName ? { streetName } : {}) }, 'point');
+        if (!done && !sref && !streetSide) done = await attempt({ ...(streetName ? { streetName } : {}) }, null);
+        if (!done) yardWhy = `yard split failed: ${tried.join('; ') || 'no street reference'}`;
+        if (!done && tried.length === 1) yardWhy = `yard split failed: ${tried[0].replace(/^[a-z ]+: /, '')}`;
+        S.yardMemo = { boundary, fp, streetSide, streets: S.streets, buildings, yard, yardWhy, yardRef };
       }
     }
     const yardKeys = /** @type {const} */ ([['front_yard_sqft', 'frontYardSqft'], ['back_yard_sqft', 'backYardSqft'], ['side_yard_sqft', 'sideYardSqft']]);
@@ -378,13 +394,13 @@ export async function buildPropertyProfile(query, ctx) {
       const rc = typeof yard.confidence === 'number' ? yard.confidence : ({ low: 0.2, medium: 0.35, high: 0.4 }[/** @type {string} */ (yard.confidence)] ?? 0.2);
       const yw = Array.isArray(yard.warnings) ? yard.warnings.map(String) : [];
       for (const w of yw) warnings.push(`yard: ${w}`);
-      if (!streetSide && !streetGeom) warnings.push('yard: no street reference was available; the front/back split is less certain');
+      if (!yardRef) warnings.push('yard: no street reference was available; the front/back split is less certain');
       for (const [k, rk] of yardKeys) {
         const v = yard[rk];
         fields[k] = isNum(v) ? entry(sourced(Math.round(v), { tag: 'estimated', source: 'Everyspace yard split (parcel minus building footprints)', confidence: conf(Math.min(CONFIDENCE.yard, rc)), retrievedAt: at, unit: 'sqft',
-          method: yard.method ?? 'yard split', note: joinNotes(yw.length ? `Warnings: ${yw.join('; ')}.` : undefined, streetSide ? 'Front edge from the geocoder street-side point.' : streetGeom ? 'Front edge from the street centreline.' : 'No street reference.') })) : gone(yard.yardReason ? `yard not split: ${yard.yardReason}` : `splitYard returned no ${rk}`);
+          method: yard.method ?? 'yard split', note: joinNotes(yw.length ? `Warnings: ${yw.join('; ')}.` : undefined, yardRef === 'centreline' ? `Front edge from the street centreline (${sref?.how ?? 'street line'}; ${S.streetSource?.label ?? 'street lines'}).` : yardRef === 'point' ? 'Front edge from the geocoder street-side point.' : 'No street reference.') })) : gone(yard.yardReason ? `yard not split: ${yard.yardReason}` : `splitYard returned no ${rk}`);
       }
-      details.yard = { lotSqft: yard.lotSqft, buildingSqft: yard.buildingSqft, openSqft: yard.openSqft, method: yard.method, confidence: yard.confidence, frontEdge: yard.frontEdge ?? null, warnings: yw };
+      details.yard = { lotSqft: yard.lotSqft, buildingSqft: yard.buildingSqft, openSqft: yard.openSqft, method: yard.method, confidence: yard.confidence, frontEdge: yard.frontEdge ?? null, warnings: yw, reference: yardRef, ...(yardRef === 'centreline' && sref ? { street: sref.how } : {}) };
     } else for (const [k] of yardKeys) fields[k] = gone(yardWhy ?? 'yard not computed');
 
     // ---- transit (core/transit.js, City Pretty's walk-radius logic over OSM stops) ----
@@ -506,14 +522,15 @@ export async function buildPropertyProfile(query, ctx) {
 
   const streetTask = (async () => {
     if (!point) { S.streetDone = true; return; }
-    const sp = parseStreet(typed.split(',')[0]);
-    const streetName = sp ? [...sp.core, sp.suffix].filter(Boolean).join(' ') : undefined;
     for (const p of streetProviders) {
       const r = await safe(() => p.lookup({ lat: point.lat, lng: point.lng, address: typed }, deps(p.id)));
       if (!r.ok) { mark(p.id, 'failed', r.reason); continue; }
-      const hit = r.streets.find((/** @type {any} */ s) => streetName && String(s.name ?? '').toUpperCase().replace(/[^A-Z0-9 ]/g, '').includes(sp?.core.join(' ') ?? '\u0000'));
-      if (hit) { S.streetGeom = hit.geometry; mark(p.id, 'used'); break; }
-      mark(p.id, 'used', 'no street with a matching name');
+      const list = Array.isArray(r.streets) ? r.streets.filter((/** @type {any} */ s) => s && s.geometry) : [];
+      if (!list.length) { mark(p.id, 'used', 'no street line near the address'); continue; }
+      // every street near the address is kept: the address's own street is the front, the others tell a corner or a through lot (core/street-ref.js)
+      S.streets = list; S.streetSource = { id: p.id, label: p.label ?? p.id, attribution: r.attribution ?? null };
+      mark(p.id, 'used', streetReference({ streets: list, address: typed })?.matched ? undefined : 'no street with a matching name; the nearest street is used');
+      break;
     }
     S.streetDone = true;
   })();

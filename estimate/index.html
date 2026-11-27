@@ -24,8 +24,9 @@
 
 <main class="wrap" id="main">
   <noscript><div class="card"><p><strong>This estimator needs JavaScript.</strong> Turn it on to look up an address, or <a href="../">go back to the home page</a>.</p></div></noscript>
+  <div id="view-property">
   <section class="card" aria-labelledby="h-address">
-    <div class="section-title"><h1 id="h-address">What could your property earn?</h1></div>
+    <div class="section-title"><h1 id="h-address" tabindex="-1">Your property</h1></div>
     <p class="muted">Type your address to see what is on your property and the ways it could earn. Free, no sign-up. Nothing you enter here is saved.</p>
     <form id="address-form" class="stack" novalidate>
       <div>
@@ -45,6 +46,11 @@
 
   <div id="lookup"></div>
   <div id="results"></div>
+  <div class="next-bar" id="next-bar" hidden>
+    <button class="btn primary lg" id="next-earn" type="button" data-act="next-earn" disabled>Next: see what it could earn</button>
+  </div>
+  </div>
+  <div id="view-earn" hidden></div>
 </main>
 
 <footer>

@@ -72,8 +72,10 @@ const EQUIPMENT = [['atv', 'ATV'], ['snowmobile', 'Snowmobile'], ['kayak', 'Kaya
 
 // ---- the owner's property list --------------------------------------------------------------------------------------
 /** Always listed, in this order (an empty input when nothing was found). */
-const FACT_ORDER = ['lot_area_sqft', 'living_area_sqft', 'bedrooms', 'bathrooms', 'floors', 'year_built', 'roof_area_sqft', 'front_yard_sqft',
+const FACT_ORDER = ['lot_area_sqft', 'living_area_sqft', 'bedrooms', 'bathrooms', 'floors', 'year_built', 'remodeled_year', 'roof_area_sqft', 'front_yard_sqft',
   'back_yard_sqft', 'side_yard_sqft', 'yard_area_sqft', 'building_footprint_sqft', 'pool_present', 'parking_spaces', 'garage_present', 'property_type'];
+/** Listed right after the yard lines, only when the lookup supplied a value (or the owner typed one). */
+const AFTER_YARD = ['green_area_sqft', 'paved_area_sqft', 'pool_area_sqft', 'tree_cover_sqft'];
 /** Listed after those when the profile has a value for them, in this order; any other owner-meaningful attribute follows. */
 const MORE_ORDER = ['units', 'driveway_area_sqft', 'adu_present', 'zoning', 'transit_distance_m'];
 /** Never listed: map and record internals. Address and parcel number appear once in the heading. */
@@ -81,15 +83,16 @@ const HIDDEN = new Set(['address', 'location', 'jurisdiction', 'parcel_id', 'par
   'demand_generators', 'equipment_owned', 'lat', 'lng', 'apn']);
 const HIDDEN_RE = /(^|_)(id|ids|code|codes|boundary|polygon|geometry|location|lat|lng|source|sources|url|count|counts|mapped|raw|fips|method)$/;
 const LABELS = {
-  lot_area_sqft: 'Lot size', living_area_sqft: 'Home size', bedrooms: 'Bedrooms', bathrooms: 'Bathrooms', floors: 'Floors', year_built: 'Year built',
+  lot_area_sqft: 'Lot size', living_area_sqft: 'Home size', bedrooms: 'Bedrooms', bathrooms: 'Bathrooms', floors: 'Floors', year_built: 'Year built', remodeled_year: 'Remodeled (year)',
+  green_area_sqft: 'Lawn and planting', paved_area_sqft: 'Paved area (driveway, patio)', pool_area_sqft: 'Pool size', tree_cover_sqft: 'Tree cover',
   roof_area_sqft: 'Roof area', front_yard_sqft: 'Front yard', back_yard_sqft: 'Back yard', side_yard_sqft: 'Side yard', yard_area_sqft: 'Yard (total open ground)',
   building_footprint_sqft: 'Building footprint', pool_present: 'Pool', parking_spaces: 'Parking spaces', garage_present: 'Garage', property_type: 'Property type',
   units: 'Units', driveway_area_sqft: 'Driveway area', adu_present: 'Guest house or ADU', zoning: 'Zoning', transit_distance_m: 'Nearest bus or train stop',
   address: 'Address', parcel_id: 'Parcel number',
 };
 const factLabel = (k) => LABELS[k] ?? cap(k.replace(/_(sqft|present|available|m|ft)$/, '').replace(/_/g, ' '));
-const INT_KEYS = new Set(['year_built', 'bedrooms', 'units', 'parking_spaces', 'floors']);
-const NUMBER_KEYS = new Set(['lot_area_sqft', 'year_built', 'bedrooms', 'bathrooms', 'floors', 'front_yard_sqft', 'back_yard_sqft', 'side_yard_sqft', 'living_area_sqft', 'units',
+const INT_KEYS = new Set(['year_built', 'remodeled_year', 'bedrooms', 'units', 'parking_spaces', 'floors']);
+const NUMBER_KEYS = new Set(['lot_area_sqft', 'year_built', 'remodeled_year', 'bedrooms', 'bathrooms', 'floors', 'front_yard_sqft', 'back_yard_sqft', 'side_yard_sqft', 'living_area_sqft', 'units',
   'building_footprint_sqft', 'roof_area_sqft', 'yard_area_sqft', 'driveway_area_sqft', 'parking_spaces', 'transit_distance_m']);
 /** Unit shown next to a number, and the factor from the stored value to what is shown (metres are shown in feet). */
 function unitOf(key) {
@@ -144,12 +147,14 @@ const S = {
   includeInvestments: false, overrides: {}, editInput: null,
   goal: 'max_net_income', maxUpfront: '', noStrangers: false, onlyKnownRules: false,
   open: new Set(), focusId: null, error: '', limiter: { lastAt: null }, keepStatus: false,
+  page: 'property', // which of the two views is showing: 'property' | 'earn' (the same document; the History API links them)
   dirty: false, discardOk: false, // dirty = the owner has typed a correction this session; discardOk = they were warned that searching again drops it
 };
 
 const MAX_ADDRESS = 300; // same cap as the input's maxlength; a street address is never longer
 const MAIN_MAX_MS = 10000; // the property screen (or the "add your details" list) is shown within this long after a submit
-const els = { form: $('#address-form'), input: $('#address'), submit: $('#address-submit'), status: $('#status'), lookup: $('#lookup'), results: $('#results'), progress: $('#progress') };
+const els = { form: $('#address-form'), input: $('#address'), submit: $('#address-submit'), status: $('#status'), lookup: $('#lookup'), results: $('#results'), progress: $('#progress'),
+  viewProperty: $('#view-property'), earn: $('#view-earn'), nextBar: $('#next-bar'), next: $('#next-earn') };
 /** Every lookup request goes through one in-memory session cache: the same question is never asked twice. */
 const lookupFetch = sessionFetch((url, init) => fetch(url, init));
 
@@ -266,7 +271,7 @@ function follow(run, pending) {
       if (v?.attrs) Object.assign(S.extra, v.attrs);
       for (const k of p.keys ?? []) S.loading.delete(k);
       left.delete(p);
-      recompute(); S.keepStatus = true;
+      recompute(); S.keepStatus = S.page === 'property';
       renderAll();
       nextStage();
     });
@@ -341,12 +346,12 @@ function renderAll() {
   const explicit = S.focusId;
   S.focusId = null;
   const a = document.activeElement;
-  const inPage = a && a !== document.body && a.id && (els.results.contains(a) || els.lookup.contains(a));
+  const inPage = a && a !== document.body && a.id && (els.results.contains(a) || els.lookup.contains(a) || els.earn.contains(a));
   const keep = !explicit && inPage && a instanceof HTMLInputElement && a.type !== 'checkbox'
     ? { value: a.value, s: a.selectionStart, e: a.selectionEnd, invalid: a.getAttribute('aria-invalid') } : null;
   const target = explicit ?? (inPage ? a.id : null);
-  renderLookup();
-  renderResults();
+  if (S.page === 'earn') renderEarn();
+  else { renderLookup(); renderResults(); }
   if (!target) return;
   const el = document.getElementById(target);
   if (!el) return;
@@ -384,27 +389,17 @@ function renderLookup() {
   els.lookup.innerHTML = parts.join('');
 }
 
+/** Page 1: the property list and the questions. No earnings content at all; nothing is computed here. */
 function renderResults() {
-  if (S.phase !== 'results' || !S.profile) { els.results.innerHTML = ''; return; }
-  let view;
-  try { view = compute(); } catch (e) {
-    els.results.innerHTML = '<div class="callout bad" role="alert">Something went wrong while working out the estimates. Change a value above and try again.</div>';
-    return;
-  }
-  S.view = view;
-  const err = S.error ? `<div class="callout bad" role="alert" id="input-error">${esc(S.error)}</div>` : '';
-  S.error = '';
+  const ready = S.phase === 'results' && Boolean(S.profile);
+  els.nextBar.hidden = !(ready || S.busy);
+  els.next.disabled = !ready;
+  if (!ready) { els.results.innerHTML = ''; return; }
   els.results.innerHTML = `<div class="stack">
     ${profileHtml()}
-    <div class="callout warn" id="plan-note"><strong>These are planning estimates, not promises.</strong> Prices and bookings are Everyspace planning defaults unless you enter your own.</div>
     <p class="small muted" id="session-note">Nothing is saved. If you reload or leave this page, everything you entered here is cleared and you start again.</p>
-    ${err}
-    ${oppsHtml(view)}
-    ${comboHtml(view)}
   </div>`;
-  if (S.keepStatus) { S.keepStatus = false; return; } // a lookup just announced its own outcome
-  const n = view.opps.length;
-  announce(`Estimates updated: ${n} way${n === 1 ? '' : 's'} to earn found.`);
+  S.keepStatus = false;
 }
 
 // ---- profile -------------------------------------------------------------------------------------------------
@@ -414,6 +409,8 @@ const hasValue = (a) => Boolean(a) && a.tag !== 'unavailable' && a.value !== nul
 function factKeys() {
   const attrs = S.profile.attributes;
   const keys = [...FACT_ORDER];
+  const at = keys.indexOf('yard_area_sqft') + 1;
+  keys.splice(at, 0, ...AFTER_YARD.filter((k) => hasValue(attrs[k]) || k in S.owner));
   const extra = (k) => !keys.includes(k) && !HIDDEN.has(k) && !HIDDEN_RE.test(k) && (hasValue(attrs[k]) || k in S.owner) && kindOf(k, attrs[k]?.value) !== null && kindOf(k, attrs[k]?.value) !== 'equipment';
   for (const k of MORE_ORDER) if (extra(k)) keys.push(k);
   for (const k of Object.keys(attrs)) if (extra(k)) keys.push(k);
@@ -425,7 +422,7 @@ function shownText(key, a) {
   if (!hasValue(a)) return '';
   const v = a.value;
   if (typeof v !== 'number') return String(v);
-  if (key === 'year_built') return String(v);
+  if (key === 'year_built' || key === 'remodeled_year') return String(v);
   const u = unitOf(key);
   const shown = v * u.factor;
   return u.factor === 1 ? nf.format(shown) : new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(shown);
@@ -482,7 +479,8 @@ function profileHtml() {
   const typeHint = hasValue(attrs.property_type) ? '' : '<p class="small muted" id="type-hint">Choose a property type to see more ideas.</p>';
   return `<section class="card" aria-labelledby="h-profile" id="property">
     <div class="prop-head"><h2 id="h-profile" tabindex="-1">${addr ? esc(addr) : 'Your property'}</h2>
-      ${apn ? `<p class="small muted" id="prop-parcel">Parcel ${esc(apn)}</p>` : ''}</div>
+      ${apn ? `<p class="small muted" id="prop-parcel">Parcel ${esc(apn)}</p>` : ''}
+      <button class="btn primary sm next-top" id="next-earn-top" type="button" data-act="next-earn">Next: see what it could earn</button></div>
     ${S.notFound ? `<p class="callout" id="not-found">We couldn't find that address automatically. Add your property details below.</p>` : ''}
     <p class="small muted" id="facts-help">Type over any number that is not right. Everything below updates at once.</p>
     <div class="facts" id="facts">${keys.map(factRow).join('')}</div>
@@ -637,32 +635,29 @@ function needHtml(o, e) {
     <div class="stack" style="margin-top:8px">${keys.map((k) => `<div><div class="small"><strong>${esc(INPUT_LABEL(k, o.unit))}</strong></div>${inputEditor(o, k, 'need')}</div>`).join('')}</div></div>`;
 }
 
-function oppCard(o, e) {
+/** A way's yearly range, or why there is none yet. */
+function rangeText(e, suffix = '') {
+  return e?.available ? `About ${money(e.scenarios.conservative.noiCentsPerYear)} to ${money(e.scenarios.optimistic.noiCentsPerYear)} a year${suffix}` : '';
+}
+
+/** One way to earn as a compact card: name, yearly range, and the full breakdown, assumptions and editors under "Details". */
+function earnCard(o, e, { suffix = '', reason = '' } = {}) {
   const notes = o.notes.length ? `<ul class="plain small muted">${o.notes.map((n) => `<li>${esc(humanKeys(n))}</li>`).join('')}</ul>` : '';
-  return `<article class="card opp" data-opp-card="${esc(o.id)}" aria-labelledby="oh-${safeId(o.id)}">
-    <header><h3 id="oh-${safeId(o.id)}">${esc(o.label)}</h3><span class="chip">${esc(BASIS_WORDS[o.basis] ?? o.basis)}</span></header>
-    <div class="chips">${ruleHtml(o)}</div>
-    ${e.available ? `${scenarioTable(o, e)}<p class="why small" data-confidence="${esc(e.confidenceLabel)}">${esc(whyConfidence(o, e))}</p>` : `${needHtml(o, e)}`}
+  const range = rangeText(e, suffix);
+  const inner = `<div class="chips">${ruleHtml(o)}</div>
+    ${e.available ? `${scenarioTable(o, e)}<p class="why small" data-confidence="${esc(e.confidenceLabel)}">${esc(whyConfidence(o, e))}</p>` : ''}
     ${notes}
-    <div style="margin-top:8px">${assumptionsHtml(o, e)}</div>
+    <div style="margin-top:8px">${assumptionsHtml(o, e)}</div>`;
+  return `<article class="card opp compact" data-opp-card="${esc(o.id)}" aria-labelledby="oh-${safeId(o.id)}">
+    <header><h3 id="oh-${safeId(o.id)}">${esc(o.label)}</h3><span class="chip">${esc(BASIS_WORDS[o.basis] ?? o.basis)}</span></header>
+    ${range ? `<p class="range" data-range="${esc(o.id)}">${esc(range)}</p>` : ''}
+    ${reason ? `<p class="small muted reason" data-rejected="${esc(o.id)}">${esc(reason)}</p>` : ''}
+    ${e.available ? '' : needHtml(o, e)}
+    ${dKey(`det-${o.id}`, 'Details', inner, false, 'panel opp-details')}
   </article>`;
 }
 
-function oppsHtml(view) {
-  const { opps, estimates } = view;
-  const now = opps.filter((o) => NOW_BASES.has(o.basis)), later = opps.filter((o) => !NOW_BASES.has(o.basis));
-  const toggle = `<label class="check" for="include-investments"><input type="checkbox" id="include-investments" data-change="investments"${S.includeInvestments ? ' checked' : ''}>Also show ideas that need building work or permits</label>`;
-  const group = (title, id, list, hint) => (list.length ? `<h3 class="group-title" id="${id}">${title}</h3>${hint ? `<p class="small muted">${hint}</p>` : ''}${list.map((o) => oppCard(o, estimates[o.id])).join('')}` : '');
-  return `<section aria-labelledby="h-opps">
-    <div class="section-title"><h2 id="h-opps">Ways your property could earn</h2><span class="small muted">${opps.length} found</span></div>
-    ${toggle}
-    ${opps.length ? '' : '<div class="callout" style="margin-top:12px">No ways to earn yet. Add or correct the details above, or answer the questions, to see ideas.</div>'}
-    ${group('What you have now', 'g-now', now, 'Each range shows conservative, baseline and optimistic planning figures after costs we could count.')}
-    ${group('Needs a permit or investment first', 'g-later', later, 'These need a permit, registration or building work before they can start. Start-up costs are unknown unless you enter them.')}
-  </section>`;
-}
-
-// ---- combination -----------------------------------------------------------------------------------------------
+// ---- page 2: what it could earn -------------------------------------------------------------------------------------
 
 function nameize(text, byId) {
   let t = text.replace(/(\d+) cents/g, (_, n) => money(Number(n)));
@@ -670,10 +665,12 @@ function nameize(text, byId) {
   return t;
 }
 
-function comboHtml(view) {
-  const { opt, estimates, byId, opps } = view;
+const BACK_LINK = '<a href="./" class="back" id="back-property" data-act="back-property">&larr; Back to my property</a>';
+
+function controlsHtml() {
   const goalOpts = GOALS.map((g) => `<option value="${g}"${S.goal === g ? ' selected' : ''}>${GOAL_LABELS[g] ?? g}</option>`).join('');
-  const controls = `<div class="fields">
+  return `<section class="card" aria-labelledby="h-goal"><h2 id="h-goal">What matters to you</h2>
+    <div class="fields" style="margin-top:10px">
       <label class="f" for="goal">What matters most to you?<select id="goal" data-change="goal">${goalOpts}</select></label>
       <label class="f" for="max-upfront">Most you would spend up front (optional)<input id="max-upfront" type="number" min="0" step="any" inputmode="decimal" data-change="maxUpfront" value="${esc(S.maxUpfront)}" placeholder="No limit"></label>
     </div>
@@ -681,46 +678,113 @@ function comboHtml(view) {
     <div class="stack" style="margin-top:8px">
       <label class="check" for="no-strangers"><input type="checkbox" id="no-strangers" data-change="noStrangers"${S.noStrangers ? ' checked' : ''}>No strangers inside my home</label>
       <label class="check" for="only-known"><input type="checkbox" id="only-known" data-change="onlyKnown"${S.onlyKnownRules ? ' checked' : ''}>Only include uses whose local rules are on file</label>
-    </div>
-    ${S.onlyKnownRules ? '' : '<div class="callout warn" id="rules-caution" style="margin-top:10px"><strong>Caution:</strong> local rules were not checked for the uses listed here. Confirm each one with your city before you start.</div>'}`;
+      <label class="check" for="include-investments"><input type="checkbox" id="include-investments" data-change="investments"${S.includeInvestments ? ' checked' : ''}>Also show ideas that need building work or permits</label>
+    </div></section>`;
+}
 
-  const label = (id) => byId[id]?.label ?? id;
-  let result;
-  if (!opt.selected.length) {
-    result = '<div class="callout" id="combo-empty" style="margin-top:14px">No combination fits your choices yet. See below why each option was left out, or loosen a choice above.</div>';
+function earnHtml(view) {
+  const { opt, estimates, byId, opps } = view;
+  const err = S.error ? `<div class="callout bad" role="alert" id="input-error">${esc(S.error)}</div>` : '';
+  S.error = '';
+  const totalsFor = (scn) => summarize(estimates, opt.selected, scn);
+  const lo = opt.selected.length ? totalsFor('conservative').noiCentsPerYear : 0;
+  const hi = opt.selected.length ? totalsFor('optimistic').noiCentsPerYear : 0;
+  const found = opt.selected.length > 0 && hi > 0;
+  const notice = `<div class="callout warn notice" id="notice"><p id="plan-note"><strong>These are planning estimates, not promises.</strong> Prices and bookings are Everyspace planning defaults unless you enter your own.</p>${S.onlyKnownRules ? '' : '<p id="rules-caution"><strong>Caution:</strong> local rules were not checked for the uses listed here. Confirm each one with your city before you start.</p>'}</div>`;
+  let head;
+  if (found) {
+    head = `<p class="headline" id="earn-headline" data-low-cents="${lo}" data-high-cents="${hi}">Your property could earn about <strong>${money(lo)} to ${money(hi)}</strong> a year</p>
+      <p class="small muted">After the costs we could count, for the best combination for the goal "${esc(GOAL_LABELS[S.goal] ?? S.goal)}". It is a range, not a promise.</p>`;
+  } else if (!opps.length) {
+    head = `<p class="headline none" id="earn-headline" data-empty="true">We have not found a way to earn yet. Add a few details about your property and we can show what it could earn.</p>
+      <p style="margin-top:8px">${BACK_LINK}</p>`;
   } else {
+    head = `<p class="headline none" id="earn-headline" data-empty="true">No combination fits your choices yet. Loosen a choice below, or add a few details about your property and we can show what it could earn.</p>
+      <p style="margin-top:8px">${BACK_LINK}</p>`;
+  }
+  const inSel = new Set(opt.selected), inInv = new Set(opt.investments);
+  const included = opt.selected.map((id) => earnCard(byId[id], estimates[id])).join('');
+  const sameSet = opt.eligibleIds.length === opt.selected.length && opt.eligibleIds.every((id) => opt.selected.includes(id));
+  let totalsBlock = '';
+  if (opt.selected.length) {
     const totals = SCENARIO_NAMES.map((s) => ({ s, t: summarize(estimates, opt.selected, s) }));
-    const head = SCENARIO_NAMES.map((s) => `<th scope="col">${cap(s)}</th>`).join('');
+    const th = SCENARIO_NAMES.map((s) => `<th scope="col">${cap(s)}</th>`).join('');
     const shown = (f, t) => (f === 'upfrontCents' && t.upfrontUnknownIds.length ? (t[f] === 0 ? 'Unknown' : `${money(t[f])} + unknown`) : money(t[f]));
     const row = (title, f, cls = '', attr = '') => `<tr><th scope="row">${title}</th>${totals.map(({ s, t }) => `<td class="${cls}" ${attr ? `data-scenario="${s}" data-period="${attr}" data-cents="${t[f]}"` : ''}>${shown(f, t)}</td>`).join('')}</tr>`;
-    const sel = opt.selected.map((id) => `<li><strong>${esc(label(id))}</strong> <span class="muted small">(${esc(BASIS_WORDS[byId[id]?.basis] ?? '')}, ${money(estimates[id].scenarios.conservative.noiCentsPerYear)} to ${money(estimates[id].scenarios.optimistic.noiCentsPerYear)} a year on its own, baseline ${money(estimates[id].scenarios.baseline.noiCentsPerYear)})</span></li>`).join('');
-    // Only compare the two totals when something eligible was left out; the naive sum covers exactly `eligibleIds`.
-    const sameSet = opt.eligibleIds.length === opt.selected.length && opt.eligibleIds.every((id) => opt.selected.includes(id));
-    result = `<div style="margin-top:14px"><h3>Best combination for you</h3>
-      <ul class="plain" id="combo-selected">${sel}</ul>
-      <div class="tablewrap" style="margin-top:10px"><table class="scen" id="combo-totals"><caption class="sr-only">Combined net income of the best combination</caption>
-        <thead><tr><th scope="col">Combined</th>${head}</tr></thead><tbody>
+    totalsBlock = dKey('combo-details', 'How the total adds up', `<div class="tablewrap"><table class="scen" id="combo-totals"><caption class="sr-only">Combined net income of the best combination</caption>
+        <thead><tr><th scope="col">Combined</th>${th}</tr></thead><tbody>
         ${row('Net income per month', 'noiCentsPerMonth', '', 'month')}${row('Net income per year', 'noiCentsPerYear', 'big', 'year')}
         ${row('Gross income per year', 'grossCentsPerYear')}${row('Start-up cost', 'upfrontCents')}</tbody></table></div>
       ${sameSet ? '' : `<p class="why" id="combo-naive" style="margin-top:10px">Adding everything up would give <strong data-naive-cents="${opt.naiveSumNoiCentsPerYear}">${money(opt.naiveSumNoiCentsPerYear)}</strong>, but some of these cannot run together (they share the same space or resources, or would go over your start-up budget), so the realistic total is <strong data-real-cents="${opt.totals.noiCentsPerYear}">${money(opt.totals.noiCentsPerYear)}</strong>.
         <span class="muted small">Baseline net income per year.</span></p>`}
-      <p class="small muted">Confidence: ${esc(CONF_WORDS[totals[1].t.confidenceLabel])}. ${totals[1].t.upfrontUnknownIds.length ? 'Start-up cost is unknown for some of these.' : ''}</p></div>`;
+      <p class="small muted">Confidence: ${esc(CONF_WORDS[totals[1].t.confidenceLabel])}. ${totals[1].t.upfrontUnknownIds.length ? 'Start-up cost is unknown for some of these.' : ''}</p>`, false, 'panel');
   }
-  const rejected = opt.rejected.filter((r) => !opt.investments.includes(r.id));
-  const left = rejected.length ? `<div style="margin-top:14px"><h3>Why the other options were left out</h3><div class="tablewrap"><table class="stack-sm" id="combo-rejected"><caption class="sr-only">Options left out and why</caption>
-    <thead><tr><th scope="col">Option</th><th scope="col">Reason</th></tr></thead><tbody>${rejected.map((r) => `<tr data-rejected="${esc(r.id)}"><th scope="row">${esc(label(r.id))}</th><td data-label="Reason">${esc(nameize(r.reason, byId))}</td></tr>`).join('')}</tbody></table></div></div>` : '';
-  const inv = opt.investments.length ? `<div style="margin-top:14px" id="combo-investments"><h3>Needs a permit or investment (not in the total above)</h3>
-    <ul class="plain">${opt.investments.map((id) => {
-    const e = estimates[id];
-    const range = e?.available ? `could net ${money(e.scenarios.conservative.noiCentsPerYear)} to ${money(e.scenarios.optimistic.noiCentsPerYear)} a year (baseline ${money(e.scenarios.baseline.noiCentsPerYear)}) before start-up costs` : 'no estimate yet';
-    return `<li><strong>${esc(label(id))}</strong>: ${range}.</li>`;
-  }).join('')}</ul></div>` : '';
-  return `<section class="card" aria-labelledby="h-combo"><div class="section-title"><h2 id="h-combo">Best combination</h2><span class="small muted">${opps.length} option${opps.length === 1 ? '' : 's'} considered</span></div>
-    <p class="small muted" style="margin-bottom:10px">Uses that need the same space or parking cannot all run at once, so this picks the best set that fits together.</p>
-    ${controls}${result}${left}${inv}
-    <p style="margin-top:14px"><a href="../host/">Already renting? Manage your spaces in the Host Console</a></p></section>`;
+  const rejectedIds = new Map(opt.rejected.filter((r) => !inInv.has(r.id)).map((r) => [r.id, r.reason]));
+  const leftIds = opps.map((o) => o.id).filter((id) => !inSel.has(id) && !inInv.has(id));
+  const left = leftIds.length ? `<section aria-labelledby="h-left" id="combo-rejected"><div class="section-title"><h2 id="h-left">Left out of the best combination</h2><span class="small muted">${leftIds.length} option${leftIds.length === 1 ? '' : 's'}</span></div>
+    ${leftIds.map((id) => earnCard(byId[id], estimates[id], { reason: rejectedIds.has(id) ? nameize(rejectedIds.get(id), byId) : '' })).join('')}</section>` : '';
+  const inv = opt.investments.length ? `<section aria-labelledby="h-inv" id="combo-investments"><div class="section-title"><h2 id="h-inv">Needs a permit or building work first</h2><span class="small muted">Not in the total above</span></div>
+    <p class="small muted">These need a permit, registration or building work before they can start. Start-up costs are unknown unless you enter them.</p>
+    ${opt.investments.map((id) => earnCard(byId[id], estimates[id], { suffix: ' before start-up costs' })).join('')}</section>` : '';
+  return `<div class="stack">
+    <p>${BACK_LINK}</p>
+    <h1 id="h-earn" tabindex="-1">What your property could earn</h1>
+    <section class="card headcard" aria-label="Summary">${head}</section>
+    ${notice}
+    ${err}
+    ${controlsHtml()}
+    ${opt.selected.length ? `<section aria-labelledby="h-incl"><div class="section-title"><h2 id="h-incl">Ways in your best combination</h2><span class="small muted">${opt.selected.length} of ${opps.length} option${opps.length === 1 ? '' : 's'}</span></div>
+      <div id="combo-selected" class="stack">${included}</div>${totalsBlock ? `<div style="margin-top:12px">${totalsBlock}</div>` : ''}</section>` : ''}
+    ${left}
+    ${inv}
+    <p><a href="../host/">Already renting? Manage your spaces in the Host Console</a></p>
+  </div>`;
 }
 
+/** Page 2. Computed here, on demand: the page-1 list never pays for it. */
+function renderEarn() {
+  if (!(S.phase === 'results' && S.profile)) { showProperty(false); return; }
+  let view;
+  try { view = compute(); } catch (e) {
+    els.earn.innerHTML = `<div class="stack"><p>${BACK_LINK}</p><h1 id="h-earn" tabindex="-1">What your property could earn</h1><div class="callout bad" role="alert">Something went wrong while working out the estimates. Go back, change a value and try again.</div></div>`;
+    return;
+  }
+  S.view = view;
+  els.earn.innerHTML = earnHtml(view);
+  if (S.keepStatus) { S.keepStatus = false; return; }
+  const n = view.opps.length;
+  announce(`Estimates updated: ${n} way${n === 1 ? '' : 's'} to earn found.`);
+}
+
+// ---- the two views: one document, linked by the History API (#earn) ---------------------------------------------------
+const canEarn = () => S.phase === 'results' && Boolean(S.profile);
+const TITLE_PROPERTY = document.title;
+function showEarn(push) {
+  if (!canEarn()) return false;
+  S.page = 'earn';
+  if (push) { try { history.pushState({ v: 'earn' }, '', '#earn'); } catch { /* ignore */ } }
+  els.viewProperty.hidden = true; els.earn.hidden = false;
+  document.title = 'What your property could earn - Everyspace';
+  announce('Showing what your property could earn.');
+  S.keepStatus = true; S.focusId = 'h-earn';
+  renderAll();
+  window.scrollTo(0, 0);
+  return true;
+}
+function showProperty(fix) {
+  const was = S.page;
+  S.page = 'property';
+  els.earn.hidden = true; els.viewProperty.hidden = false; els.earn.innerHTML = '';
+  document.title = TITLE_PROPERTY;
+  if (fix) { try { if (location.hash === '#earn') history.replaceState(null, '', location.pathname); } catch { /* ignore */ } }
+  if (was === 'earn') { announce('Back to your property. Everything you entered is still here.'); S.keepStatus = true; S.focusId = 'h-address'; }
+  renderAll();
+  if (was === 'earn') window.scrollTo(0, 0);
+}
+window.addEventListener('popstate', () => {
+  if (location.hash === '#earn' && canEarn()) showEarn(false);
+  else if (S.page === 'earn' || location.hash === '#earn') showProperty(true);
+});
 
 // ---------------------------------------------------------------------------------------------------------------
 // events
@@ -730,6 +794,13 @@ function checkNumber(key, n) {
   if (!Number.isFinite(n) || n < 0) return { error: 'Enter a number, like 6,500.' };
   if (n > 1e9) return { error: 'That number looks too large.' };
   if (INT_KEYS.has(key) && !Number.isInteger(n)) return { error: 'Enter a whole number.' };
+  if (key === 'remodeled_year') {
+    const now = new Date().getUTCFullYear();
+    if (!Number.isInteger(n) || n < 1800 || n > now) return { error: `Enter a 4-digit year from 1800 to ${now}.` };
+    const built = S.profile?.attributes.year_built;
+    if (hasValue(built) && typeof built.value === 'number' && n < built.value) return { error: `That is before the year built (${built.value}). Enter a later year.` };
+    return { value: n };
+  }
   if (key === 'year_built' && (n < 1600 || n > new Date().getUTCFullYear() + 2)) return { error: `Enter a year between 1600 and ${new Date().getUTCFullYear() + 2}.` };
   if (key === 'units' && n < 1) return { error: 'Enter at least 1.' };
   if (key === 'floors' && n < 1) return { error: 'Enter at least 1.' };
@@ -739,7 +810,7 @@ function checkNumber(key, n) {
 function parseFact(key, kind, raw) {
   if (kind === 'text') return { value: raw };
   const cleaned = raw.replace(/[,\s]/g, '').replace(/^[≈~]/, '');
-  if (!/^\d*\.?\d+$|^\d+\.$/.test(cleaned)) return { error: key === 'year_built' ? 'Enter a year, like 1962.' : 'Enter a number, like 6,500.' };
+  if (!/^\d*\.?\d+$|^\d+\.$/.test(cleaned)) return { error: key === 'year_built' ? 'Enter a year, like 1962.' : key === 'remodeled_year' ? 'Enter a 4-digit year, like 2015.' : 'Enter a number, like 6,500.' };
   const u = unitOf(key);
   const r = checkNumber(key, Number(cleaned));
   if (r.error) return r;
@@ -794,6 +865,12 @@ document.addEventListener('click', (ev) => {
   const b = ev.target.closest('[data-act]');
   if (!b) return;
   const act = b.dataset.act;
+  if (act === 'next-earn') { if (!els.next.disabled) showEarn(true); return; }
+  if (act === 'back-property') {
+    ev.preventDefault();
+    if (history.state && history.state.v === 'earn') history.back(); else showProperty(true);
+    return;
+  }
   if (act === 'confirm-yes') { S.confirmed = true; lookup({ confirmMatchedAddress: true }); return; }
   if (act === 'confirm-no') { S.phase = 'address'; S.result = null; announce('Edit the address and search again.'); renderAll(); els.input.focus(); els.input.select(); return; }
   if (act === 'pick') { lookup({ confirmMatchedAddress: S.confirmed, parcelApn: b.dataset.apn }); return; }
@@ -924,6 +1001,8 @@ document.addEventListener('toggle', (ev) => {
   if (d.open) S.open.add(d.dataset.dk); else S.open.delete(d.dataset.dk);
 }, true);
 
+// Nothing is saved, so arriving at #earn (a reload, a bookmark) has no property to show: start on page 1.
+try { if (location.hash === '#earn') history.replaceState(null, '', location.pathname); } catch { /* ignore */ }
 renderAll();
 attachAddressSuggest(els.input);
 

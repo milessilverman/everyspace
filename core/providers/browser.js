@@ -74,12 +74,14 @@ export function suggestionSources() {
 }
 
 /**
- * Wrap core/yard.js splitYard for the browser. Without a front point that is outside the parcel and close to it, no front
- * is ever guessed: the result is a failure whose reason is YARD_NEEDS_STREET.
+ * Wrap core/yard.js splitYard for the browser. Street centrelines (`streets`) go straight through. Otherwise, without a front point that
+ * is outside the parcel and close to it, no front is ever guessed: the result is a failure whose reason is YARD_NEEDS_STREET.
  * @param {(a:any)=>any} splitYard
  */
 export function browserSplitYard(splitYard) {
   return (/** @type {any} */ args) => {
+    // street centrelines (Overture roads) are a real street reference: passed straight on
+    if (Array.isArray(args?.streets) && args.streets.length) return splitYard(args);
     const fp = args?.frontPoint;
     if (!fp || !args?.parcel) return { ok: false, reason: YARD_NEEDS_STREET };
     if (pointInPolygon(fp, args.parcel)) return { ok: false, reason: `${YARD_NEEDS_STREET} (the locator's point falls inside the lot, so it cannot show which side is the street)` };
