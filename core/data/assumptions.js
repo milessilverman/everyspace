@@ -2,29 +2,29 @@
 // Default revenue-model assumptions.
 //
 // NONE OF THESE NUMBERS ARE MARKET DATA. They are Everyspace planning defaults copied verbatim from tables that
-// already exist in index.html, which carry no citation. Every value is tagged 'estimated', source
+// already exist in everyspace-demo index.html, which carry no citation. Every value is tagged 'estimated', source
 // 'Everyspace planning default (uncited)', and can be overridden by the owner. A category/unit with no entry here
 // has no default, and the revenue model reports that input as 'unavailable' (never 0).
 //
-//  - Prices: index.html TYPICAL (lines 5298-5313; rows 5299-5312), in dollars per term; confidence 0.2.
-//      Term -> unit mapping uses index.html TERMS (lines 5118-5125): hourly=hour, daily=day (also night: "Nightly /
+//  - Prices: everyspace-demo index.html TYPICAL (lines 5298-5313; rows 5299-5312), in dollars per term; confidence 0.2.
+//      Term -> unit mapping uses everyspace-demo index.html TERMS (lines 5118-5125): hourly=hour, daily=day (also night: "Nightly /
 //      daily"), weekly=week, monthly=month, lease=month (fixed lease priced per month), infrastructure=year.
 //      For a 'month' unit, monthly is used first, then lease; infrastructure (per year) is divided by 12 exactly as
-//      the existing estimate engine does (index.html:17872 `rate / (t === 'infrastructure' ? 12 : 1)`).
-//  - Volumes: the default usage level of the index.html earnings quiz (estimateItem, lines 17744-17880). New
-//      items start at freq 1 = "Often" (index.html:17689), so the value is USE[...].amounts[1] (index.html:17642-17652)
-//      for the usage kind that useFor picks (index.html:17670-17684); confidence 0.15.
+//      the existing estimate engine does (everyspace-demo index.html:17872 `rate / (t === 'infrastructure' ? 12 : 1)`).
+//  - Volumes: the default usage level of the everyspace-demo index.html earnings quiz (estimateItem, lines 17744-17880). New
+//      items start at freq 1 = "Often" (everyspace-demo index.html:17689), so the value is USE[...].amounts[1] (everyspace-demo index.html:17642-17652)
+//      for the usage kind that useFor picks (everyspace-demo index.html:17670-17684); confidence 0.15.
 //      'occupancy' entries are a fraction of the time rented; the model converts them to units with the
 //      capacity of the unit (month: x1, week: x 30.4/7). Only month and week units use occupancy.
-//      'lease' entries (company leases, index.html:17682 "pay the same every month") are 1 billable month per month.
-//      Gear rents `gearDays` days a month in season for SEASON months (index.html:17612), averaged over 12 months
+//      'lease' entries (company leases, everyspace-demo index.html:17682 "pay the same every month") are 1 billable month per month.
+//      Gear rents `gearDays` days a month in season for SEASON months (everyspace-demo index.html:17612), averaged over 12 months
 //      exactly as estimateItem does (`u * rate * season / 12`).
 
 export const DEFAULT_SOURCE = 'Everyspace planning default (uncited)';
 export const PRICE_CONFIDENCE = 0.2;
 export const VOLUME_CONFIDENCE = 0.15;
 
-/** Verbatim copy of index.html TYPICAL (dollars per term), with the line each row came from. */
+/** Verbatim copy of everyspace-demo index.html TYPICAL (dollars per term), with the line each row came from. */
 export const TYPICAL = Object.freeze({
   entire_home: { line: 5299, terms: { daily: 180, weekly: 1100, monthly: 3500, lease: 3200 } },
   apartment_unit: { line: 5299, terms: { daily: 120, monthly: 2000, lease: 1850 } },
@@ -94,11 +94,11 @@ export function defaultPrice(categoryKey, unit) {
       valueCents,
       term: /** @type {string} */ (term),
       source: DEFAULT_SOURCE,
-      sourceRef: `index.html:${row.line} TYPICAL`,
+      sourceRef: `everyspace-demo index.html:${row.line} TYPICAL`,
       confidence: PRICE_CONFIDENCE,
       method: divisor === 1
         ? `TYPICAL.${categoryKey}.${term} = $${terms[term]} per ${unit}`
-        : `TYPICAL.${categoryKey}.${term} = $${terms[term]} per year / ${divisor} (as index.html:17872)`,
+        : `TYPICAL.${categoryKey}.${term} = $${terms[term]} per year / ${divisor} (as everyspace-demo index.html:17872)`,
     };
   }
   return null;
@@ -107,19 +107,19 @@ export function defaultPrice(categoryKey, unit) {
 // Volume defaults per category and unit.
 //  kind 'units':     value is billable units per month
 //  kind 'occupancy': value is the fraction of time rented (converted with the unit's capacity)
-const NIGHTLY = { kind: 'units', value: 16, sourceRef: 'index.html:17643 USE.nightly[1] (home_full nightly, 17673)' };
-const STAY_NIGHTS = { kind: 'units', value: 12, sourceRef: 'index.html:17644 USE.stayNights[1] (17675-17676)' };
-const OCCUPANCY = { kind: 'occupancy', value: 0.75, sourceRef: 'index.html:17645 USE.occupancy[1] (17673-17681)' };
-const HOURS = { kind: 'units', value: 16, sourceRef: 'index.html:17647 USE.hours[1] (hourly kind, 17677)' };
-const PARK_DAYS = { kind: 'units', value: 8, sourceRef: 'index.html:17648 USE.parkDays[1] (parking daily, 17678)' };
-const EV_SLOW = { kind: 'units', value: 30, sourceRef: 'index.html:17649 USE.evSlow[1] (slow charger default, 17679, 17696)' };
-const LEASE = { kind: 'units', value: 1, sourceRef: 'index.html:17682 "company leases pay the same every month"' };
-const GEAR_DAYS = 5; // index.html:17651 USE.gearDays[1]
-/** @param {number} season months a year, index.html:17612 SEASON */
+const NIGHTLY = { kind: 'units', value: 16, sourceRef: 'everyspace-demo index.html:17643 USE.nightly[1] (home_full nightly, 17673)' };
+const STAY_NIGHTS = { kind: 'units', value: 12, sourceRef: 'everyspace-demo index.html:17644 USE.stayNights[1] (17675-17676)' };
+const OCCUPANCY = { kind: 'occupancy', value: 0.75, sourceRef: 'everyspace-demo index.html:17645 USE.occupancy[1] (17673-17681)' };
+const HOURS = { kind: 'units', value: 16, sourceRef: 'everyspace-demo index.html:17647 USE.hours[1] (hourly kind, 17677)' };
+const PARK_DAYS = { kind: 'units', value: 8, sourceRef: 'everyspace-demo index.html:17648 USE.parkDays[1] (parking daily, 17678)' };
+const EV_SLOW = { kind: 'units', value: 30, sourceRef: 'everyspace-demo index.html:17649 USE.evSlow[1] (slow charger default, 17679, 17696)' };
+const LEASE = { kind: 'units', value: 1, sourceRef: 'everyspace-demo index.html:17682 "company leases pay the same every month"' };
+const GEAR_DAYS = 5; // everyspace-demo index.html:17651 USE.gearDays[1]
+/** @param {number} season months a year, everyspace-demo index.html:17612 SEASON */
 const gear = (season) => ({
   kind: 'units',
   value: (GEAR_DAYS * season) / 12,
-  sourceRef: `index.html:17651 USE.gearDays[1]=5 x SEASON=${season} (17612) / 12`,
+  sourceRef: `everyspace-demo index.html:17651 USE.gearDays[1]=5 x SEASON=${season} (17612) / 12`,
 });
 
 /** @typedef {{kind:'units'|'occupancy', value:number, sourceRef:string}} VolumeDefault */

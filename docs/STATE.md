@@ -1,5 +1,34 @@
 # Everyspace STATE (rewritten each phase; max ~150 lines)
 
+## Demo inventory (moving to milessilverman/everyspace-demo)
+Split commit: line numbers below are for the `index.html` at the start of this branch (1.4 MB single file, `everyspace.html` byte-identical).
+
+| files | role |
+|---|---|
+| `index.html`, `everyspace.html` | the demo app (identical copies); `everyspace.html` becomes a redirect stub, `index.html` becomes the new homepage |
+| `tests/domain.test.mjs` | loads the demo's domain modules out of `index.html` (pricing, price rule, iCal, privacy) |
+| README "Earnings map", "What's in the app", "What's needed before launch", intro bullets | describe the demo only |
+
+| demo-only part | detail |
+|---|---|
+| Hash routes (`ROUTES`, line 20584) | `/` `/quiz` `/earn` `/explore` `/saved` `/long-term` `/space/:id` `/book/:id` `/book/pkg/:id` `/trips` `/trip/:id` `/offer/:id` `/inbox` `/chat/:id` `/host` `/host/listings` `/host/calendar` `/host/import` `/host/tasks` `/host/sites` `/xchat/:id` `/host/docs` `/host/team` `/promise` `/host/earnings` `/host/new` `/host/space/:id` `/fair-price` `/biz` `/biz/pipeline` `/map` `/profile` `/plan` `/catalog` (`/earn` listed twice) |
+| Embedded library | Leaflet 1.9.4 inlined, `<script id="leaflet-lib">` lines 5101-5108 (BSD-2-Clause) |
+| localStorage | `everyspace-demo-v13` (whole demo db, line 10164), `everyspace:<key>` (prefs, lines 10229, 19821); no sessionStorage, no cookies |
+| External hosts | fonts.googleapis.com, fonts.gstatic.com, nominatim.openstreetmap.org, overpass-api.de, overpass.kumi.systems, public.gis.lacounty.gov, server.arcgisonline.com (+ CARTO tiles), generativelanguage.googleapis.com (AI description); the rest are outbound links (airbnb, spothero, swimply) |
+
+| reference outside the demo | runtime dependency of the real app? | action |
+|---|---|---|
+| `core/data/{categories,assumptions,platform-fees,jurisdictions,parcel-services}.js`, `core/parcel.js` comments | no: cite line numbers as origin of copied defaults, nothing imported | retarget to `everyspace-demo index.html:<line>` |
+| `core/tests/opportunities.test.mjs` 214, 227-234 | no (test only), but READS `../../index.html` and checks `CATEGORIES` key lines | content check removed (demo no longer here); format check retargeted |
+| `core/tests/regulatory.test.mjs` 56 | no, regex on `sourceRef` | regex retargeted |
+| `docs/revenue-method.md` | no | retarget |
+| `docs/{audit,gaps,risks,roadmap,architecture,data-availability,integrations,security}.md`, `docs/STATE.md` | no, prose | left (historical); `architecture.md` row for demo is now stale |
+| `docs/audit/*` | no | untouched by instruction |
+| `platform/README.md` line 3, `platform/supabase/migrations/20261124020000_catalog.sql` line 35 | no | README fixed; migration comment left (platform/** and migrations are frozen) |
+| `tests/estimate.e2e.mjs`, `tests/host.e2e.mjs` | no: only `estimate/index.html` and `host/index.html` | none |
+| `README.md` | no | rewritten |
+
+
 Updated 2026-11-24, end of run 1. Branch `claude/trusting-cannon-yynabw`. This file plus the paths in a brief are all an agent reads.
 
 ## Status
@@ -17,7 +46,8 @@ Updated 2026-11-24, end of run 1. Branch `claude/trusting-cannon-yynabw`. This f
 |---|---|
 | `cd platform && npm test` | 231 pass |
 | `cd platform && npm run test:staging` (local Postgres 16, two-connection races) | 16 pass |
-| `node --test tests/*.test.mjs core/tests/*.test.mjs` (repo root) | 272 pass |
+| `node --test core/tests/*.test.mjs` (repo root; demo tests moved out) | 257 pass |
+| `node tests/home.e2e.mjs` (browser, mocked lookups) | 7 scenarios pass |
 | `node tests/estimate.e2e.mjs` (browser, mocked lookups) | 11 scenarios pass |
 | `node tests/host.e2e.mjs` (browser, mocked backend) | 18 checks pass |
 Baseline before the run: platform 34, root 15.

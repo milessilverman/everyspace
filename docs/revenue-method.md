@@ -8,11 +8,11 @@ One estimate per opportunity (a category on a specific property), then one optim
 ## 2. Inputs (each is a `Sourced` value: value, tag, source, date, confidence)
 | input | default source today | tag / confidence | owner can override |
 |---|---|---|---|
-| price per unit | `TYPICAL` table already in `index.html:5298` (no citation) | estimated / 0.2 | yes -> owner-confirmed / 0.9 |
-| units sold per month | occupancy assumptions already in `index.html:17744-17790` (no citation) | estimated / 0.15 | yes |
+| price per unit | `TYPICAL` table already in `everyspace-demo index.html:5298` (no citation) | estimated / 0.2 | yes -> owner-confirmed / 0.9 |
+| units sold per month | occupancy assumptions already in `everyspace-demo index.html:17744-17790` (no citation) | estimated / 0.15 | yes |
 | capacity units per month | arithmetic from the unit (30.4 nights; owner-set hours x days) | measured for nights/months; estimated for hourly | yes |
 | bookings per month | units / typical booking length (assumption) | estimated / 0.15 | yes |
-| platform fee | `PLATFORMS` table in `index.html:5978` (`verified:false`) | estimated / 0.2 | yes |
+| platform fee | `PLATFORMS` table in `everyspace-demo index.html:5978` (`verified:false`) | estimated / 0.2 | yes |
 | cleaning, utilities, insurance | none | unavailable | yes |
 | occupancy tax rate, permit cost | `core/data/jurisdictions.js` (unverified until official pages are fetched) | estimated / 0.2, or unavailable | yes |
 | upfront cost | none | unavailable (0 only for `existing` basis with a note) | yes |

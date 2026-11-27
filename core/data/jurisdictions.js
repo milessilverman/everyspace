@@ -8,7 +8,7 @@
 //
 // Seeds:
 //  1. Los Angeles: only what platform/docs/PLAN.md lines 126-127 state.
-//  2. Generic (no jurisdiction): the per-category requirement checklists from index.html CATEGORIES, as `require` rules.
+//  2. Generic (no jurisdiction): the per-category requirement checklists from everyspace-demo index.html CATEGORIES, as `require` rules.
 import { CHECKLISTS } from './categories.js';
 
 /**
@@ -73,7 +73,7 @@ const GENERIC = CHECKLISTS.filter((c) => c.items.length > 0).map((c) => ({
   verified: false,
   verifiedAt: null,
   sourceUrl: null,
-  sourceRef: `index.html:${c.line}`,
+  sourceRef: `everyspace-demo index.html:${c.line}`,
 }));
 
 /** @type {JurisdictionRule[]} */

@@ -1,25 +1,12 @@
 # Everyspace
 
-Free rental management for everything you rent out: homes, rooms, backyards, pools, parking, storage, roofs and more.
-
-- One calendar and one inbox for Everyspace, Airbnb, Vrbo, Booking.com, Expedia, Swimply and other sites
-- Calendar sync, double-booking alerts and price sync ("list once, live everywhere")
-- Turnovers and tasks, expenses and profit, permits and insurance reminders
-- Earnings quiz, pricing help, private neighbor offers and cleaning-gap rentals
-- Also a marketplace with a 3% host fee and all-in prices for renters
+Find out how much more your property could be earning, and manage what you rent out: homes, rooms, backyards, pools, parking, storage, roofs and more.
 
 **Live site:** https://milessilverman.github.io/everyspace/
 
-`index.html` and `everyspace.html` are the same single-file app. It runs entirely in the browser with demo data (saved in your browser's local storage); connections to other sites are simulated until partner integrations and a backend are in place.
+The homepage (`index.html`) is a single address box. Submitting it opens the income estimator (`estimate/`) with the address in the URL fragment, which the estimator reads once and then removes from the address bar. Without JavaScript the form falls back to a plain GET to `estimate/?address=`. The homepage itself makes no lookups and stores nothing.
 
-## Earnings map
-
-`#/map` shows what a specific home could earn:
-
-- **Event parking:** stadiums, arenas, fairs, festivals and parades around Los Angeles (SoFi, Dodger Stadium, the Rose Bowl, Fiesta La Ballona and more) with walking-distance zones. Tap a home or search an address to see what its driveway could earn on event days. Venue positions are approximate, and event counts and prices are typical figures, not guarantees.
-- **Solar:** tap a roof to measure it from its OpenStreetMap building outline (or draw it), pick the slope, shape and facing, and see the system size and what a solar company could pay.
-
-Data sources, all queried from the visitor's browser: LA County Assessor parcels (public.gis.lacounty.gov), OpenStreetMap buildings (Overpass API) and search (Nominatim), CARTO street tiles and Esri World Imagery. The map library is [Leaflet](https://leafletjs.com) 1.9.4 (BSD-2-Clause), embedded in the page.
+The earlier single-file demo (earnings quiz, earnings map, marketplace screens, simulated site sync) has moved to [milessilverman/everyspace-demo](https://github.com/milessilverman/everyspace-demo), live at https://milessilverman.github.io/everyspace-demo/. `everyspace.html` redirects there so old links keep working.
 
 ## Host Console (`host/`)
 
@@ -77,31 +64,21 @@ Plain JavaScript with no dependencies, used by the estimator and tests (and mean
 - `types.js`: the shared contracts.
 - `data/`: planning defaults, categories, platform fees, rules, parcel services and scenario spreads.
 
-## What's in the app (`index.html`)
-
-`index.html` (and its copy `everyspace.html`) is the full app, combining the newest version with everything the earlier site had:
-
-- **Earnings quiz** as the home page. Landing cards like "Have a roof?" open it with that item ticked. Bare land and condos only show what they can really rent.
-- **Earnings map** (`#/map`): event parking near LA venues and roof solar estimates.
-- **Listing wizard** with photos, an AI description, smart pricing, a site picker and a results screen.
-- **"Where you're listed"**: one host profile, sign-in or account creation on each site, per-site switches, "Turn on every site", and the listing team posting where there's no direct connection.
-- **Host Command Center**: zones, smart locks, insurance, and a monthly statement.
-- **Destination ride cursors and color themes**, including mixed colors.
-- **Pricing**: managing other sites is free. Everyspace earns a revenue share only on what it brings in: 10% until $30 a month, then 3%.
-
-It links to the real [Host Console](host/) for running actual listings.
-
 ## Tests
 
-Run these from the repository root unless noted. Counts are from 2026-11-24.
+Run these from the repository root unless noted. Counts are from 2026-11-27.
 
 ```bash
-node --test tests/*.test.mjs core/tests/*.test.mjs
+node --test core/tests/*.test.mjs
 ```
 
-This runs the core rules in the app (pricing, the price rule, iCal sync, listing everywhere, privacy; they load the app's domain code straight from `index.html`, so the site stays a single file) and the `core/` modules. 272 tests pass.
+This runs the `core/` modules. 257 tests pass.
 
-Two browser tests drive the pages with a mocked network (they never touch a real site or database):
+Three browser tests drive the pages with a mocked network (they never touch a real site or database):
+
+```bash
+node tests/home.e2e.mjs
+```
 
 ```bash
 node tests/estimate.e2e.mjs
@@ -111,7 +88,7 @@ node tests/estimate.e2e.mjs
 node tests/host.e2e.mjs
 ```
 
-The estimator test runs 11 browser scenarios; the Host Console test runs 18 checks. They need Playwright with Chromium.
+The homepage test runs 7 scenarios, the estimator test 11, and the Host Console test 18 checks. They need Playwright with Chromium.
 
 The backend has its own tests. From `platform/`:
 
@@ -133,13 +110,9 @@ This runs 16 race and replay tests on a local Postgres 16 and needs a local Post
 
 ## What's needed before launch
 
-The app is a complete, working front end with demo data. To take real bookings it still needs:
+The estimator and Host Console are real; the earlier demo's marketplace, payments and listing-team ideas are not part of this repository. To take real bookings it still needs:
 
-1. **Accounts and a backend.** Real sign-in, a database, and server-side checks that the person making a request owns the listing or booking (the demo API trusts the user ID it's given).
-2. **Payments.** Stripe Connect (or similar) for renter charges, deposits held on card, and host payouts.
-3. **Partner connections.** Approval from Airbnb, Booking.com and Expedia Group (Vrbo/Expedia) partner programs for direct listing, price and calendar updates. Until then those sites use iCal sync plus our listing team.
-4. **A listing team (or tooling)** to post to sites without a direct connection (Swimply, Peerspace, Neighbor and others) and confirm each is live.
-5. **Verified fees.** Other sites' fees are estimates in one table (`PLATFORMS` in the code), labeled as estimates in the app until checked.
-6. **Legal and insurance.** Terms, privacy policy, host protection insurance, lease and infrastructure agreement templates, and local short-term-rental rules.
-7. **Photos.** Upload and storage for listing photos (the demo draws each space).
-8. **Marketplace wording.** The line about a marketplace with a 3% host fee, and the demo's marketplace screens, conflict with the management-first direction. They are left as they are until the owner decides.
+1. **Accounts and a backend applied to production.** Migrations and edge functions are staged, not deployed (see `docs/STATE.md`).
+2. **Partner connections.** Approval from Airbnb, Booking.com and Expedia Group for direct listing, price and calendar updates. Until then sites use iCal sync.
+3. **Verified fees and rules.** Platform fees and local rules are labelled planning defaults until checked against their publishers.
+4. **Legal and insurance.** Terms, privacy policy, host protection insurance and local short-term-rental rules.
