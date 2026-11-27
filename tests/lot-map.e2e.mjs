@@ -71,6 +71,8 @@ function aerial(urlStr, mark) {
 // ---- mock world --------------------------------------------------------------------------------------------------------------------------------
 let world = 'county';
 let photoMode = 'png'; // 'png' | '404'
+let lariacDelay = 0; // ms the building outlines (and with them the lookup's measured geometry bundle) are held back
+let lariacSlivers = false; // add two tiny outlines to the building answer
 const MARK = [-118.3, 34]; // the synthetic lot's first corner
 const rec0 = { photo: [], hosts: [] };
 function answer(urlStr, range = null) {
@@ -92,7 +94,14 @@ function answer(urlStr, range = null) {
     if (dec.includes('CAMS_Locator') && dec.includes('/suggest')) return { status: 200, body: pfx('la-cams-suggest.json') };
     if (dec.includes('CAMS_Locator')) return { status: 200, body: pfx('synthetic-cams-sfr.json') };
     if (dec.includes('LACounty_Parcel')) return { status: 200, body: pfx('synthetic-assessor-sfr.json') };
-    if (dec.includes('LARIAC')) return { status: 200, body: pfx('synthetic-lariac-sfr.json') };
+    if (dec.includes('LARIAC')) {
+      const body = JSON.parse(JSON.stringify(pfx('synthetic-lariac-sfr.json')));
+      if (lariacSlivers) {
+        const sq = (lng, lat, id) => ({ attributes: { OBJECTID: id, CODE: 'Building', BLD_ID: String(id), HEIGHT: 8, ELEV: 300, SOURCE: 'LARIAC6', DATE_: '2020', STATUS: 'New', AREA: 64, Shape_Area: 0 }, geometry: { rings: [[[lng, lat], [lng, lat + 0.0000220], [lng + 0.0000260, lat + 0.0000220], [lng + 0.0000260, lat], [lng, lat]]] } });
+        body.features.push(sq(-118.29997, 34.00019, 91), sq(-118.29993, 34.00019, 92));
+      }
+      return { status: 200, body };
+    }
   }
   if (u.hostname === 'nominatim.openstreetmap.org') return { status: 200, body: fx('nominatim-la.json') };
   return null;
@@ -136,6 +145,7 @@ async function scenario(name, fn, { viewport = { width: 1280, height: 900 }, red
       if (photoMode === '404') return route.fulfill({ status: 404, contentType: 'text/plain', headers: { 'access-control-allow-origin': '*' }, body: 'nothing here' });
       return route.fulfill({ status: 200, contentType: 'image/png', headers: { 'access-control-allow-origin': '*' }, body: aerial(url, world === 'county' ? MARK : null) });
     }
+    if (lariacDelay && url.includes('LARIAC')) return new Promise((r) => setTimeout(r, lariacDelay)).then(() => route.fulfill({ status: a.status, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(a.body) }).catch(() => {}));
     return route.fulfill({ status: a.status, contentType: a.type ?? 'application/json', headers: { 'access-control-allow-origin': '*', 'access-control-expose-headers': 'content-range' }, body: a.raw ?? JSON.stringify(a.body) });
   });
   await page.addInitScript(() => { new MutationObserver(() => { if (!window.__factsAt && document.querySelector('#facts .fact')) window.__factsAt = performance.timeOrigin + performance.now(); }).observe(document, { subtree: true, childList: true }); });
@@ -467,6 +477,116 @@ await scenario('no lot outline (Chicago City Hall): starter box with the hint; a
   const e2 = await expectedFromPage(page); const f = await figures(page);
   assert.ok(Number.isFinite(e2.m.front_yard_sqft) && f.front_yard_sqft === e2.m.front_yard_sqft && f.back_yard_sqft === e2.m.back_yard_sqft, `yards filled (${f.front_yard_sqft}/${f.back_yard_sqft})`);
   await page.screenshot({ path: `${SHOTS}/starter-desktop.png`, fullPage: false });
+});
+
+// ---- the lookup's measured bundle arrives AFTER the map was set up (outlines/streets held back) -----------------------------------------------
+const bundleOf = (page) => page.evaluate(async () => { const m = await import('/estimate/app.js'); const p = m.getProfile(); return p?.geometry ? JSON.parse(JSON.stringify({ ...p.geometry, zones: undefined, image: undefined })) : null; });
+const mapText = (page) => page.locator('#lot-map').innerText();
+const legendNum = async (page, name) => { const t = await page.locator('#lot-map .lm-legend').innerText(); const m = new RegExp(`${name}\\s*\\n?\\s*([\\d,]+) sq ft`).exec(t); return m ? Number(m[1].replace(/,/g, '')) : null; };
+const mapLotOnly = async (page) => { await page.waitForSelector('#lot-map .lm-h', { state: 'attached' }); await page.waitForFunction(() => !document.querySelector('#lot-map').hidden && document.querySelector('#lot-map .lm-frame')?.dataset.model); };
+const bundleArrived = (page) => page.waitForFunction(async () => { const m = await import('/estimate/app.js'); return Boolean(m.getProfile()?.geometry); }, null, { timeout: 15000 });
+
+await scenario('late bundle: after it arrives the street side and both zones are drawn, the legend equals the list and measureFromGeometry(profile.geometry); the tap-the-side prompt is gone', async (page) => {
+  world = 'county'; photoMode = 'png'; lariacDelay = 2500;
+  try {
+    await open(page); await mapLotOnly(page);
+    assert.equal(await page.locator('#lot-map .lm-front-line').count(), 0, 'no street side drawn before the bundle');
+    await bundleArrived(page); await settled(page);
+    await page.waitForFunction(() => document.querySelector('#lot-map .lm-front-line'), null, { timeout: 10000 });
+    const g = await bundleOf(page);
+    const m = measureFromGeometry(g, { now: new Date().toISOString() });
+    assert.ok(Number.isFinite(m.front_yard_sqft) && Number.isFinite(m.back_yard_sqft), 'the bundle measures a front and back yard');
+    const f = await figures(page);
+    for (const k of ['front_yard_sqft', 'back_yard_sqft', 'usable_yard_sqft', 'usable_front_yard_sqft', 'usable_back_yard_sqft', 'building_footprint_sqft', 'roof_area_sqft']) assert.equal(f[k], m[k], `list ${k}`);
+    assert.equal(await legendNum(page, 'Front yard'), m.front_yard_sqft); assert.equal(await legendNum(page, 'Back yard'), m.back_yard_sqft);
+    assert.match(await page.locator('#lot-map .lm-legend').innerText(), new RegExp(`Usable yard\\s*${m.usable_yard_sqft.toLocaleString('en-US')} sq ft`));
+    assert.doesNotMatch(await mapText(page), /tap the side/i);
+    assert.ok(await page.evaluate(() => document.querySelector('#lot-map .lm-zone[d]:not([d=""])') !== null), 'a yard tint is drawn');
+    assert.equal(await page.evaluate(() => [...document.querySelectorAll('#lot-map .lm-zone')].filter((z) => z.getAttribute('d')).length), 2, 'both zones are drawn');
+    assert.ok(await page.locator('#lot-map .lm-label.is-street').count() >= 1, 'Street side label');
+    assert.equal(await state(page, 'front_yard_sqft'), 'estimated'.length ? await state(page, 'front_yard_sqft') : '', 'the list line is the lookup value (not edited)');
+    assert.notEqual(await state(page, 'front_yard_sqft'), 'edited');
+  } finally { lariacDelay = 0; }
+});
+
+await scenario('late bundle: a street side the owner marked before it arrived is kept', async (page) => {
+  world = 'county'; photoMode = 'png'; lariacDelay = 3000;
+  try {
+    await open(page); await mapLotOnly(page);
+    const hs = await handles(page, 'lot');
+    const top = hs.filter((h) => Math.abs(h.y - Math.min(...hs.map((p) => p.y))) < 3);
+    await page.mouse.click((top[0].sx + top[1].sx) / 2, top[0].sy);
+    await page.click('#lm-bfront');
+    const chosen = await page.evaluate(() => document.querySelector('#lot-map .lm-frame').dataset.front);
+    assert.ok(chosen, 'the owner marked the top side');
+    await bundleArrived(page); await settled(page);
+    await page.waitForFunction(() => document.querySelector('#lot-map .lm-legend').innerText.includes('Back yard'), null, { timeout: 10000 });
+    await page.waitForTimeout(300);
+    assert.equal(await page.evaluate(() => document.querySelector('#lot-map .lm-frame').dataset.front), chosen, 'the owner\'s side is still the street side');
+    const { m } = await expectedFromPage(page); const f = await figures(page);
+    assert.equal(f.front_yard_sqft, m.front_yard_sqft); assert.equal(f.back_yard_sqft, m.back_yard_sqft);
+    assert.equal(await legendNum(page, 'Front yard'), m.front_yard_sqft);
+    const g = await bundleOf(page); const mg = measureFromGeometry(g, { now: new Date().toISOString() });
+    assert.notEqual(m.front_yard_sqft, mg.front_yard_sqft, "the owner's side gives other figures than the lookup's");
+  } finally { lariacDelay = 0; }
+});
+
+await scenario('late bundle: Reset outlines returns to the bundle figures', async (page) => {
+  world = 'county'; photoMode = 'png'; lariacDelay = 2500;
+  try {
+    await open(page); await mapLotOnly(page); await bundleArrived(page); await settled(page);
+    await page.waitForFunction(() => document.querySelector('#lot-map .lm-front-line'), null, { timeout: 10000 });
+    const before = await figures(page); const g = await bundleOf(page); const mg = measureFromGeometry(g, { now: new Date().toISOString() });
+    const hs = await handles(page, 'lot'); await drag(page, hs.reduce((a, h) => (h.y < a.y ? h : a)), -12, -14);
+    await page.waitForFunction(() => document.querySelector('.fact[data-key="lot_area_sqft"]').dataset.state === 'edited');
+    assert.notDeepEqual(await figures(page), before);
+    await page.click('#lm-breset');
+    await page.waitForFunction(() => !document.querySelector('.fact[data-state="edited"]'));
+    const after = await figures(page); assert.deepEqual(after, before);
+    for (const k of ['lot_area_sqft', 'front_yard_sqft', 'back_yard_sqft', 'usable_yard_sqft', 'building_footprint_sqft', 'roof_area_sqft']) assert.equal(after[k], mg[k], k);
+    assert.equal(await legendNum(page, 'Front yard'), mg.front_yard_sqft);
+  } finally { lariacDelay = 0; }
+});
+
+await scenario('late bundle: a corner being dragged when it arrives is not moved', async (page) => {
+  world = 'county'; photoMode = 'png'; lariacDelay = 2500;
+  try {
+    await open(page); await mapLotOnly(page);
+    assert.equal(await page.evaluate(async () => Boolean((await import('/estimate/app.js')).getProfile()?.geometry)), false, 'bundle not here yet');
+    const hs = await handles(page, 'lot'); const far = hs.reduce((a, h) => (h.y < a.y ? h : a));
+    await page.mouse.move(far.sx, far.sy); await page.mouse.down(); await page.mouse.move(far.sx - 9, far.sy - 11, { steps: 6 });
+    await frames(page);
+    const held = (await handles(page, 'lot')).find((h) => h.id === far.id);
+    assert.ok(Math.abs(held.x - (far.x - 9)) < 1.5 && Math.abs(held.y - (far.y - 11)) < 1.5, 'the corner follows the pointer');
+    await bundleArrived(page); await page.waitForFunction(() => document.querySelector('#lot-map .lm-front-line'), null, { timeout: 10000 });
+    if (process.env.DBG) console.log('DBGP', await page.evaluate(async () => { const p = (await import('/estimate/app.js')).getProfile(); return JSON.stringify([p.geometry.parcel.type, p.geometry.parcel.coordinates[0].length, p.attributes.parcel_boundary.value.coordinates[0].length, p.geometry.parcel.coordinates[0][0], p.attributes.parcel_boundary.value.coordinates[0][0]]); }));
+    await frames(page);
+    const after = (await handles(page, 'lot')).find((h) => h.id === far.id);
+    assert.ok(Math.abs(after.x - held.x) < 0.01 && Math.abs(after.y - held.y) < 0.01 && after.lng === held.lng && after.lat === held.lat, 'the corner did not move when the bundle arrived');
+    await page.mouse.move(far.sx - 12, far.sy - 14, { steps: 4 }); await page.mouse.up();
+    if (process.env.DBG) { await page.waitForTimeout(800); console.log('DBGQ', JSON.stringify(await handles(page, 'lot')), JSON.stringify(await figures(page)), await page.locator('#lm-note').innerText(), await page.locator('.fact[data-key="lot_area_sqft"]').getAttribute('data-state'), await page.locator('#lm-breset').isVisible()); }
+    await page.waitForFunction(() => document.querySelector('.fact[data-key="lot_area_sqft"]').dataset.state === 'edited');
+    const model = await page.evaluate(() => JSON.parse(document.querySelector('#lot-map .lm-frame').dataset.model));
+    const g = await bundleOf(page); g.parcel = { type: 'Polygon', coordinates: [[...model.lot, model.lot[0]]] };
+    const m = measureFromGeometry(g, { now: new Date().toISOString() }); const f = await figures(page);
+    assert.equal(f.lot_area_sqft, m.lot_area_sqft); assert.equal(f.back_yard_sqft, m.back_yard_sqft); assert.equal(f.front_yard_sqft, m.front_yard_sqft);
+  } finally { lariacDelay = 0; }
+});
+
+await scenario('very small outlines are measured but get no handles or legend line of their own; several fold into one "Other buildings" total; the house stays the house', async (page) => {
+  world = 'county'; photoMode = 'png'; lariacSlivers = true;
+  try {
+    await open(page); await mapReady(page); await settled(page);
+    const t = await page.locator('#lot-map .lm-legend').innerText();
+    assert.match(t, /Other buildings\s*\n?\s*1[23]\d sq ft in all \(2 small outlines\)/, t);
+    assert.equal((t.match(/Other building\b/g) ?? []).length, 1, 'only the 300 sq ft building has its own line');
+    assert.match(t, /House\s*\n?\s*1,400 sq ft footprint/);
+    const per = await page.evaluate(() => { const c = {}; for (const h of document.querySelectorAll('#lot-map .lm-h')) c[h.dataset.shape] = (c[h.dataset.shape] ?? 0) + 1; return Object.values(c).sort(); });
+    assert.deepEqual(per, [4, 4, 4], 'lot, house and the 300 sq ft building only');
+    assert.equal(await page.locator('#lot-map .lm-svg .lm-house').count(), 1, 'one house outline');
+    assert.equal(await page.evaluate(() => JSON.parse(document.querySelector('#lot-map .lm-frame').dataset.model).blds.length), 4, 'slivers are still outlines in the measurement');
+    assert.equal(await val(page, 'building_footprint_sqft'), 1400);
+  } finally { lariacSlivers = false; }
 });
 
 await scenario('photo answers 404: outlines still drawn, nothing said about it', async (page, rec) => {

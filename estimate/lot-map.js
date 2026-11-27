@@ -94,7 +94,7 @@ export function sourceFromProfile(profile) {
   if (g && typeof g === 'object' && (g.parcel || (Array.isArray(g.buildings) && g.buildings.length))) {
     const { parcel, parcelSource, buildings, image, zones: _z, ...rest } = g;
     const list = (buildings ?? []).filter((b) => b && (b.polygon || b.type)).map((b) => ({ polygon: b.polygon ?? b, main: Boolean(b.main) }));
-    return { from: 'bundle', parcel: parcel ?? null, parcelSource: parcel ? (parcelSource ?? 'record') : null, buildings: list, rest, image: image ?? null };
+    return { from: 'bundle', parcel: parcel ?? null, parcelSource: parcel ? (parcelSource ?? 'record') : null, buildings: list, rest, image: image ?? null, ref: g };
   }
   const a = profile.attributes ?? {};
   const val = (k) => (a[k] && a[k].tag !== 'unavailable' && a[k].value !== null && a[k].value !== undefined ? a[k].value : null);
@@ -298,17 +298,46 @@ export function initLotMap(opts) {
     return p ? sourceFromProfile(p) : null;
   };
 
+  const SLIVER_SQFT = 100;
+  const areaOf = (sh) => { try { return core.areaSqft(toGeo(sh)); } catch { return 0; } };
+  /** a tiny outline that is not the house: still measured, but no handles of its own and no legend line */
+  const isSliver = (sh) => sh.kind === 'bld' && !sh.main && areaOf(sh) < SLIVER_SQFT;
+  /** exactly one house: the one the lookup flagged, unless it is a sliver and something bigger exists; with none flagged, the largest */
+  function pickMain() {
+    if (!M.blds.length) return;
+    const areas = M.blds.map(areaOf);
+    let mi = M.blds.findIndex((b) => b.main);
+    const big = areas.reduce((bi, a, i) => (a > areas[bi] ? i : bi), 0);
+    if (mi < 0 || (areas[mi] < SLIVER_SQFT && areas[big] >= SLIVER_SQFT)) mi = big;
+    M.blds.forEach((b, i) => { b.main = i === mi; });
+  }
+  /** the lookup's own measurement (street lines, front side, roof inputs) arrived after the map was set up from attributes: adopt it */
+  function adoptBundle(src) {
+    M.bundleRef = src.ref;
+    M.source = 'bundle'; M.rest = src.rest;
+    if (src.parcelSource && !M.starter) M.parcelSource = src.parcelSource;
+    if (src.image) { M.imageInfo = src.image; if (M.imgState === 'ok') showCredit(); }
+    if (!M.frontSet) { M.frontIds = null; }
+    M.baseFront = null; if (M.base) { M.base.front = null; M.base.frontSet = false; }
+    if (M.starter) return;
+    M.m = measureNow();
+    if (M.edited && !M.drag) { // the owner already moved an outline: the lookup's street side now gives it front and back figures, so the list gets them too
+      setTimeout(() => { if (M && !M.drag) { M.gestureBefore = snap(); commit('front'); } }, 0);
+    } else M.lastMeasure = M.m;
+    if (D.body) { D.sub.textContent = subline(); paint(true); }
+  }
+
   function setup(src) {
     const sigP = src.parcel ? sigOf(src.parcel) : 'none';
     const m0 = { sigP, sigB: src.buildings.map((b) => sigOf(b.polygon)).join('|') };
     M = {
       ...m0, source: src.from, rest: src.rest, parcelSource: src.parcelSource, starter: false, lot: null, blds: [], frontIds: null, frontSet: false, base: null, baseFront: null,
       history: [], mapKeys: new Map(), gestureBefore: null, edited: false, sel: null, m: null, lastMeasure: null, lastMs: 0, note: '', image: null, imgState: 'idle', imageInfo: src.image,
-      Wd: 0, Hd: 0, frame: null, drag: null, lastTap: null,
+      Wd: 0, Hd: 0, frame: null, drag: null, lastTap: null, bundleRef: src.ref ?? null,
     };
     try {
       src.buildings.forEach((b, i) => { try { M.blds.push(makeShape(b.polygon, 'bld', b.main, b.main ? 'House' : 'Building')); } catch { /* skip an outline that is not a polygon */ } });
-      if (!M.blds.some((b) => b.main) && M.blds.length) M.blds[0].main = true;
+      pickMain();
       if (src.parcel) M.lot = makeShape(src.parcel, 'lot', false, 'Lot');
       else {
         const main = M.blds.find((b) => b.main);
@@ -461,13 +490,14 @@ export function initLotMap(opts) {
       const path = svgEl('path', { class: cls, fill: 'none' }, D.gShapes);
       D.els.shapes.set(sh.id, { casing, path });
       if (sh.kind === 'bld') D.els.mask.set(sh.id, svgEl('path', {}, D.maskG));
-      sh.verts.forEach((v, i) => {
+      const sliver = isSliver(sh);
+      if (!sliver) sh.verts.forEach((v, i) => {
         const line = svgEl('line', { class: 'lm-edge', 'data-shape': sh.id, 'data-i': i }, D.gEdges);
         if (sh.kind === 'lot') { line.setAttribute('tabindex', '0'); line.setAttribute('role', 'button'); line.setAttribute('aria-label', `Lot side ${i + 1} of ${sh.verts.length}. Press Enter to choose it as the side facing the street.`); line.id = `${uid}-e-${v.id}`; }
         D.els.edges.push({ sh, i, line });
       });
       const vis = new Set(visibleVerts(sh).map((v) => v.id));
-      sh.verts.forEach((v, i) => {
+      if (!sliver) sh.verts.forEach((v, i) => {
         if (!vis.has(v.id)) return;
         const g = svgEl('g', { class: 'lm-h', id: `${uid}-v-${v.id}`, tabindex: '0', role: 'button', 'data-vid': v.id, 'data-shape': sh.id, 'aria-label': `${sh.kind === 'lot' ? 'Lot' : sh.main ? 'House' : 'Building'} corner ${i + 1} of ${sh.verts.length}` }, D.gHandles);
         svgEl('circle', { class: 'lm-hit', r: 17 }, g);
@@ -493,7 +523,9 @@ export function initLotMap(opts) {
   };
   function buildLegend() {
     const rows = [['lot', 'lot', 'Lot outline']];
-    M.blds.forEach((b, i) => rows.push([b.id, b.main ? 'house' : 'other', b.main ? 'House' : `Other building${M.blds.filter((x) => !x.main).length > 1 ? ` ${M.blds.filter((x) => !x.main).indexOf(b) + 1}` : ''}`]));
+    const others = M.blds.filter((x) => !x.main && !isSliver(x));
+    M.blds.forEach((b) => { if (b.main) rows.push([b.id, 'house', 'House']); else if (!isSliver(b)) rows.push([b.id, 'other', `Other building${others.length > 1 ? ` ${others.indexOf(b) + 1}` : ''}`]); });
+    if (M.blds.filter(isSliver).length > 1) rows.push(['small', 'other', 'Other buildings']);
     rows.push(['front', 'front', 'Front yard'], ['back', 'back', 'Back yard'], ['usable', 'usable', 'Usable yard']);
     for (const [id, kind, name] of rows) {
       const li = html('li', { class: 'lm-li', 'data-row': id }, null, D.legend);
@@ -604,6 +636,8 @@ export function initLotMap(opts) {
       else { try { text = `${fmt(core.areaSqft(toGeo(b)))} sq ft`; } catch { text = ''; } }
       set(b.id, text, false, !text);
     }
+    const slivers = M.blds.filter(isSliver);
+    if (slivers.length > 1) set('small', `${fmt(slivers.reduce((t, b) => t + areaOf(b), 0))} sq ft in all (${slivers.length} small outlines)`);
     const hasYard = m && num(m.front_yard_sqft) && num(m.back_yard_sqft);
     set('front', hasYard ? `${fmt(m.front_yard_sqft)} sq ft` : 'tap the side that faces the street', !hasYard, !M.blds.length);
     set('back', hasYard ? `${fmt(m.back_yard_sqft)} sq ft` : '', false, !hasYard);
@@ -916,7 +950,8 @@ export function initLotMap(opts) {
     // a new property, or new outlines arriving for this one
     const sigP = src.parcel ? sigOf(src.parcel) : 'none', sigB = src.buildings.map((b) => sigOf(b.polygon)).join('|');
     if (M && M.sigP !== sigP) { clearTimeout(setupTimer); M = null; }
-    else if (M && M.sigB !== sigB && !M.starter && (!M.edited || !M.blds.length)) { refreshBuildings(src, sigB); return; }
+    else if (M && src.from === 'bundle' && M.bundleRef !== src.ref) adoptBundle(src);
+    if (M && M.sigP === sigP && M.sigB !== sigB && !M.starter && (!M.edited || !M.blds.length)) { refreshBuildings(src, sigB); return; }
     if (!M) {
       mount.hidden = true;
       if (setupTimer) return;
@@ -946,12 +981,18 @@ export function initLotMap(opts) {
   function refreshBuildings(src, sigB) {
     M.sigB = sigB; M.blds = [];
     for (const b of src.buildings) { try { M.blds.push(makeShape(b.polygon, 'bld', b.main, b.main ? 'House' : 'Building')); } catch { /* skip */ } }
-    if (!M.blds.some((b) => b.main) && M.blds.length) M.blds[0].main = true;
-    M.base = snap(); M.history = []; M.mapKeys = new Map(); M.sel = null; M.gestureBefore = null;
+    pickMain();
+    const gb = M.drag ? M.gestureBefore : null; // a corner being dragged keeps the snapshot it started from
+    M.base = snap(); M.history = []; M.mapKeys = new Map(); M.sel = null; M.gestureBefore = gb;
     const hasRef = (M.rest.streets && M.rest.streets.length) || M.rest.frontEdge || M.rest.frontPoint;
     if (!hasRef && !M.frontSet) { const ids = inferFront(); M.frontIds = ids; M.baseFront = ids; M.base = snap(); }
-    M.m = measureNow(); M.lastMeasure = M.m;
+    M.m = measureNow(); M.lastMeasure = M.edited ? {} : M.m; // edited: every yard figure the map now has is new to the list
+    const dragging = M.drag ? { ...M.drag } : null;
     structure(); paint(true);
+    if (dragging) { // the corner being dragged was rebuilt with the rest: hand the pointer to the new one, no focus change otherwise
+      const g = D.els.handles.get(dragging.vid);
+      if (g) { try { g.setPointerCapture(dragging.pid); } catch { /* pointer already gone */ } if (document.activeElement && document.activeElement.closest?.('#lot-map')) g.focus({ preventScroll: true }); }
+    }
   }
   const subline = () => (M.starter ? 'This is a starting box around your house. Drag the corners to match your lot.'
     : M.parcelSource === 'estimated' ? 'This lot outline is an estimate. Drag the corners to match your lot.'
