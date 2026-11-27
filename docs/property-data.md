@@ -18,7 +18,9 @@ PropertyProfile for any US address (richest in Los Angeles County): flat values 
 | rentcast | records | yes | US | UNVERIFIED (field names from memory) | commercial terms: confirm caching/storage |
 | google-solar | footprint (roof area) | yes | US | UNVERIFIED (from memory) | 30 days; confirm Google's terms on use and caching |
 | google-places | address (pure normaliser only) | yes (browser) | US | normaliser tested; no network code | Places terms apply |
-| ATTOM, Regrid, street centreline | - | - | - | not built | - |
+| overture-roads | street (centrelines, names, alleys flagged) | no | US | verified live 2026-11-27; CORS `*` | ODbL; "Street lines: Overture Maps Foundation (ODbL), © OpenStreetMap contributors" |
+| naip-aerial | aerial (USDA NAIP photo, RGB + near-infrared, 60 cm) | no | US | verified live 2026-11-27; CORS `*` (STAC, data API, USGS) | US Government imagery, public domain; credit "Aerial photo: USDA NAIP" |
+| ATTOM, Regrid | - | - | - | not built | - |
 
 Microsoft Global Building Footprints is a bulk dataset with no per-address query API. Using it needs hosted tiles or a database
 import, which is a cost and hosting decision. LARIAC is the Los Angeles fallback in its place.
@@ -53,7 +55,21 @@ Solar key, `roof_sqft` is the main footprint's plan area, tagged `estimated`.
 - **Google Solar API key**: server-side roof area and segments. Unblocks measured `roof_sqft` (pitch included).
 
 Known limits: street names with an apostrophe or hyphen are refused by the assessor query (safety over coverage); LARIAC
-outlines date from 2008-2020; there is no street centreline source, so the yard split uses the Census street-side point.
+outlines date from 2008-2020.
+
+## Yards, usable yard, photo reading, geometry (2026-11-27, AERIAL; measurements in `docs/yard-accuracy.md`)
+- Front/back yard: Overture road centrelines first (the address's street by name, else the nearest street; alleys never the front), the
+  geocoder street-side point as fallback. So yards now work wherever a parcel outline exists, not only in LA County.
+- `side_yard_sqft` is computed but `hidden: true` and not in `toSourcedProfile` (owner request).
+- `usable_yard_sqft`, `usable_front_yard_sqft`, `usable_back_yard_sqft`: open ground at least `ctx.minWidthFt` (default 10 ft, an Everyspace
+  assumption) wide (`core/usable-yard.js`).
+- `green_area_sqft`, `paved_area_sqft` from one NAIP photo (`core/aerial.js`); `tree_cover_sqft` and `pool_area_sqft` stay unavailable
+  (not reliable at 60 cm; pools: `ctx.aerialPools: true`). The photo is asked only when building outlines are; `ctx.aerial: false` skips it.
+- `remodeled_year` from the LA assessor's effective year.
+- Estimated lot without a parcel record: `ctx.estimateLotWithoutParcel: true` only (failed its accuracy rule; off by default).
+- `result.geometry` (WGS84): `{parcel, parcelSource, buildings:[{polygon, main}], frontEdge:{coordinates}, reference, streets, streetName, frontPoint,
+  zones:{bands, usable:{mask, width, height, bbox, cellM, rowOrder}}, roof, minWidthFt, image:{url, bbox, crs, width, height, date, credit, corsForImg}}`.
+  After an owner moves a corner, `core/measure.js` `measureFromGeometry(geometry, {now})` recomputes every number with the same functions.
 
 ## Browser wiring (2026-11-27)
 Live checks, 5 requests to `public.gis.lacounty.gov` with `Origin: https://milessilverman.github.io`, public building 200 N Spring St only:

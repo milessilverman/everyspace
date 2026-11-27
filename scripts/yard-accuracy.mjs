@@ -17,11 +17,12 @@ import { lariacBuildings } from '../core/providers/lariac-buildings.js';
 import { overtureBuildings } from '../core/providers/overture-buildings.js';
 import { overtureRoads } from '../core/providers/overture-roads.js';
 import { streetReference } from '../core/street-ref.js';
-import { splitYard } from '../core/yard.js';
+import { splitYard, yardZoneAt } from '../core/yard.js';
+import { usableYard } from '../core/usable-yard.js';
 import { centroid, polygonAreaSqft, pointInPolygon } from '../core/geometry.js';
 import { estimateLot, polygonIoU } from '../core/lot-estimate.js';
 import { naipAerial } from '../core/providers/naip-aerial.js';
-import { classifyLot, CLASS } from '../core/aerial.js';
+import { classifyLot } from '../core/aerial.js';
 
 const ADDRESSES = [
   '5847 S FIGUEROA ST LOS ANGELES CA 90003', '15739 MULHOLLAND PL LOS ANGELES CA 90049', '13300 MISSION TIERRA WAY LOS ANGELES CA 91344',
@@ -33,7 +34,6 @@ const ALLOWED = new Set(['imagery.nationalmap.gov', 'planetarycomputer.microsoft
 const arg = (k, d) => { const i = process.argv.indexOf(k); return i > 0 ? process.argv[i + 1] : d; };
 const CACHE = arg('--cache', null);
 const MAX = Number(arg('--max-requests', '160'));
-const PNG = arg('--png', null);
 const JSON_OUT = arg('--json', null);
 const NOW = new Date().toISOString();
 if (!CACHE) { console.error('pass --cache <dir> (answers are kept there; a second run makes no request)'); process.exit(2); }
@@ -84,7 +84,8 @@ async function gather(address) {
 }
 
 /** Front-edge identity: the set of parcel edge indexes of the chosen front group, compared as midpoints. */
-const frontKey = (y) => (y && y.ok ? y.frontEdge.edges.map((e) => `${e.from.lat.toFixed(6)},${e.from.lng.toFixed(6)}`).sort().join('|') : null);
+/** Same front = the inward bearings of the two front lines are within 20 degrees (tiny corner edges make edge-by-edge identity too strict). */
+const frontKey = (y) => (y && y.ok ? y.frontEdge.inwardBearingDeg : null);
 
 function stage1(d) {
   const buildings = d.lar?.ok ? d.lar.buildings.map((b) => b.polygon) : [];
@@ -94,7 +95,7 @@ function stage1(d) {
   const byPoint = pt ? splitYard({ parcel: d.parcel, buildings, frontPoint: pt, mainBuildingIndex: main }) : { ok: false, reason: 'county locator found no point' };
   const ref = d.roads?.ok ? streetReference({ streets: d.roads.streets, address: d.address }) : null;
   const byLine = ref ? splitYard({ parcel: d.parcel, buildings, streets: ref.streets, ...(ref.streetName ? { streetName: ref.streetName } : {}), mainBuildingIndex: main }) : { ok: false, reason: 'no street lines' };
-  return { ok: true, byPoint, byLine, ref, main, buildings, sameFront: byPoint.ok && byLine.ok ? frontKey(byPoint) === frontKey(byLine) : null };
+  return { ok: true, byPoint, byLine, ref, main, buildings, sameFront: byPoint.ok && byLine.ok ? Math.abs(((frontKey(byPoint) - frontKey(byLine)) % 360 + 540) % 360 - 180) <= 20 : null };
 }
 
 function stage2(d, s1) {
@@ -123,10 +124,10 @@ async function main() {
     if (s1.ok && s1.byLine.ok || s1.ok && s1.byPoint.ok) {
       const y = s1.byLine.ok ? s1.byLine : s1.byPoint;
       const img = await naipAerial.lookup({ parcel: d.parcel, lat: d.pc.lat, lng: d.pc.lng }, deps);
-      s3 = img.ok ? { img, cls: classifyLot({ image: img.image, parcel: d.parcel, buildings: s1.buildings, yard: y, streets: s1.ref?.streets ?? [] }) } : { img };
+      s3 = img.ok ? { img, cls: classifyLot({ image: img.image, parcel: d.parcel, buildings: s1.buildings, zoneAt: yardZoneAt(y) }) } : { img };
+      s3.usable = usableYard({ parcel: d.parcel, buildings: s1.buildings, yard: y });
     }
     rows.push({ d, s1, s2, s3 });
-    if (PNG && s3?.img?.ok) { const { writeClassPng } = await import('./lib/png.mjs').catch(() => ({ writeClassPng: null })); if (writeClassPng) writeClassPng(join(PNG, `addr${rows.length}`), s3.img.image, s3.cls); }
   }
   report(rows);
   if (JSON_OUT) writeFileSync(JSON_OUT, JSON.stringify(rows.map((r, i) => ({ i: i + 1, s1: summary1(r), s2: summary2(r), s3: summary3(r) })), null, 1));
@@ -167,16 +168,18 @@ function report(rows) {
   const rule = errs.length === 10 && med(errs) <= 20 && mx(errs) <= 50;
   L.push(`DECISION RULE (median <= 20% and max <= 50% on all ten): ${rule ? 'MET' : 'NOT MET'}`, '');
   // ---- stage 3
-  L.push('STAGE 3: aerial classification of the open ground (USDA NAIP, 60 cm)', '', '| # | photo | open geom | open pixels | green | tree | paved/bare | water | shadow | pool | roof veg % | front paving warn |', '|---|---|---|---|---|---|---|---|---|---|---|---|');
+  L.push('STAGE 3: aerial classification of the open ground (USDA NAIP, 60 cm)', '', '| # | photo | open geom | open pixels | green | tree | paved/bare | water | shadow | water regions (sq ft, pool?) | roof veg % | front paving warn |', '|---|---|---|---|---|---|---|---|---|---|---|---|');
   rows.forEach((r, i) => {
     const c = r.s3?.cls;
     if (!c || !c.ok) { L.push(`| ${i + 1} | ${r.s3?.img?.reason ?? c?.reason ?? 'not run'} | | | | | | | | | | |`); return; }
     const s = c.summary;
-    L.push(`| ${i + 1} | ${r.s3.img.image.date} ${r.s3.img.image.bands} | ${f0(s.openGeomSqft)} | ${f0(s.openPixelSqft)} | ${f0(s.greenSqft)} | ${f0(s.treeSqft)} | ${f0(s.pavedSqft)} | ${f0(s.waterSqft)} | ${f0(s.shadowSqft)} | ${s.pool ? f0(s.pool.areaSqft) : '-'} | ${f1(s.roofVegPct)} | ${c.frontPavingWarning ? 'yes' : 'no'} |`);
+    L.push(`| ${i + 1} | ${r.s3.img.image.date} ${r.s3.img.image.bands} | ${f0((r.s1.byLine.ok ? r.s1.byLine : r.s1.byPoint).openSqft)} | ${f0(s.openPixelSqft)} | ${f0(s.greenSqft)} | ${f0(s.treeSqft)} | ${f0(s.pavedSqft)} | ${f0(s.waterSqft)} | ${f0(s.shadowSqft)} | ${s.waterRegions.map((w) => `${w.areaSqft}${w.pool ? ' pool-shaped' : ''}`).join('; ') || '-'} | ${f1(s.roofVegPct)} | ${c.frontPavingWarning ? 'yes' : 'no'} |`);
   });
+  L.push('', 'USABLE YARD (open ground at least 10 ft wide; centreline split where available)', '', '| # | open sq ft | usable | usable front | usable back | front yard | back yard |', '|---|---|---|---|---|---|---|');
+  rows.forEach((r, i) => { const u = r.s3?.usable; const y = r.s1.ok ? (r.s1.byLine.ok ? r.s1.byLine : r.s1.byPoint) : null; L.push(u?.ok ? `| ${i + 1} | ${u.openSqft} | ${u.usableSqft} | ${u.usableFrontSqft} | ${u.usableBackSqft} | ${y?.frontYardSqft ?? '-'} | ${y?.backYardSqft ?? '-'} |` : `| ${i + 1} | n/a | | | | | |`); });
   const imgReq = rows.map((r) => r.s3?.img?.counts?.requests ?? null), imgB = rows.map((r) => r.s3?.img?.counts?.bytes ?? null);
   L.push('', `imagery cost per property: requests median ${f0(med(imgReq))}, bytes median ${f0(med(imgB))}; roads: requests ${rows.map((r) => r.d.roads?.counts?.requests ?? '-').join(',')} bytes ${rows.map((r) => r.d.roads?.counts?.bytes ?? '-').join(',')}`);
-  L.push(`remodeled_year: ${rows.filter((r) => r.d.rec.ok && r.d.rec.fields.remodeled_year?.value != null).length}/10 have an effective year later than the year built (${rows.map((r) => r.d.rec.ok ? `${r.d.rec.raw?.YearBuilt1 ?? '-'}->${r.d.rec.raw?.EffectiveYear1 ?? '-'}` : '-').join(', ')})`);
+  L.push(`remodeled_year: ${rows.filter((r) => r.d.rec.ok && r.d.rec.fields.remodeled_year?.value != null).length}/10 have an effective year later than the year built (built->effective: ${rows.map((r) => r.d.rec.ok ? `${r.d.rec.raw?.YearBuilt1 ?? '-'}->${r.d.rec.raw?.EffectiveYear1 ?? '-'}` : '-').join(', ')})`);
   console.log(L.join('\n'));
 }
 

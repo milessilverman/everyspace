@@ -496,9 +496,9 @@ export async function buildPropertyProfile(query, ctx) {
           const lng = cells.bbox[0] + ((i + 0.5) / cells.width) * (cells.bbox[2] - cells.bbox[0]), lat = cells.bbox[3] - ((j + 0.5) / cells.height) * (cells.bbox[3] - cells.bbox[1]);
           const pi = Math.floor(((lng - im.bbox[0]) / (im.bbox[2] - im.bbox[0])) * im.width), pj = Math.floor(((im.bbox[3] - lat) / (im.bbox[3] - im.bbox[1])) * im.height);
           if (pi < 0 || pj < 0 || pi >= im.width || pj >= im.height) continue;
-          const c = aer.classes[pj * im.width + pi]; if (c) { tally[c - 1]++; n++; }
+          const c = aer.classes[pj * im.width + pi]; if (c) { tally[c - 1]++; n++; } // classes hold class code + 1
         }
-        if (n) details.usable_yard.photo = { greenShare: Math.round(((tally[0] + tally[1]) / n) * 100) / 100, pavedShare: Math.round((tally[2] / n) * 100) / 100, shadowShare: Math.round((tally[4] / n) * 100) / 100, waterShare: Math.round((tally[3] / n) * 100) / 100 };
+        if (n) details.usable_yard.photo = { greenShare: Math.round(((tally[1] + tally[2]) / n) * 100) / 100, pavedShare: Math.round((tally[3] / n) * 100) / 100, shadowShare: Math.round((tally[5] / n) * 100) / 100, waterShare: Math.round((tally[4] / n) * 100) / 100 };
       }
     } else for (const k of USE_KEYS) fields[k] = gone(usable?.reason ?? (lotPoly ? (fpsLoaded ? 'no building outline on the lot' : 'building outlines still loading') : (recsLoaded ? 'no parcel polygon' : 'parcel still loading')), 'Everyspace usable-yard geometry');
 
@@ -665,7 +665,7 @@ export async function buildPropertyProfile(query, ctx) {
       const b = S.recs?.find((/** @type {any} */ x) => x.r.ok && x.r.parcel?.boundary)?.r.parcel.boundary ?? null;
       if (b && (!r || !r.ok || !inside(lotBox(b), r.image.bbox))) { const r2 = await ask({ parcel: b }); if (r2.ok || !r) r = r2; }
       if (!r) { mark(p.id, 'skipped', 'no location'); continue; }
-      if (!r.ok) { mark(p.id, 'failed', r.reason); continue; }
+      if (!r.ok) { mark(p.id, 'failed', r.reason); S.aerial = S.aerial ?? r; continue; }
       S.aerial = r; mark(p.id, 'used'); break;
     }
     S.aerialDone = true;

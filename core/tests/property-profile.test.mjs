@@ -68,7 +68,7 @@ test('keyless profile: every top-level field has value, source, tag and confiden
   assert.equal(p.fields.front_yard_sqft.tag, 'estimated'); assert.ok(p.fields.front_yard_sqft.confidence <= 0.4);
   assert.equal(p.place_id, null); assert.equal(p.fields.place_id.tag, 'unavailable'); assert.match(p.fields.place_id.note, /Places/);
   const st = Object.fromEntries(p.providers.map((x) => [x.id, x.status]));
-  assert.deepEqual(st, { rentcast: 'skipped', 'google-solar': 'skipped', 'la-cams-address': 'used', 'census-address': 'used', 'la-assessor': 'used', 'lariac-buildings': 'used' });
+  assert.deepEqual(st, { rentcast: 'skipped', 'google-solar': 'skipped', 'la-cams-address': 'used', 'census-address': 'used', 'la-assessor': 'used', 'lariac-buildings': 'used', 'overture-roads': 'failed', 'naip-aerial': 'failed' }); // AERIAL: the mocked world serves no road tiles or photos, so both fail silently
   assert.equal(p.providers.find((x) => x.id === 'rentcast').reason, 'no API key');
   assert.equal(p.fields.house_sqft.cross_check, undefined);
   assert.match(p.fields.house_sqft.note, /Single source/);
@@ -257,7 +257,8 @@ test('browser registry end to end: new rows have sources; yard rows have values 
   const { splitYard } = await import('../yard.js');
   const fetch = world({ census: () => { throw new Error('census must not be called from a browser'); }, rentcast: () => { throw new Error('no key: RentCast must not be called'); }, solar: () => { throw new Error('no key'); } });
   const ok = await buildPropertyProfile(SFR, { registry: createBrowserRegistry(), fetch, now: NOW, keys: {}, splitYard: browserSplitYard(splitYard) });
-  assert.ok(fetch.calls.every((c) => new URL(c.url).hostname === 'public.gis.lacounty.gov'));
+  // AERIAL: the browser registry now also asks the Overture road tiles and the NAIP photo (unanswered in this mocked world)
+  assert.ok(fetch.calls.every((c) => ['public.gis.lacounty.gov', 'stac.overturemaps.org', 'planetarycomputer.microsoft.com'].includes(new URL(c.url).hostname)));
   for (const k of ['floors', 'baths', 'roof_sqft', 'front_yard_sqft', 'back_yard_sqft', 'side_yard_sqft']) {
     const f = ok.fields[k];
     assert.ok(f.value !== null && f.source && f.retrieved_at, k);
@@ -538,7 +539,7 @@ test('non-LA (Chicago City Hall, mocked): county from FCC, footprint from Overtu
   assert.equal(p.apn, '17-09-999-001'); assert.equal(p.lot_sqft, Math.round(polygonAreaSqft(LOT)));
   assert.ok(p.attributions.includes('Drafted buildings: Overture Maps Foundation (ODbL)'));
   assert.equal(p.fields.front_yard_sqft.tag, 'unavailable', 'no street reference outside LA: a front is never guessed');
-  assert.ok(f.calls.every((c) => ['geo.fcc.gov', 'stac.overturemaps.org', 'overturemaps-extras-us-west-2.s3.us-west-2.amazonaws.com', 'gis.cookcountyil.gov'].includes(new URL(c.url).hostname)));
+  assert.ok(f.calls.every((c) => ['geo.fcc.gov', 'stac.overturemaps.org', 'overturemaps-extras-us-west-2.s3.us-west-2.amazonaws.com', 'gis.cookcountyil.gov', 'planetarycomputer.microsoft.com'].includes(new URL(c.url).hostname))); // AERIAL: + the NAIP photo host
   assert.ok(f.calls.filter((c) => c.range).every((c) => /^bytes=\d+-\d+$/.test(c.range)), 'Overture is read by range requests only');
 });
 

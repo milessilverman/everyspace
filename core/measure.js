@@ -48,8 +48,9 @@ export function measureFromGeometry(g, ctx) {
   if (mainIdx < 0) areas.forEach((a, i) => { if (mainIdx < 0 || a > areas[mainIdx]) mainIdx = i; });
   if (mainIdx >= 0) {
     out.building_footprint_sqft = Math.round(areas[mainIdx]);
-    const rr = estimateRoof({ footprintSqft: areas[mainIdx], yearBuilt: g.yearBuilt ?? null, propertyType: g.propertyType ?? null, stories: g.stories ?? null,
-      ...(g.state && g.state !== '??' ? { stateCode: g.state } : {}), ...(g.pitchRise !== undefined ? { pitchRise: g.pitchRise } : {}), ...(g.roofType ? { roofType: g.roofType } : {}) }, { now: ctx.now });
+    const ri = g.roof ?? g; // the builder's bundle carries the roof inputs under `roof`
+    const rr = estimateRoof({ footprintSqft: areas[mainIdx], yearBuilt: ri.yearBuilt ?? null, propertyType: ri.propertyType ?? null, stories: ri.stories ?? null,
+      ...(ri.state && ri.state !== '??' ? { stateCode: ri.state } : {}), ...(ri.pitchRise !== undefined ? { pitchRise: ri.pitchRise } : {}), ...(ri.roofType ? { roofType: ri.roofType } : {}) }, { now: ctx.now });
     if (rr.ok) out.roof_area_sqft = rr.roof.value; else out.reasons.push(rr.roof.note ?? 'roof not estimated');
   } else out.reasons.push('no building on the lot');
   const ref = yardReferenceArgs(g);
