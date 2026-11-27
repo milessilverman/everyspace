@@ -273,7 +273,7 @@ function renderLookup() {
     const items = S.steps.map((s) => `<li><span class="chip ${s.ok ? 'ok' : 'bad'}">${s.ok ? 'Found' : 'Failed'}</span>
       <strong>${esc(STEP_NAMES[s.step] ?? s.step)}</strong> <span class="muted">from ${esc(s.source)}</span>${s.ok ? '' : ` <span>${esc(s.reason ?? 'no reason given')}</span>`}</li>`).join('');
     const failed = S.steps.filter((s) => !s.ok).length;
-    parts.push(dKey('steplog', `What we looked up (${S.steps.length} steps${failed ? `, ${failed} failed` : ''})`, `<ul class="log" id="step-log">${items}</ul>`));
+    parts.push(dKey('steplog', `What we looked up (${S.steps.length} step${S.steps.length === 1 ? '' : 's'}${failed ? `, ${failed} failed` : ''})`, `<ul class="log" id="step-log">${items}</ul>`));
   }
   els.lookup.innerHTML = parts.join('<div style="height:14px"></div>');
 }

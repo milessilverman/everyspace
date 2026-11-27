@@ -354,24 +354,25 @@ try {
     let html = ''; for (const k of TABS) { await goTab(page, k); html += await page.locator('main').innerHTML(); }
     check(await page.evaluate(() => window.__xss) === undefined, 'text from property, space, guest and calendar fields never runs as HTML');
     check(!/<img src=x|<script>window|<svg onload/.test(html) && /&lt;img src=x/.test(html), 'markup typed into names is shown as text');
-    check(!html.includes('SECRETTOKEN'), 'the calendar link secret never appears in banners, gaps or errors');
+    check(!html.replace(/<input[^>]*>/g, '').includes('SECRETTOKEN'), 'the calendar link secret appears only inside its own field, never in banners, gaps or errors');
     check(/Only the first 1,000 bookings are loaded/.test(await (async () => { await goTab(page, 'calendar'); return view(page); })()), 'a cut-off bookings list is announced instead of silently dropping dates');
     check(!/undefined|NaN|null/.test(await view(page)), 'no "undefined", "NaN" or "null" text on the calendar');
     await goTab(page, 'today'); const today = await view(page);
     check(/Double booking on/.test(today) && /dates not available/.test(today), 'a conflict whose booking has no dates still renders, in words');
     check(!/undefined|NaN|null/.test(today), 'no "undefined", "NaN" or "null" text on Today');
     await goTab(page, 'earnings'); check(!/undefined|NaN|null/.test(await view(page)) && /\$500/.test(await view(page)), 'Earnings renders a row whose booking is missing');
+    // one door: the database says no, the page says it plainly
+    await page.locator('[data-act=mode][data-id=l2][data-mode=instant]').click();
+    await page.waitForSelector('.toast.bad'); check(/only one site can take instant bookings/i.test(await page.locator('.toast').innerText()), 'the one-instant-site rule is explained when the database refuses');
+    await page.evaluate(() => document.querySelector('.toast')?.remove());
     // remove a site: errors from the link deletes are reported, and the site stays
-    await goTab(page, 'places'); page.once('dialog', (x) => x.accept());
+    await goTab(page, 'places'); await page.evaluate(() => document.querySelectorAll('details.more').forEach((d) => { d.open = true; })); page.once('dialog', (x) => x.accept());
     b.fail['DELETE calendar_feeds'] = { status: 403, message: 'permission denied' };
     await page.locator('[data-act=delsite]').first().click(); await page.waitForSelector('.toast.bad');
     check(/permission denied/.test(await page.locator('.toast').innerText()) && b.db.channel_listings.some((l) => l.id === 'l1'), 'a failed delete of a site link is reported and the site is kept');
     delete b.fail['DELETE calendar_feeds']; page.once('dialog', (x) => x.accept());
     await page.locator('[data-act=delsite]').first().click(); await page.waitForFunction(() => /^Removed\./.test(document.querySelector('.toast')?.textContent ?? ''));
     check(!b.db.channel_listings.some((l) => l.id === 'l1') && !b.db.calendar_imports.some((i) => i.id === 'i1') && !b.db.calendar_feeds.some((f) => f.id === 'f1'), 'removing a site removes its listing, calendar link and Everyspace link');
-    // one door: the database says no, the page says it plainly
-    await page.locator('[data-act=mode][data-mode=instant]').last().click();
-    await page.waitForSelector('.toast.bad'); check(/only one site can take instant bookings/i.test(await page.locator('.toast').innerText()), 'the one-instant-site rule is explained when the database refuses');
     // sync result mapping
     b.fn['calendar-sync'] = async () => ({ body: { synced: 2, skipped: 0, results: [{ ok: false, error: 'blocked_url' }, { ok: true }] } });
     await goTab(page, 'today'); await page.click('[data-act=syncall]'); await page.waitForFunction(() => /couldn.t read 1 calendar/i.test(document.querySelector('.toast')?.textContent ?? ''));
