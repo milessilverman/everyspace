@@ -12,6 +12,7 @@ Updated 2026-11-27. Read this first. Detail lives in the files named here.
 | Property-data wired into the homepage flow | done on branch (keyless path) | same branch; LA County addresses use the county locator, assessor and building outlines first, earlier lookup as fallback; address suggestions from the county service |
 | Owner-first property screen, fast lookups, progress bar, nationwide autofill; City Pretty and StreetForge methods reused | done on branch | `estimate/`, `core/{roof,transit,building-size}.js`, `core/providers/{overture-buildings,parcel-registry,county-lookup,photon-address}.js`; `docs/audit/reuse-*.md`, `docs/zillow.md` |
 | Two-page flow (property, then Next to earnings), remodeled year, usable yard, satellite view with adjustable outlines, yards from street lines | done on branch | `estimate/{app,lot-map,county-path}.js`, `core/{measure,usable-yard,street-ref,aerial,lot-estimate}.js`, `core/providers/{overture-roads,naip-aerial}.js`; measurements in `docs/yard-accuracy.md` |
+| Condos and apartment buildings: unit picker, "What do you own here?", condo and building fact lists, earnings by quantity | done on branch | `core/property-profile.js`, `core/providers/la-assessor.js`, `core/opportunities.js`, `core/revenue.js`, `estimate/{app,county-path,unit-adapter,context-map}.js`; `docs/condos-and-buildings.md` |
 | Rename to "Spacavia" ("Your space, your way") and repository rename | on hold | waiting for the owner's go-ahead |
 | Backend from run 1 (orgs, conflict engine, adapters) | staging only | not applied to the live database |
 
@@ -28,8 +29,8 @@ Live backend functions (checked read-only 2026-11-27): `calendar-feed`, `calenda
 ## Test commands and last results
 | command | result |
 |---|---|
-| `npm test` (core unit tests) | 489 pass |
-| `npm run e2e` (every `tests/*.e2e.mjs`) | 10 files pass (adds the satellite view) |
+| `npm test` (core unit tests) | 518 pass |
+| `npm run e2e` (every `tests/*.e2e.mjs`) | 11 files pass (adds condos and buildings; those scenarios use a stand-in for the lookup, checked separately against live county records) |
 | `cd platform && npm test` | 264 pass |
 | `cd platform && npm run test:staging` | 16 pass |
 | demo repo: `node --test tests/*.test.mjs` | 15 pass |
@@ -100,6 +101,9 @@ All three need an account with the provider (and a billing account for Google), 
 | A8 | Go-ahead for the Spacavia rename and the repository rename | brand change; the public address changes and Supabase's allowed redirect addresses must be updated |
 
 ## Known limits
+- Condos are recognised from the county's condo use code or a condominium legal description with a unit number; other unit-style codes are not confirmed, so some condos read as a house until the owner picks "A condo or one unit". Mobile homes and rooming houses still read as houses. Outside LA County there is no unit list and the owner says what they own.
+- Earnings for several units multiply one unit's estimate by the count: every unit is assumed to perform alike, with no allowance for competing with yourself.
+- For an apartment building the footprint line is the largest building only; roof size needs the owner's roof type.
 - Driveway detection (paved strip from the street on the aerial photo) is on: checked by eye on ten lots (3 right, 5 partly right, 2 missed under trees, no false alarm), tuned on those same lots, no ground truth. The outline is draggable; a paved front yard can read as a wide driveway.
 - Building kinds (garage, ADU, shed, carport, pool house, other) are pre-filled only where the map data states them; LA County outlines state none, so the owner chooses on the satellite view.
 - Side yard is computed but not shown (owner's call). Usable yard = open ground at least 10 ft wide (a stated assumption, adjustable); slope is not known.
