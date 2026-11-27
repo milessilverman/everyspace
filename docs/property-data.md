@@ -44,3 +44,12 @@ Solar key, `roof_sqft` is the main footprint's plan area, tagged `estimated`.
 
 Known limits: street names with an apostrophe or hyphen are refused by the assessor query (safety over coverage); LARIAC
 outlines date from 2008-2020; there is no street centreline source, so the yard split uses the Census street-side point.
+
+## Browser wiring (2026-11-27)
+Live checks, 5 requests to `public.gis.lacounty.gov` with `Origin: https://milessilverman.github.io`, public building 200 N Spring St only:
+- CORS (answer: yes for all): CAMS `suggest` and `findAddressCandidates` (GET), LARIAC query (GET, and form-encoded POST, a simple request with no preflight) and the parcel layer (form POST) all returned `Access-Control-Allow-Origin: https://milessilverman.github.io` (`Vary: Origin`). Census still has no CORS header and is not in the browser registry.
+- Locator point vs parcel: the candidate point (-118.243493, 34.053898) is OUTSIDE the matched parcel polygon, 9.1 m from its nearest edge, on the street side of the frontage. That is ONE sample; it is not proof for every lot.
+- So `core/providers/browser.js` offers the point as `streetSidePoint`, but `browserSplitYard` uses it only when it lies outside the parcel and within 40 m; otherwise front/back/side stay unavailable ("needs a street reference; available once the server-side lookup is switched on"). A front is never guessed.
+- `createBrowserRegistry()`: county locator, assessor, LARIAC. `estimate/county-path.js` runs it first (plus OSM Overpass for pool and transit as before). It falls back to the old Nominatim path when the locator has no match or fails, the typed state is not CA or the typed ZIP differs from the county's, or the assessor finds no parcel. A different house number or direction, or two near-equal candidates, asks "Is this your property?" first.
+- `estimate/address-suggest.js`: combobox on the homepage and estimator, county `suggest` only, 5+ characters, 300 ms debounce, one request in flight, max 5, silent on failure. `EXTRA_SOURCES` is where a Google Places source can be added later (none now).
+- Known limit: the locator's city can be a community name (e.g. Van Nuys), which would skip the City of Los Angeles rules in `core/regulatory.js`.

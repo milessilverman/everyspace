@@ -250,3 +250,27 @@ test('distanceToPolygonM: zero inside, metres outside', () => {
   const d = distanceToPolygonM({ lat: 33.9999, lng: -118.29995 }, sq);
   assert.ok(d > 10 && d < 12, String(d));
 });
+
+test('browser registry end to end: new rows have sources; yard rows have values with a street-side point and the stated reason without one', async () => {
+  const { createBrowserRegistry, browserSplitYard, YARD_NEEDS_STREET } = await import('../providers/browser.js');
+  const { splitYard } = await import('../yard.js');
+  const fetch = world({ census: () => { throw new Error('census must not be called from a browser'); }, rentcast: () => { throw new Error('no key: RentCast must not be called'); }, solar: () => { throw new Error('no key'); } });
+  const ok = await buildPropertyProfile(SFR, { registry: createBrowserRegistry(), fetch, now: NOW, keys: {}, splitYard: browserSplitYard(splitYard) });
+  assert.ok(fetch.calls.every((c) => new URL(c.url).hostname === 'public.gis.lacounty.gov'));
+  for (const k of ['floors', 'baths', 'roof_sqft', 'front_yard_sqft', 'back_yard_sqft', 'side_yard_sqft']) {
+    const f = ok.fields[k];
+    assert.ok(f.value !== null && f.source && f.retrieved_at, k);
+  }
+  assert.equal(ok.fields.roof_sqft.tag, 'estimated'); assert.equal(ok.fields.floors.tag, 'estimated');
+  assert.equal(ok.fields.front_yard_sqft.tag, 'estimated');
+  assert.ok(Math.abs(ok.fields.front_yard_sqft.value + ok.fields.back_yard_sqft.value + ok.fields.side_yard_sqft.value - ok.details.yard.openSqft) <= 2);
+  // the locator's point inside the lot: no front is guessed
+  const inside = JSON.parse(JSON.stringify(fx('synthetic-cams-sfr.json')));
+  inside.candidates[0].location = { x: -118.29992, y: 34.00018 };
+  const none = await buildPropertyProfile(SFR, { registry: createBrowserRegistry(), fetch: world({ cams: () => json(inside) }), now: NOW, keys: {}, splitYard: browserSplitYard(splitYard) });
+  for (const k of ['front_yard_sqft', 'back_yard_sqft', 'side_yard_sqft']) {
+    assert.equal(none.fields[k].tag, 'unavailable', k);
+    assert.ok(none.fields[k].note.includes(YARD_NEEDS_STREET), none.fields[k].note);
+  }
+  assert.ok(none.fields.roof_sqft.value > 0, 'everything else still answers');
+});

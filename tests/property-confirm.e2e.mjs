@@ -24,9 +24,12 @@ const SPRING_S = '200 S Spring St, Los Angeles, CA 90012';
 const FAIL = '1 Failville Rd, Nowhere, ZZ 00000';
 const APN = '5149007006';
 
+let override = null; // a scenario may replace the county services' answers: (url, decodedUrl) => {status, body} | undefined
 function answer(urlStr) {
   const u = new URL(urlStr);
   const dec = decodeURIComponent(urlStr);
+  const o = override?.(urlStr, dec);
+  if (o) return o;
   if (u.hostname === 'nominatim.openstreetmap.org') {
     const q = u.searchParams.get('q') ?? '';
     if (q.includes('Failville')) return { status: 503, body: { error: 'down' } };
@@ -35,6 +38,10 @@ function answer(urlStr) {
       return { status: 200, body: [{ ...r, lat: '34.051622610747', lon: '-118.245593523439', display_name: '200, South Spring Street, Los Angeles, California, 90012, United States', address: { ...r.address, house_number: '200', road: 'South Spring Street', postcode: '90012' } }] };
     }
     return { status: 200, body: fx('nominatim-la.json') };
+  }
+  if (u.hostname.endsWith('lacounty.gov') && dec.includes('CAMS_Locator')) {
+    // the county locator: no match by default, so these scenarios keep exercising the older Nominatim path; suggest answers nothing
+    return { status: 200, body: dec.includes('/suggest') ? { suggestions: [] } : { candidates: [] } };
   }
   if (u.hostname.endsWith('lacounty.gov')) {
     if (dec.includes('-118.2455')) return { status: 200, body: urlStr.includes('distance=') ? fx('arcgis-la-buffer-spring-st-recorded.json') : fx('arcgis-empty.json') };
@@ -106,7 +113,7 @@ await scenario('matched-address confirmation: asked before any parcel lookup; No
   assert.match(await text(page, '#h-confirm ~ p'), /We found: 200 South Spring Street, Los Angeles, CA 90012\. Is this your property\?/);
   assert.match(await text(page, '#h-confirm ~ p ~ p'), /You typed: 200 N Spring St/);
   assert.equal(await page.evaluate(() => document.activeElement.id), 'confirm-yes', 'focus moves to the question');
-  assert.equal(rec.mocked.filter((u) => u.includes('lacounty') || u.includes('overpass')).length, 0, 'no parcel request yet');
+  assert.equal(rec.mocked.filter((u) => (u.includes('lacounty') && !u.includes('CAMS_Locator')) || u.includes('overpass')).length, 0, 'no parcel request yet');
   assert.equal(await page.locator('#profile-table').count(), 0, 'no profile before the owner says yes');
   await page.click('#confirm-no');
   assert.equal(await page.locator('#confirm-yes').count(), 0);
@@ -116,7 +123,7 @@ await scenario('matched-address confirmation: asked before any parcel lookup; No
   await page.waitForSelector('#confirm-yes');
   await page.click('#confirm-yes');
   await page.waitForSelector('#cand-none');
-  assert.ok(rec.mocked.some((u) => u.includes('lacounty')), 'parcel service asked only after Yes');
+  assert.ok(rec.mocked.some((u) => u.includes('LACounty_Parcel')), 'parcel service asked only after Yes');
 });
 
 await scenario('parcel candidates: pick by address marks the parcel as owner-confirmed; "None of these" goes to manual with no guess', async (page, rec) => {
@@ -285,8 +292,61 @@ await scenario('manual mode reaches results using only owner-entered values', as
   assert.ok(t.length >= 3 && t.every((x) => x === 'You confirmed'), `only owner values: ${t}`);
   const cards = await page.locator('[data-opp-card]').count();
   assert.ok(cards >= 1);
-  assert.equal(rec.mocked.filter((u) => u.includes('lacounty') || u.includes('overpass')).length, 0, 'no parcel or building request in manual mode');
+  assert.equal(rec.mocked.filter((u) => (u.includes('lacounty') && !u.includes('CAMS_Locator')) || u.includes('overpass')).length, 0, 'no parcel or building request in manual mode (only the county locator was asked, as the first choice)');
 }, /^Failed to load resource: the server responded with a status of 503/);
+
+// ---- the county path: matched-address confirmation ---------------------------------------------------------------------
+const PFX = path.join(ROOT, 'core/tests/fixtures/providers');
+const pfx = (n) => JSON.parse(fs.readFileSync(path.join(PFX, n), 'utf8'));
+const countyServices = (url, dec) => {
+  if (new URL(url).hostname === 'public.gis.lacounty.gov') {
+    if (dec.includes('CAMS_Locator')) return { status: 200, body: pfx('synthetic-cams-sfr.json') };
+    if (dec.includes('LACounty_Parcel')) return { status: 200, body: pfx('synthetic-assessor-sfr.json') };
+    if (dec.includes('LARIAC')) return { status: 200, body: pfx('synthetic-lariac-sfr.json') };
+  }
+  if (new URL(url).hostname.includes('overpass')) return { status: 200, body: fx('overpass-no-features.json') };
+  return undefined;
+};
+const parcelReqs = (rec) => rec.mocked.filter((u) => u.includes('LACounty_Parcel') || u.includes('LARIAC') || u.includes('overpass'));
+
+await scenario('county path: a different house number is confirmed with the owner before any parcel is shown; No edits, Yes continues on the county path', async (page, rec) => {
+  override = countyServices;
+  try {
+    await page.goto(URL_PAGE);
+    await search(page, '4325 Example Ave, Los Angeles, CA 90099');
+    await page.waitForSelector('#confirm-yes');
+    assert.match(await text(page, '#h-confirm ~ p'), /We found: 4321 Example Ave, Los Angeles, CA, 90099\. Is this your property\?/);
+    assert.match(await text(page, '#h-confirm ~ p ~ p'), /You typed: 4325 Example Ave.*house number|You typed: 4325 Example Ave/);
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'confirm-yes');
+    assert.equal(parcelReqs(rec).length, 0, 'no parcel, building or map request before the owner says yes');
+    assert.equal(await page.locator('#profile-table').count(), 0);
+    assert.equal(rec.mocked.some((u) => u.includes('nominatim')), false);
+    await page.click('#confirm-no');
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'address');
+    assert.equal(await page.inputValue('#address'), '4325 Example Ave, Los Angeles, CA 90099');
+    await page.click('#address-submit');
+    await page.waitForSelector('#confirm-yes');
+    await page.click('#confirm-yes');
+    await page.waitForSelector('#profile-table');
+    assert.match(await text(page, 'tr[data-key="address"]'), /4321 Example Ave, Los Angeles, CA, 90099.*LA County/);
+    assert.match(await text(page, '#path-note'), /Lookup path: used Los Angeles County's public services/);
+    assert.ok(parcelReqs(rec).some((u) => u.includes('LACounty_Parcel')), 'the parcel is looked up only after Yes');
+    assert.equal(rec.mocked.some((u) => u.includes('nominatim')), false);
+    assert.equal(await text(page, 'tr[data-key="floors"] .chip'), 'Estimated');
+  } finally { override = null; }
+});
+
+await scenario('county path: an exact match is not asked about; the matched address is still shown on its row', async (page, rec) => {
+  override = countyServices;
+  try {
+    await page.goto(URL_PAGE);
+    await search(page, '4321 Example Ave, Los Angeles, CA 90099');
+    await page.waitForSelector('#profile-table');
+    assert.equal(await page.locator('#confirm-yes').count(), 0);
+    assert.match(await text(page, 'tr[data-key="address"]'), /4321 Example Ave, Los Angeles, CA, 90099/);
+    assert.match(await text(page, 'tr[data-key="jurisdiction"]'), /Los Angeles/);
+  } finally { override = null; }
+});
 
 await browser.close();
 server.close();

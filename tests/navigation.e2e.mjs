@@ -26,6 +26,7 @@ function answer(urlStr) {
   const u = new URL(urlStr);
   const dec = decodeURIComponent(urlStr);
   if (u.hostname === 'nominatim.openstreetmap.org') return { json: fx('nominatim-la.json') };
+  if (u.hostname.endsWith('lacounty.gov') && dec.includes('CAMS_Locator')) return { json: dec.includes('/suggest') ? { suggestions: [] } : { candidates: [] } };
   if (u.hostname.endsWith('lacounty.gov')) return { json: fx('arcgis-la-parcel.json') };
   if (u.hostname.includes('overpass')) return { json: dec.includes('34.0516') ? fx('overpass-no-features.json') : fx('overpass-la.json') };
   return null;

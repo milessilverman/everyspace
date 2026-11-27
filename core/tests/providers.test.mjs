@@ -449,3 +449,42 @@ test('polygon helpers agree: the synthetic parcel is 6,500 sq ft', () => {
   assert.ok(Math.abs(polygonAreaSqft({ type: 'Polygon', coordinates: p.geometry.rings }) - 6500) < 5);
   assert.ok(Math.abs(p.attributes['Shape.STArea()'] - 6500) < 5);
 });
+
+// ---- browser registry ---------------------------------------------------------------------------------------------------
+test('browser registry: only keyless providers that answer cross-origin, in order locator, assessor, footprints', async () => {
+  const { createBrowserRegistry, countyLocator } = await import('../providers/browser.js');
+  const reg = createBrowserRegistry();
+  assert.deepEqual(reg.list().map((p) => p.id), ['la-cams-address', 'la-assessor', 'lariac-buildings']);
+  assert.ok(reg.list().every((p) => p.needsKey === false));
+  for (const id of ['census-address', 'rentcast', 'google-solar', 'google-places']) assert.equal(reg.get(id), null, `${id} must not be in the browser registry`);
+  const j = { state: 'CA', countyFips: '06037' };
+  assert.deepEqual(reg.providersFor('address', { jurisdiction: j }).providers.map((p) => p.id), ['la-cams-address']);
+  assert.deepEqual(reg.providersFor('records', { jurisdiction: j }).providers.map((p) => p.id), ['la-assessor']);
+  assert.deepEqual(reg.providersFor('footprint', { jurisdiction: j }).providers.map((p) => p.id), ['lariac-buildings']);
+  assert.deepEqual(reg.providersFor('address', { jurisdiction: { state: 'AZ' } }).providers, [], 'outside California nothing answers');
+  assert.equal(countyLocator.suggest, laCamsAddress.suggest, 'suggest is the county locator suggest');
+});
+
+test('browser registry: the locator offers its point as the street-side point; a failure stays a failure; no key or Google URL is ever built', async () => {
+  const { countyLocator } = await import('../providers/browser.js');
+  const f = router([['findAddressCandidates', () => json(fx('synthetic-cams-sfr.json'))]]);
+  const r = await countyLocator.resolve('4321 Example Ave, Los Angeles, CA 90099', { fetch: f, now: NOW });
+  assert.ok(r.ok);
+  assert.deepEqual(r.streetSidePoint, { lat: r.lat, lng: r.lng });
+  const none = await countyLocator.resolve('1 Nowhere Rd', { fetch: router([['findAddressCandidates', () => json({ candidates: [] })]]), now: NOW });
+  assert.equal(none.ok, false); assert.equal(none.code, 'no_match');
+  assert.ok(f.calls.every((c) => new URL(c.url).hostname === 'public.gis.lacounty.gov'));
+});
+
+test('browserSplitYard: refuses a front point that is inside the lot, far away or missing; passes a near outside point through', async () => {
+  const { browserSplitYard, YARD_NEEDS_STREET } = await import('../providers/browser.js');
+  const parcel = { type: 'Polygon', coordinates: [[[-118.3, 34], [-118.29983, 34], [-118.29983, 34.000356], [-118.3, 34.000356], [-118.3, 34]]] };
+  const seen = [];
+  const wrap = browserSplitYard((a) => { seen.push(a); return { ok: true, passed: true }; });
+  assert.deepEqual(wrap({ parcel }), { ok: false, reason: YARD_NEEDS_STREET });
+  assert.match(wrap({ parcel, frontPoint: { lat: 34.00018, lng: -118.29992 } }).reason, /^needs a street reference; available once the server-side lookup is switched on \(.*inside the lot/);
+  assert.match(wrap({ parcel, frontPoint: { lat: 34.01, lng: -118.29992 } }).reason, /m from the lot/);
+  assert.equal(seen.length, 0, 'the splitter was never reached');
+  assert.equal(wrap({ parcel, frontPoint: { lat: 33.99997, lng: -118.29992 } }).passed, true);
+  assert.equal(seen.length, 1);
+});

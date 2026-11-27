@@ -14,7 +14,7 @@
   .home h1 { font-size: clamp(26px, 6vw, 38px); }
   .home .lede { margin-top: 12px; font-size: 17px; color: var(--ink-2); }
   .home form { margin-top: 22px; }
-  .home .row input { flex: 1 1 260px; min-width: 0; }
+  .home .row .suggest-wrap { flex: 1 1 260px; min-width: 0; }
 </style>
 </head>
 <body class="home">
@@ -25,19 +25,26 @@
     <form id="home-form" action="estimate/" method="get">
       <label class="f" for="address">Property address</label>
       <div class="row">
-        <input id="address" name="address" type="text" autocomplete="street-address" required maxlength="300" pattern=".*\S.*" title="Type your street address" placeholder="123 Main St, Los Angeles, CA 90001">
+        <div class="suggest-wrap">
+          <input id="address" name="address" type="text" autocomplete="street-address" required maxlength="300" pattern=".*\S.*" title="Type your street address" placeholder="123 Main St, Los Angeles, CA 90001" aria-describedby="address-suggest-note">
+        </div>
         <button class="btn primary" type="submit">Find my property</button>
       </div>
-      <p class="small muted" style="margin-top:10px">Nothing is looked up while you type. When you press the button, your address is sent to OpenStreetMap Nominatim and, for the parcel, to the county's public parcel service. Nothing you enter is saved.</p>
+      <p id="address-suggest-note" class="small muted" style="margin-top:10px">Suggestions come from Los Angeles County's public address service and cover Los Angeles County only. They appear after you type 5 characters, and what you have typed so far is sent to that service to get them. No property lookup happens until you press the button.</p>
+      <p class="small muted" style="margin-top:6px">When you press the button, your address is sent to Los Angeles County's public address, parcel and building-outline services. Only if those cannot answer (for example, the address is outside Los Angeles County) is it sent to OpenStreetMap Nominatim. Nothing you enter is saved.</p>
     </form>
   </div>
 </main>
 <footer>
   <div class="wrap">
     <p><a href="https://milessilverman.github.io/everyspace-demo/">See the earlier demo</a> · <a href="host/">Manage your spaces</a></p>
-    <p>Address search © OpenStreetMap contributors (ODbL) via Nominatim. Parcel data: county assessor public services. Buildings and pools: © OpenStreetMap contributors.</p>
+    <p>Address search, suggestions, parcel records and building outlines: Los Angeles County public services. Outside Los Angeles County: address search © OpenStreetMap contributors (ODbL) via Nominatim, with parcel data from the county assessor's public service. Pools and transit stops: © OpenStreetMap contributors.</p>
   </div>
 </footer>
+<script type="module">
+import { attachAddressSuggest } from './estimate/address-suggest.js';
+attachAddressSuggest(document.getElementById('address'));
+</script>
 <script>
 document.getElementById('home-form').addEventListener('submit', function (e) {
   var v = document.getElementById('address').value.trim();

@@ -24,6 +24,7 @@ function answer(urlStr) {
   const u = new URL(urlStr);
   const dec = decodeURIComponent(urlStr);
   if (u.hostname === 'nominatim.openstreetmap.org') return { status: 200, body: fx('nominatim-la.json') };
+  if (u.hostname.endsWith('lacounty.gov') && dec.includes('CAMS_Locator')) return { status: 200, body: dec.includes('/suggest') ? { suggestions: [] } : { candidates: [] } };
   if (u.hostname.endsWith('lacounty.gov')) return { status: 200, body: fx('arcgis-la-parcel.json') };
   if (u.hostname.includes('overpass')) return { status: 200, body: dec.includes('34.0516') ? fx('overpass-no-features.json') : fx('overpass-la.json') };
   return null;
@@ -96,7 +97,7 @@ await scenario('footer links and attribution', async (page) => {
   await page.goto(`${ORIGIN}/`);
   assert.equal(await page.getAttribute('footer a:text("See the earlier demo")', 'href'), DEMO);
   assert.equal(await page.getAttribute('footer a:text("Manage your spaces")', 'href'), 'host/');
-  assert.match(await page.locator('footer').innerText(), /Address search © OpenStreetMap contributors \(ODbL\) via Nominatim\. Parcel data: county assessor public services\. Buildings and pools: © OpenStreetMap contributors\./);
+  assert.match(await page.locator('footer').innerText(), /Address search, suggestions, parcel records and building outlines: Los Angeles County public services\. Outside Los Angeles County: address search © OpenStreetMap contributors \(ODbL\) via Nominatim, with parcel data from the county assessor's public service\. Pools and transit stops: © OpenStreetMap contributors\./);
 });
 
 await scenario('submit goes to the estimator: lookup runs once, profile shows, address leaves the URL', async (page, rec) => {
@@ -159,7 +160,8 @@ await scenario('form semantics: labelled, native GET fallback, required, capped,
 await scenario('homepage says where the address goes and promises nothing it does not do', async (page) => {
   await page.goto(`${ORIGIN}/`);
   const t = (await page.locator('body').innerText()).replace(/\s+/g, ' ');
-  assert.match(t, /Nothing is looked up while you type\. When you press the button, your address is sent to OpenStreetMap Nominatim and, for the parcel, to the county's public parcel service\. Nothing you enter is saved\./);
+  assert.match(t, /Suggestions come from Los Angeles County's public address service and cover Los Angeles County only\. They appear after you type 5 characters, and what you have typed so far is sent to that service to get them\. No property lookup happens until you press the button\./);
+  assert.match(t, /When you press the button, your address is sent to Los Angeles County's public address, parcel and building-outline services\. Only if those cannot answer \(for example, the address is outside Los Angeles County\) is it sent to OpenStreetMap Nominatim\. Nothing you enter is saved\./);
   assert.match(t, /Free, no sign-up/);
   assert.doesNotMatch(t, /sign in|log in|your account|save your|we will email|subscribe/i, 'no account or save promise');
   const demoMentions = t.match(/demo/gi) ?? [];
