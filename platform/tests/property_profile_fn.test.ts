@@ -65,6 +65,8 @@ test('CORS: only listed origins; never a wildcard; default origin; custom list; 
   const ok = await fn.handle(post(GOOD), deps);
   assert.equal(ok.headers.get('access-control-allow-origin'), ORIGIN);
   assert.notEqual(ok.headers.get('access-control-allow-origin'), '*');
+  const viaDomain = await fn.handle(post(GOOD, { origin: 'https://www.milessilverman.com' }), deps);
+  assert.equal(viaDomain.headers.get('access-control-allow-origin'), 'https://www.milessilverman.com', 'the same pages under www.milessilverman.com/everyspace/ are allowed by default');
 
   const c = setup({ env: { ALLOWED_ORIGINS: 'https://a.example, https://b.example' } });
   assert.equal((await fn.handle(post(GOOD, { origin: 'https://b.example' }), c.deps)).headers.get('access-control-allow-origin'), 'https://b.example');
