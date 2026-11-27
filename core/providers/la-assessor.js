@@ -90,7 +90,7 @@ export function summarizeImprovements(a) {
 
 /** Whitelisted attributes kept as `raw` (no roll values, no names). */
 const RAW_KEYS = ['AIN', 'APN', 'SitusFullAddress', 'SitusHouseNo', 'SitusDirection', 'SitusStreet', 'SitusCity', 'SitusZIP', 'UseCode', 'UseType', 'UseDescription',
-  'DesignType1', 'YearBuilt1', 'SQFTmain1', 'Units1', 'Bedrooms1', 'Bathrooms1', 'Shape.STArea()', 'CENTER_LAT', 'CENTER_LON'];
+  'DesignType1', 'YearBuilt1', 'SQFTmain1', 'SQFTmain2', 'SQFTmain3', 'SQFTmain4', 'SQFTmain5', 'Units1', 'Bedrooms1', 'Bathrooms1', 'Shape.STArea()', 'CENTER_LAT', 'CENTER_LON'];
 const pick = (/** @type {any} */ a) => Object.fromEntries(RAW_KEYS.filter((k) => k in a).map((k) => [k, a[k]]));
 
 /** @param {any} features */

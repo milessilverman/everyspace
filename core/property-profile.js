@@ -87,7 +87,8 @@ export async function buildPropertyProfile(query, ctx) {
   for (const p of typed ? forKind('address') : []) {
     if (addr && (streetSide || !wantStreetSide)) { mark(p.id, 'skipped', 'not needed: address already resolved'); continue; }
     const r = await p.resolve(typed, deps(p.id));
-    if (!r.ok) { mark(p.id, 'failed', r.reason); continue; }
+    if (!r.ok) { mark(p.id, 'failed', r.reason); (details.address_providers ??= []).push({ id: p.id, ok: false, reason: r.reason }); continue; }
+    (details.address_providers ??= []).push({ id: p.id, ok: true, address: r.address, mismatch: addressMismatch(typed, r.address) ?? null, hasStreetSidePoint: Boolean(r.streetSidePoint) });
     if (!addr) addr = { ...r, source: p.label, provider: p.id };
     if (!streetSide && r.streetSidePoint) streetSide = { ...r.streetSidePoint, from: p.id };
     mark(p.id, 'used', addr.provider === p.id ? undefined : 'street-side point only');
@@ -101,13 +102,15 @@ export async function buildPropertyProfile(query, ctx) {
   // ---- 2. records (primary first; every available provider is fetched so the assessor can cross-check) ---------------------
   const recAddress = addr && !addr.mismatchReason && typed.split(',').length < 2 ? addr.address : typed;
   /** @type {Array<{p:any, r:any}>} */ const recs = [];
+  /** @type {string[]} */ const recFailures = [];
   for (const p of typed ? forKind('records') : []) {
     const r = await p.lookup({ address: recAddress, ...(isNum(addr?.lat) ? { lat: addr.lat, lng: addr.lng } : {}), ...(addr?.placeId ? { placeId: addr.placeId } : {}), ...(q.apn ? { apn: q.apn } : {}) }, deps(p.id));
-    if (r.ok) { recs.push({ p, r }); mark(p.id, 'used'); } else { mark(p.id, 'failed', r.reason); warnings.push(`${p.id}: ${r.reason}`); }
+    if (r.ok) { recs.push({ p, r }); mark(p.id, 'used'); } else { mark(p.id, 'failed', r.reason); warnings.push(`${p.id}: ${r.reason}`); recFailures.push(`${p.id}: ${r.reason}`); }
   }
   const parcelSrc = recs.find((x) => x.r.parcel?.boundary);
   /** @type {any} */ const boundary = parcelSrc?.r.parcel.boundary ?? null;
   if (boundary) details.parcel_boundary = boundary;
+  if (parcelSrc) details.parcel = { provider: parcelSrc.p.id, apn: parcelSrc.r.parcel.apn, situs: parcelSrc.r.parcel.address, matchedBy: parcelSrc.r.parcel.matchedBy, assessorAreaSqft: parcelSrc.r.parcel.assessorAreaSqft, raw: parcelSrc.r.raw ?? null };
 
   // ---- 3. footprints / roof ---------------------------------------------------------------------------------------------
   const pcen = boundary ? centroid(boundary) : null;
@@ -155,7 +158,7 @@ export async function buildPropertyProfile(query, ctx) {
     const all = recField(k);
     const have = all.filter((x) => x.s.tag !== 'unavailable' && x.s.value !== null);
     if (!have.length) {
-      const why = all.map((x) => `${x.p.id}: ${x.s.note ?? 'unavailable'}`).join('; ') || 'no records provider answered';
+      const why = [...all.map((x) => `${x.p.id}: ${x.s.note ?? 'unavailable'}`), ...recFailures].join('; ') || 'no records provider answered';
       fields[k] = entry(unavailable(why, all[0]?.s.source ?? ASSEMBLER));
       continue;
     }
@@ -262,7 +265,7 @@ export async function buildPropertyProfile(query, ctx) {
     for (const [k, rk] of yardKeys) {
       const v = yard[rk];
       fields[k] = isNum(v) ? entry(sourced(Math.round(v), { tag: 'estimated', source: 'Everyspace yard split (parcel minus building footprints)', confidence: conf(Math.min(CONFIDENCE.yard, rc)), retrievedAt: at, unit: 'sqft',
-        method: yard.method ?? 'yard split', note: joinNotes(yw.length ? `Warnings: ${yw.join('; ')}.` : undefined, streetSide ? 'Front edge from the geocoder street-side point.' : streetGeom ? 'Front edge from the street centreline.' : 'No street reference.') })) : gone(`splitYard returned no ${rk}`);
+        method: yard.method ?? 'yard split', note: joinNotes(yw.length ? `Warnings: ${yw.join('; ')}.` : undefined, streetSide ? 'Front edge from the geocoder street-side point.' : streetGeom ? 'Front edge from the street centreline.' : 'No street reference.') })) : gone(yard.yardReason ? `yard not split: ${yard.yardReason}` : `splitYard returned no ${rk}`);
     }
     details.yard = { lotSqft: yard.lotSqft, buildingSqft: yard.buildingSqft, openSqft: yard.openSqft, method: yard.method, confidence: yard.confidence, frontEdge: yard.frontEdge ?? null, warnings: yw };
   } else for (const [k] of yardKeys) fields[k] = gone(yardWhy ?? 'yard not computed');

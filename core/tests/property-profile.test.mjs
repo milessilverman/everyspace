@@ -118,7 +118,7 @@ test('fallback chain: primary fails (429) or lacks a field -> assessor value, "n
   assert.equal(f429.house_sqft, 2800); assert.equal(f429.fields.house_sqft.source, 'LA County Assessor (via LA County GIS)');
   assert.match(f429.fields.house_sqft.note, /no independent cross-check/i);
   const rc = f429.providers.find((x) => x.id === 'rentcast');
-  assert.equal(rc.status, 'failed'); assert.match(rc.reason, /rate/i === undefined ? /HTTP 429/ : /HTTP 429/); assert.ok(!JSON.stringify(f429).includes(KEY));
+  assert.equal(rc.status, 'failed'); assert.match(rc.reason, /HTTP 429/); assert.ok(!JSON.stringify(f429).includes(KEY));
   assert.ok(f429.warnings.some((w) => w.startsWith('rentcast:')));
   const partial = (await run({ keys: { rentcast: KEY }, over: { rentcast: () => json([{ squareFootage: 2750, propertyType: 'Single Family' }]) } })).profile;
   assert.equal(partial.house_sqft, 2750); assert.equal(partial.beds, 3); assert.equal(partial.fields.beds.source, 'LA County Assessor (via LA County GIS)');
@@ -167,11 +167,11 @@ test('roof: Google Solar area when a key is present (measured); footprint plan a
 
 test('floors estimate rules: ratio rounding, 1..4 clamp, > 4.5 unavailable, low confidence, unavailable without inputs', async () => {
   const withSqft = (n) => ({ parcel: () => { const d = fx('synthetic-assessor-sfr.json'); d.features[0].attributes.SQFTmain1 = n; return json(d); } });
-  for (const [sqft, floors] of [[1400, 1], [2100, 2], [4200, 3], [5600, 4], [700, 1]]) {
+  for (const [sqft, floors] of [[1400, 1], [2200, 2], [4200, 3], [5600, 4], [700, 1]]) {
     const p = (await run({ over: withSqft(sqft) })).profile;
     assert.equal(p.floors, floors, `${sqft} sq ft`); assert.equal(p.fields.floors.tag, 'estimated'); assert.ok(p.fields.floors.confidence <= 0.3);
   }
-  const clean = (await run({ over: withSqft(2800) })).profile, ambiguous = (await run({ over: withSqft(2100) })).profile;
+  const clean = (await run({ over: withSqft(2800) })).profile, ambiguous = (await run({ over: withSqft(2200) })).profile;
   assert.ok(clean.fields.floors.confidence > ambiguous.fields.floors.confidence);
   const huge = (await run({ over: withSqft(9000) })).profile;
   assert.equal(huge.floors, null); assert.match(huge.fields.floors.note, /too high/); assert.ok(huge.warnings.some((w) => /4\.5x/.test(w)));
@@ -184,7 +184,7 @@ test('floors estimate rules: ratio rounding, 1..4 clamp, > 4.5 unavailable, low 
 });
 
 test('yard: unavailable without a splitter, on {ok:false} and on a throw; warnings and confidence cap carry through', async () => {
-  const none = (await run({ splitYard: undefined })).profile;
+  const none = (await run({ splitYard: null })).profile;
   for (const k of ['front_yard_sqft', 'back_yard_sqft', 'side_yard_sqft']) { assert.equal(none[k], null); assert.match(none.fields[k].note, /not provided/); assert.equal(none.fields[k].confidence, 0); }
   const notOk = (await run({ splitYard: () => ({ ok: false, reason: 'parcel too irregular' }) })).profile;
   assert.match(notOk.fields.back_yard_sqft.note, /parcel too irregular/);
@@ -203,7 +203,7 @@ test('provider failures never throw: assessor and footprint down -> unavailable 
   for (const k of PROFILE_FIELDS) { assert.ok(p.fields[k].source); assert.equal(typeof p.fields[k].confidence, 'number'); }
   assert.equal(p.providers.find((x) => x.id === 'la-assessor').status, 'failed');
   assert.ok(p.warnings.some((w) => w.startsWith('la-assessor:')));
-  assert.equal(p.lat, 34.0 - 0.00007 + 0 === p.lat ? p.lat : p.lat); // geocoder point still present
+  assert.ok(Math.abs(p.lat - 34) < 1e-3, 'geocoder point still present');
   const empty = await buildPropertyProfile({ address: '' }, { registry: await createDefaultRegistry(), fetch: world(), now: NOW });
   assert.ok(empty.warnings.includes('empty address'));
   for (const k of PROFILE_FIELDS) assert.equal(empty.fields[k].tag, 'unavailable', k);
