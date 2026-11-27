@@ -362,6 +362,7 @@ try {
     check(!/undefined|NaN|null/.test(today), 'no "undefined", "NaN" or "null" text on Today');
     await goTab(page, 'earnings'); check(!/undefined|NaN|null/.test(await view(page)) && /\$500/.test(await view(page)), 'Earnings renders a row whose booking is missing');
     // one door: the database says no, the page says it plainly
+    await goTab(page, 'places');
     await page.locator('[data-act=mode][data-id=l2][data-mode=instant]').click();
     await page.waitForSelector('.toast.bad'); check(/only one site can take instant bookings/i.test(await page.locator('.toast').innerText()), 'the one-instant-site rule is explained when the database refuses');
     await page.evaluate(() => document.querySelector('.toast')?.remove());
