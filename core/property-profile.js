@@ -7,7 +7,7 @@
 import { confidenceLabel, sourced, unavailable } from './provenance.js';
 import { createProfile, setAttribute } from './profile.js';
 import { addressMismatch, CONFIDENCE, isoNow, parseStreet } from './parcel.js';
-import { polygonAreaSqft, pointInPolygon, centroid, distanceM, localProjection } from './geometry.js';
+import { polygonAreaSqft, pointInPolygon, centroid, localProjection } from './geometry.js';
 import { compareValues, COMPARE_KIND, round } from './providers/util.js';
 
 /** Scope of this assembler. */
@@ -120,7 +120,7 @@ export async function buildPropertyProfile(query, ctx) {
       let used = false;
       if (!fp && r.buildings.length) { fp = r; fpP = p; used = true; }
       if (!roof && r.roof) { roof = r.roof; roofP = p; used = true; }
-      mark(p.id, used ? 'used' : 'used', used ? undefined : 'answered, nothing new');
+      mark(p.id, 'used', used ? undefined : 'answered, nothing new');
     }
   } else forKind('footprint');
   /** @type {any[]} */ const buildings = fp ? fp.buildings : [];
@@ -195,6 +195,7 @@ export async function buildPropertyProfile(query, ctx) {
   fields.address = addr ? entry(sourced(addr.address, { tag: 'measured', source: geoSrc, confidence: conf(geoConf), retrievedAt: at, method: 'geocoded from the typed address', ...(geoNote ? { note: geoNote } : {}) }))
     : gone('address could not be geocoded');
   let latLng = addr ? { lat: addr.lat, lng: addr.lng, src: geoSrc, c: geoConf, note: geoNote, method: 'geocoded from the typed address' } : null;
+  if (!latLng && pcen) latLng = { lat: pcen.lat, lng: pcen.lng, src: parcelSrc?.r.fields.lot_sqft?.source ?? ASSEMBLER, c: 0.6, note: 'No geocoder answered; location is the centroid of the matched parcel.', method: 'centroid of the assessor parcel polygon' };
   if (latLng && pcen && boundary) {
     const d = distanceToPolygonM({ lat: latLng.lat, lng: latLng.lng }, boundary);
     if (d > MAX_GEOCODE_TO_PARCEL_M) {
