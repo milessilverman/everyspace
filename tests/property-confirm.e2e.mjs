@@ -322,26 +322,28 @@ await scenario('keyboard only: Tab through the list, type, Tab applies and moves
   await page.focus('#f-garage_present-yes');
   await page.keyboard.press('Space');
   await page.waitForFunction(() => document.querySelector('#f-garage_present-yes').getAttribute('aria-pressed') === 'true');
-  assert.equal(await page.evaluate(() => document.activeElement.id), 'f-garage_present-yes');
+  // an answered empty line hands focus to the next empty one, or to the question below when there is none
+  await page.waitForFunction(() => document.activeElement.id !== 'f-garage_present-yes');
+  assert.ok(['qh', 'f-pool_present-yes'].includes(await page.evaluate(() => document.activeElement.id)) || await page.evaluate(() => document.activeElement.closest('.fact, #qcard') !== null), 'focus moved on');
 });
 
-await scenario('owner questions: yes/no answers are toggles in the same style; a typed answer that is refused gets a hint', async (page) => {
+await scenario('owner questions: a yes answer becomes a line in the list; a typed answer that is refused gets a hint in the card', async (page) => {
   await happy(page);
-  await page.click('details[data-dk="questions"] > summary');
-  const yes = page.locator('details[data-dk="questions"] .yn-b[data-v="yes"]').first();
-  if (await yes.count()) {
-    const key = await yes.getAttribute('data-key');
-    await yes.click();
+  await page.waitForSelector('#qcard #q-body[data-key]');
+  const key = await page.getAttribute('#q-body', 'data-key');
+  const type = await page.evaluate(() => document.querySelector('#q-body input[type="text"]') ? 'number' : 'choice');
+  if (type === 'choice') {
+    await page.click(`#q-${key}-yes`);
     await page.waitForSelector(`${row(key)}[data-state="edited"]`);
     assert.equal(await page.getAttribute(`#f-${key}-yes`, 'aria-pressed'), 'true', 'the answer is now a line in the list');
   }
-  const num = page.locator('details[data-dk="questions"] input[data-fact]').first();
+  await page.click('#qcard .q-dot[data-key="yard_area_sqft"]').catch(() => {});
+  const num = page.locator('#q-body input[type="text"]');
   if (await num.count()) {
     const id = await num.getAttribute('id');
     await page.fill(`#${id}`, '-5');
-    await page.locator(`#${id}`).blur();
-    await page.waitForSelector('details[data-dk="questions"] .fact-hint');
-    assert.equal(await page.inputValue(`#${id}`), '');
+    await page.press(`#${id}`, 'Enter');
+    await page.waitForSelector('#q-err');
   }
   await toEarn(page);
   await page.fill('#max-upfront', '-100');

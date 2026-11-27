@@ -16,6 +16,8 @@ export const PLACES = {
   complex: { match: '1200 test ave', address: '1200 Test Ave, Los Angeles, CA 90001', lat: 34.0522, lng: -118.2437, unitCount: 124, apn: '5149-001-001', lotSqft: 41000, buildingYear: 1987, ptype: 'condo', ptypeTag: 'estimated', la: true },
   smallComplex: { match: '77 small ct', address: '77 Small Ct, Los Angeles, CA 90001', lat: 34.0622, lng: -118.2537, unitCount: 6, apn: '5149-002-001', lotSqft: 9000, buildingYear: 1975, ptype: 'condo', ptypeTag: 'measured', la: true },
   house: { match: '500 house st', address: '500 House St, Los Angeles, CA 90001', lat: 34.0422, lng: -118.2337, apn: '5149-003-001', lotSqft: 6500, house: 1800, beds: 3, baths: 2, buildingYear: 1950, ptype: 'single_family', ptypeTag: 'measured', la: true },
+  largeLot: { match: '700 ranch rd', address: '700 Ranch Rd, Los Angeles, CA 90001', lat: 34.0722, lng: -118.2637, apn: '5149-004-001', lotSqft: 130000, house: 2200, beds: 4, baths: 3, buildingYear: 1975, ptype: 'single_family', ptypeTag: 'measured', la: true },
+  lakeHouse: { match: '12 lakeside dr', address: '12 Lakeside Dr, Los Angeles, CA 90001', lat: 34.0822, lng: -118.2737, apn: '5149-005-001', lotSqft: 8000, house: 1600, beds: 3, baths: 2, buildingYear: 1980, ptype: 'single_family', ptypeTag: 'measured', la: true, water: true },
   unknownType: { match: '9 plain rd', address: '9 Plain Rd, Phoenix, AZ 85001', lat: 33.4484, lng: -112.074, apn: '123-45-678', lotSqft: 7200, house: 1500, beds: 3, baths: 2, buildingYear: 1990, ptype: null, la: false },
 };
 export const unitList = (n) => Array.from({ length: n }, (_, i) => ({ unit: String(i + 1), label: `Unit ${i + 1}` }));
@@ -65,6 +67,7 @@ export function fakeLookup(query, places = PLACES) {
   out.fields = { ...base, lot_sqft: meas(p.lotSqft), ...(land ? {} : { house_sqft: meas(p.house ?? 1800), beds: meas(p.beds ?? 3), baths: meas(p.baths ?? 2), year_built: meas(p.buildingYear ?? 1950) }) };
   const pt = ownerType ?? p.ptype;
   if (pt) out.fields.property_type = ptype(pt, p);
+  if (p.water) out.extraAttrs = { water_nearby: meas(true) };
   out.geometry = geom(p, false);
   return out;
 }

@@ -8,11 +8,11 @@ import { runCountyPath, runOlderPath, sessionFetch, mergeProfile } from './count
 import { attachAddressSuggest, getPickedLocation, setPickedLocation } from './address-suggest.js';
 import { createProfile } from '../core/profile.js';
 import { confidenceLabel } from '../core/provenance.js';
-import { identifyOpportunities, missingEvidence, defaultResourceCapacity } from '../core/opportunities.js';
+import { identifyOpportunities, defaultResourceCapacity } from '../core/opportunities.js';
 import { defaultInputs, withOverrides, estimateOpportunity, summarize, INPUT_KEYS } from '../core/revenue.js';
 import { optimize, GOALS } from '../core/optimizer.js';
 import { SCENARIO_NAMES } from '../core/data/scenarios.js';
-import { ATTRIBUTE_QUESTIONS } from '../core/data/categories.js';
+import { initQuestions, REASSURE } from './questions.js'; // owner questions: the guided card lives in questions.js
 import { initLotMap } from './lot-map.js';
 import { initContextMap } from './context-map.js';
 import * as OPP from '../core/opportunities.js';
@@ -75,7 +75,6 @@ const PROPERTY_TYPES = [
   ['single_family', 'Single-family home'], ['condo', 'Condo or apartment'], ['multi_family', 'Multi-family (2+ units)'],
   ['land', 'Vacant land'], ['commercial', 'Commercial'],
 ];
-const EQUIPMENT = [['atv', 'ATV'], ['snowmobile', 'Snowmobile'], ['kayak', 'Kayak'], ['boat', 'Boat'], ['jet_ski', 'Jet ski'], ['ebike', 'E-bike'], ['camper', 'Camper']];
 
 // ---- the owner's property list --------------------------------------------------------------------------------------
 /** Always listed, in this order (an empty input when nothing was found). */
@@ -177,6 +176,17 @@ const lotMap = initLotMap({ getProfile: () => S.profile, applyOwnerCorrections: 
 const ctxMap = initContextMap({ getProfile: () => S.profile, mount: document.getElementById('lot-map') });
 /** The "which unit is yours?" step: what the owner typed to filter, and the highlighted unit. */
 const unitUi = { q: '', active: -1 };
+// ---- owner questions (the guided card, estimate/questions.js) -- mount ----
+const Q = initQuestions({
+  getProfile: () => S.profile,
+  apply: (key, value) => { if (key === 'roof_type') chooseFact(key, String(value), 'q-roof_type'); else applyOwnerCorrections({ [key]: value }); },
+  undo: (keys) => clearOwnerCorrections(keys),
+  parse: (key, raw) => parseFact(key, 'number', raw),
+  label: (key) => factLabel(key),
+  goProperty: () => { if (history.state && history.state.v === 'earn') history.back(); else showProperty(true); },
+  rerender: () => renderAll(),
+});
+// ---- end owner questions mount ----
 /** Every lookup request goes through one in-memory session cache: the same question is never asked twice. */
 const lookupFetch = sessionFetch((url, init) => fetch(url, init));
 
@@ -321,6 +331,7 @@ function resetSession() {
   S.overrides = {}; S.editInput = null; S.phase = 'address'; S.error = ''; S.dirty = false; S.discardOk = false;
   S.unit = null; S.unitDirty = false; S.unitCount = null; S.wholeBuilding = false; S.ownerType = null; S.roofType = null; S.unitAsk = null; S.parcelApn = null; unitUi.q = ''; unitUi.active = -1;
   S.path = ''; S.countyMatched = ''; S.picked = null;
+  Q.reset(); // owner questions: forget "I don't know" and skipped
   progress.done();
 }
 
@@ -448,6 +459,7 @@ function isUnitOption(o) { return Boolean(o.quantityNeeded) || o.id === 'apartme
 // rendering. Every render keeps focus where it was and keeps text the owner is typing (late values never overwrite it).
 // ---------------------------------------------------------------------------------------------------------------
 function renderAll() {
+  queueMicrotask(() => Q.afterRender()); // owner questions: move focus and (only if needed) the scroll once the page is drawn
   const explicit = S.focusId;
   S.focusId = null;
   const a = document.activeElement;
@@ -669,44 +681,12 @@ function profileHtml() {
     ${S.notFound ? `<p class="callout" id="not-found">We couldn't find that address automatically. Add your property details below.</p>` : ''}
     ${ownHtml()}
     ${condoLine}
-    <p class="small muted" id="facts-help">Type over any number that is not right. Everything below updates at once.</p>
+    <p class="small muted" id="facts-help">Type over any number that is not right. Everything below updates at once. ${esc(REASSURE)}</p>
     <div id="lot-map-slot"></div>
     <div class="facts" id="facts" data-view="${esc(view ?? '')}">${factRowsHtml(keys)}</div>
-    <div style="margin-top:12px">${view === 'condo' || view === 'land' ? '' : questionsHtml(new Set(keys))}</div>
+    <div style="margin-top:12px">${Q.html()}</div>
     <div style="margin-top:12px">${sourcesHtml(keys)}</div>
   </section>`;
-}
-
-function questionList(shown) {
-  const items = missingEvidence(S.profile);
-  const seen = new Set();
-  const out = [];
-  for (const it of items) {
-    const keys = it.needs.filter((k) => !seen.has(k) && !shown.has(k));
-    if (!keys.length) continue;
-    keys.forEach((k) => seen.add(k));
-    const question = keys.length === 1 ? (ATTRIBUTE_QUESTIONS[keys[0]] ?? it.question) : it.question;
-    out.push({ ...it, keys, question });
-  }
-  return out;
-}
-
-function questionControl(key, q) {
-  const kind = kindOf(key, undefined);
-  const id = `q-${safeId(key)}`;
-  if (kind === 'bool') return `<span class="yn" role="group" aria-label="${esc(q)}">${['yes', 'no'].map((v) => `<button type="button" class="yn-b" id="${id}-${v}" data-act="fact-bool" data-key="${esc(key)}" data-v="${v}" aria-pressed="false">${v === 'yes' ? 'Yes' : 'No'}</button>`).join('')}</span>`;
-  if (kind === 'type') return `<select id="${id}" data-fact="${esc(key)}" aria-label="${esc(q)}"><option value="">Choose&hellip;</option>${PROPERTY_TYPES.map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select>`;
-  if (kind === 'equipment') return `<div class="stack" id="${id}">${EQUIPMENT.map(([k, l]) => `<label class="check"><input type="checkbox" id="${id}-${k}" data-change="equip" data-key="${esc(key)}" value="${k}">${l}</label>`).join('')}
-    <button class="btn sm" id="${id}-none" type="button" data-act="equip-none">I do not own any of these</button></div>`;
-  const u = kind === 'number' ? unitOf(key) : { label: '' };
-  return `<span class="fact-ctl"><input id="${id}" type="text" ${kind === 'number' ? 'inputmode="decimal" ' : ''}autocomplete="off" data-fact="${esc(key)}" data-kind="${kind ?? 'text'}" placeholder="Add" aria-label="${esc(factLabel(key))}${u.label ? ` (${u.label})` : ''}">${u.label ? `<span class="unit">${esc(u.label)}</span>` : ''}</span>${S.hints[key] ? `<p class="fact-hint" role="alert">${esc(S.hints[key])}</p>` : ''}`;
-}
-
-function questionsHtml(shown) {
-  const qs = questionList(shown);
-  if (!qs.length) return '';
-  const body = qs.map((q) => `<div class="q"><div class="qtext">${esc(q.question)}</div>${q.keys.map((k) => questionControl(k, q.question)).join('<div style="height:6px"></div>')}</div>`).join('');
-  return dKey('questions', `More things you could rent (${qs.length} question${qs.length === 1 ? '' : 's'})`, `<p class="small muted" style="margin-bottom:6px">Answer any you know. A yes adds that idea to the list below.</p>${body}`);
 }
 
 // ---- opportunities ---------------------------------------------------------------------------------------------
@@ -934,6 +914,7 @@ function earnHtml(view) {
     ${opt.selected.length ? `<section aria-labelledby="h-incl"><div class="section-title"><h2 id="h-incl">Ways in your best combination</h2><span class="small muted">${opt.selected.length} of ${opps.length} option${opps.length === 1 ? '' : 's'}</span></div>
       <div id="combo-selected" class="stack">${included}</div>${totalsBlock ? `<div style="margin-top:12px">${totalsBlock}</div>` : ''}</section>` : ''}
     ${holdHtml(hold)}
+    ${Q.heldHtml()}
     ${left}
     ${inv}
     <p><a href="../host/">Already renting? Manage your spaces in the Host Console</a></p>
@@ -1068,7 +1049,9 @@ function changeUnit(raw, id) {
 function chooseFact(key, v, id) {
   const cur = S.profile?.attributes[key];
   if (!(key in S.owner) && hasValue(cur) && cur.value === v && cur.tag !== 'estimated') return;
+  const wasEmpty = !document.querySelector(`.fact[data-key="${key}"] [aria-pressed="true"]`);
   setOwner(key, v);
+  Q.factAnswered(key, wasEmpty); // owner questions: the next empty line takes focus
   S.focusId = id;
   if (key === 'roof_type') { S.roofType = v === 'unsure' ? null : v; renderAll(); if (S.path === 'county' && !S.notFound) scheduleRerun({ focusId: id }); return; }
   renderAll();
@@ -1121,12 +1104,12 @@ document.addEventListener('click', (ev) => {
     const key = b.dataset.key, v = b.dataset.v === 'yes';
     const cur = S.profile?.attributes[key];
     if (!(key in S.owner) && hasValue(cur) && cur.value === v && cur.tag !== 'estimated') return; // already says so
+    const wasEmpty = !b.closest('.yn')?.querySelector('[aria-pressed="true"]');
     setOwner(key, v);
+    Q.factAnswered(key, wasEmpty); // owner questions: the next empty line takes focus
     const rowId = `f-${safeId(key)}-${b.dataset.v}`;
     S.focusId = document.getElementById(rowId) || b.id === rowId ? rowId : b.id;
     renderAll();
-    // a question that was answered becomes a line in the list: keep focus on that answer
-    if (!document.getElementById(b.id)) (document.getElementById(rowId) ?? $('details[data-dk="questions"] > summary'))?.focus();
     return;
   }
   if (act === 'undo') {
@@ -1140,7 +1123,6 @@ document.addEventListener('click', (ev) => {
     announce(`${factLabel(key)} is back to the looked-up value.`);
     return;
   }
-  if (act === 'equip-none') { setOwner('equipment_owned', []); renderAll(); return; }
   if (act === 'edit-input') { S.editInput = { oppId: b.dataset.oid, key: b.dataset.key }; S.open.add(`as-${b.dataset.oid}`); S.focusId = `ei-${safeId(b.dataset.oid)}-${b.dataset.key}`; renderAll(); return; }
   if (act === 'cancel-input') { const e = S.editInput; S.editInput = null; if (e) S.focusId = `ei-edit-${safeId(e.oppId)}-${e.key}`; renderAll(); return; }
   if (act === 'save-input') { saveInput(b.dataset.oid, b.dataset.key, b.dataset.field); return; }
@@ -1236,10 +1218,7 @@ document.addEventListener('change', (ev) => {
   const kind = t.dataset.change;
   // let focus settle on the next control (Tab) before the view is rebuilt
   setTimeout(() => {
-    if (kind === 'equip') {
-      const checked = [...document.querySelectorAll('[data-change="equip"]')].filter((c) => c.checked).map((c) => c.value);
-      setOwner('equipment_owned', checked);
-    } else if (kind === 'investments') S.includeInvestments = t.checked;
+    if (kind === 'investments') S.includeInvestments = t.checked;
     else if (kind === 'goal') S.goal = t.value;
     else if (kind === 'maxUpfront') {
       S.maxUpfront = t.value.trim().replace(/[,$\s]/g, '');

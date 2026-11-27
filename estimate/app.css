@@ -262,3 +262,17 @@ footer p + p { margin-top: 6px; }
   .yn.choice .yn-b { padding: 7px 12px; }
   .own-opts { grid-template-columns: 1fr; }
 }
+
+/* ---- property layout (MAP) -------------------------------------------------------------------------------------------------------------------
+   Page 1: on wide screens the list and the questions scroll on the left and the picture of the lot stays pinned on the right; on a phone the
+   picture is a compact strip pinned under the header. lot-map.js marks #property with .has-pic and sets --lm-top to the header's height. */
+.fact.lm-flash { border-radius: 8px; }
+@media (min-width: 900px) {
+  #property.has-pic { display: grid; grid-template-columns: minmax(0, 1fr) minmax(380px, 40%); column-gap: 24px; align-items: start; }
+  #property.has-pic > * { grid-column: 1; min-width: 0; }
+  #property.has-pic > #lot-map-slot { grid-column: 2; grid-row: 1 / span 40; position: sticky; top: calc(var(--lm-top, 64px) + 12px); align-self: start; z-index: 4; max-height: calc(100vh - var(--lm-top, 64px) - 28px); overflow-y: auto; }
+  #property.has-pic #lot-map-slot .lm { margin: 0; }
+}
+@media (max-width: 899px) {
+  #property.has-pic > #lot-map-slot { position: sticky; top: var(--lm-top, 56px); z-index: 6; background: var(--surface); margin: 0 -4px 6px; padding: 2px 0; }
+}
