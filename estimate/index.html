@@ -7,6 +7,7 @@
 <meta name="description" content="Free planning estimate of what your property could earn from rentable space. No sign-up. Nothing you enter is saved.">
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="./app.css">
+<link rel="stylesheet" href="./lot-map.css">
 </head>
 <body>
 <a class="skip" href="#address">Skip to the address box</a>
@@ -24,8 +25,9 @@
 
 <main class="wrap" id="main">
   <noscript><div class="card"><p><strong>This estimator needs JavaScript.</strong> Turn it on to look up an address, or <a href="../">go back to the home page</a>.</p></div></noscript>
+  <div id="view-property">
   <section class="card" aria-labelledby="h-address">
-    <div class="section-title"><h1 id="h-address">What could your property earn?</h1></div>
+    <div class="section-title"><h1 id="h-address" tabindex="-1">Your property</h1></div>
     <p class="muted">Type your address to see what is on your property and the ways it could earn. Free, no sign-up. Nothing you enter here is saved.</p>
     <form id="address-form" class="stack" novalidate>
       <div>
@@ -45,11 +47,23 @@
 
   <div id="lookup"></div>
   <div id="results"></div>
+  <!-- MOUNT POINT for the satellite-image view with adjustable outlines (another agent builds it; empty and hidden until then).
+       app.js moves #lot-map after every render of the property list so that it sits between the property heading (address, parcel)
+       and the list of facts. It exports two functions (import { getProfile, applyOwnerCorrections } from './app.js'):
+         getProfile()                      -> the current profile (owner corrections applied; `profile.geometry` when present) or null
+         applyOwnerCorrections({key: val}) -> applies a batch of owner corrections through the same path as typing in the list;
+                                              the lines and page 2 update. Unhide #lot-map yourself when you have something to show. -->
+  <div id="lot-map-holder" hidden><div id="lot-map" hidden></div></div>
+  <div class="next-bar" id="next-bar" hidden>
+    <button class="btn primary lg" id="next-earn" type="button" data-act="next-earn" disabled>Next: see what it could earn</button>
+  </div>
+  </div>
+  <div id="view-earn" hidden></div>
 </main>
 
 <footer>
   <div class="wrap">
-    <p id="privacy-line">Nothing you enter here is saved. While you type an address, the text is sent to Los Angeles County's public address service to suggest matches. When you press "Find my property", the address is sent to Los Angeles County's public map services to look up the property; addresses they cannot find are sent to OpenStreetMap's public search, and the property's map location is sent to OpenStreetMap to check for a pool and nearby transit. The map location may also be sent to US government map services to identify the county, and building outlines may be read from Overture Maps' public files. For addresses outside Los Angeles County, the text you type is also sent to Photon (an OpenStreetMap address search) to suggest matches, and the county's own public parcel service may be asked for the lot.</p>
+    <p id="privacy-line">Nothing you enter here is saved. While you type an address, the text is sent to Los Angeles County's public address service to suggest matches. When you press "Find my property", the address is sent to Los Angeles County's public map services to look up the property; addresses they cannot find are sent to OpenStreetMap's public search, and the property's map location is sent to OpenStreetMap to check for a pool and nearby transit. The map location may also be sent to US government map services to identify the county, and building outlines may be read from Overture Maps' public files. For addresses outside Los Angeles County, the text you type is also sent to Photon (an OpenStreetMap address search) to suggest matches, and the county's own public parcel service may be asked for the lot. To show your lot from above, the map box around the lot (a rectangle of coordinates, not the address) is sent to the US Geological Survey's public aerial photo service.</p>
     <p id="attribution">Property data: Los Angeles County public GIS services (address locator, assessor parcels, LARIAC building outlines). Some building outlines: Overture Maps Foundation. Map data © OpenStreetMap contributors (ODbL). Address suggestions © OpenStreetMap contributors (via Photon).</p>
     <p><a href="../host/">Already renting? Manage your spaces in the Host Console</a></p>
   </div>

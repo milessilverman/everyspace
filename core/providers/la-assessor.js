@@ -88,9 +88,26 @@ export function summarizeImprovements(a) {
     improvements: recs.filter((r) => r.sqft !== null || r.beds !== null || r.baths !== null || r.year !== null || r.units !== null).length };
 }
 
+/**
+ * The assessor's effective year of the main improvement (the slot whose YearBuilt gave year_built), when it is a valid year later than the
+ * year built and not in the future: the assessor moves it forward after a major remodel or addition. Otherwise unavailable with the reason.
+ * @param {any} a attributes @param {{value:number|null, slot:number}} year @param {{at:string, idConf:number}} ctx
+ */
+export function remodeledYear(a, year, ctx) {
+  const why = (/** @type {string} */ r) => unavailable(r, SOURCE);
+  if (year.value === null || !year.slot) return why('no year built recorded, so a later remodel cannot be told apart');
+  const eff = yearOf(a[`EffectiveYear${year.slot}`]);
+  if (eff === null) return why(`assessor records no effective year (EffectiveYear${year.slot} empty)`);
+  const nowYear = Number(String(ctx.at).slice(0, 4));
+  if (Number.isFinite(nowYear) && eff > nowYear) return why(`assessor effective year ${eff} is in the future`);
+  if (eff <= year.value) return why(`assessor effective year equals the year built (${eff}): no major remodel recorded`);
+  return sourced(eff, { tag: 'estimated', source: SOURCE, sourceUrl: SERVICE?.url, retrievedAt: ctx.at, confidence: Math.min(0.5, ctx.idConf),
+    method: "assessor's effective year (updated after major remodels)", note: `EffectiveYear${year.slot} ${eff} vs YearBuilt${year.slot} ${year.value}. The effective year can also move for additions or a reassessment of condition; the owner should confirm.` });
+}
+
 /** Whitelisted attributes kept as `raw` (no roll values, no names). */
 const RAW_KEYS = ['AIN', 'APN', 'SitusFullAddress', 'SitusHouseNo', 'SitusDirection', 'SitusStreet', 'SitusCity', 'SitusZIP', 'UseCode', 'UseType', 'UseDescription',
-  'DesignType1', 'YearBuilt1', 'SQFTmain1', 'SQFTmain2', 'SQFTmain3', 'SQFTmain4', 'SQFTmain5', 'Units1', 'Bedrooms1', 'Bathrooms1', 'Shape.STArea()', 'CENTER_LAT', 'CENTER_LON'];
+  'DesignType1', 'YearBuilt1', 'EffectiveYear1', 'EffectiveYear2', 'EffectiveYear3', 'EffectiveYear4', 'EffectiveYear5', 'SQFTmain1', 'SQFTmain2', 'SQFTmain3', 'SQFTmain4', 'SQFTmain5', 'Units1', 'Bedrooms1', 'Bathrooms1', 'Shape.STArea()', 'CENTER_LAT', 'CENTER_LON'];
 const pick = (/** @type {any} */ a) => Object.fromEntries(RAW_KEYS.filter((k) => k in a).map((k) => [k, a[k]]));
 
 /** @param {any} features */
@@ -131,6 +148,7 @@ export function fieldsFromParcel(a, boundary, ctx) {
   f.year_built = imp.year.value !== null
     ? sourced(imp.year.value, meta(CONFIDENCE.assessor, { method: imp.year.of > 1 ? `YearBuilt${imp.year.slot} (largest improvement of ${imp.year.of} with a year)` : `YearBuilt${imp.year.slot}`, note: 'Assessor year of construction (not effective year).' }))
     : none("assessor records no year built (YearBuilt1..5 empty or '0000')");
+  f.remodeled_year = remodeledYear(a, imp.year, { at, idConf });
   f.units = imp.units.value !== null ? sourced(imp.units.value, meta(CONFIDENCE.assessor, { method: 'Units1..5 summed', ...many(imp.units, 'Units1..5') })) : none('assessor records no unit count (Units1..5 empty or 0)');
   const useCode = text(a.UseCode);
   f.use_code = useCode ? sourced(useCode, meta(CONFIDENCE.assessor, { note: [text(a.UseType), text(a.UseDescription)].filter(Boolean).join(' / ') || undefined })) : none('the layer returned no use code');

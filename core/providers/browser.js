@@ -6,6 +6,7 @@
 // No Google code is loaded from here.
 // Added 2026-11-27 (INTEGRATE): Photon address suggestions (suggestionSources) for addresses outside LA County; `tryUnverifiedParcelServices` is how the
 // page asks a county's own parcel service outside LA (short timeout, started in parallel, silent when it does not answer).
+// Added 2026-11-27 (AERIAL): Overture road centrelines (same tile host, CORS verified) and the USDA NAIP photo (Planetary Computer, CORS `*` verified).
 // Added 2026-11-27 (REUSE-B): Overture buildings (the catalog host stac.overturemaps.org answers `access-control-allow-origin: *` and the
 // tile host overturemaps-extras-us-west-2.s3.us-west-2.amazonaws.com answers a ranged GET with `access-control-allow-origin: *` and exposes
 // Content-Range, both checked live 2026-11-27) and the nationwide parcel registry restricted to services whose CORS support was verified
@@ -19,6 +20,8 @@ import { laAssessor } from './la-assessor.js';
 import { lariacBuildings } from './lariac-buildings.js';
 import { overtureBuildings, withOvertureFallback } from './overture-buildings.js';
 import { createParcelRegistryProvider } from './parcel-registry.js';
+import { overtureRoads } from './overture-roads.js';
+import { naipAerial } from './naip-aerial.js';
 import { photonAddress, ATTRIBUTION_TEXT as PHOTON_ATTRIBUTION } from './photon-address.js';
 import { pointInPolygon } from '../geometry.js';
 import { distanceToPolygonM } from '../property-profile.js';
@@ -52,7 +55,8 @@ export const countyLocator = {
  */
 export function createBrowserRegistry(opts = {}) {
   const parcels = { ...createParcelRegistryProvider({ corsMode: opts.tryUnverifiedParcelServices ? 'try-unverified' : 'verified-only' }), needsPointInParcel: true };
-  return createRegistry().register(countyLocator).register(laAssessor).register(parcels).register({ ...withOvertureFallback(lariacBuildings), needsParcel: true }).register(overtureBuildings);
+  return createRegistry().register(countyLocator).register(laAssessor).register(parcels).register({ ...withOvertureFallback(lariacBuildings), needsParcel: true }).register(overtureBuildings)
+    .register(overtureRoads).register(naipAerial);
 }
 
 /** Where the next suggestion search should lean: the last place the owner looked up (set by the page), or null. */
@@ -74,12 +78,14 @@ export function suggestionSources() {
 }
 
 /**
- * Wrap core/yard.js splitYard for the browser. Without a front point that is outside the parcel and close to it, no front
- * is ever guessed: the result is a failure whose reason is YARD_NEEDS_STREET.
+ * Wrap core/yard.js splitYard for the browser. Street centrelines (`streets`) go straight through. Otherwise, without a front point that
+ * is outside the parcel and close to it, no front is ever guessed: the result is a failure whose reason is YARD_NEEDS_STREET.
  * @param {(a:any)=>any} splitYard
  */
 export function browserSplitYard(splitYard) {
   return (/** @type {any} */ args) => {
+    // street centrelines (Overture roads) are a real street reference: passed straight on
+    if (Array.isArray(args?.streets) && args.streets.length) return splitYard(args);
     const fp = args?.frontPoint;
     if (!fp || !args?.parcel) return { ok: false, reason: YARD_NEEDS_STREET };
     if (pointInPolygon(fp, args.parcel)) return { ok: false, reason: `${YARD_NEEDS_STREET} (the locator's point falls inside the lot, so it cannot show which side is the street)` };

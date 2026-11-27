@@ -11,7 +11,7 @@ import { execSync } from 'node:child_process';
 import { resolveAddress, BROWSER_GEOCODERS } from '../core/parcel.js';
 import { applyOwnerCorrection } from '../core/profile.js';
 import { identifyOpportunities, defaultResourceCapacity } from '../core/opportunities.js';
-import { defaultInputs, withOverrides, estimateOpportunity } from '../core/revenue.js';
+import { defaultInputs, withOverrides, estimateOpportunity, summarize } from '../core/revenue.js';
 import { optimize } from '../core/optimizer.js';
 import { runCountyPath, settleProfile } from '../estimate/county-path.js';
 import { overtureServer, OVERTURE_REAL } from '../core/tests/fixtures/providers/overture-mock.mjs';
@@ -25,7 +25,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SHOTS = '/tmp/claude-0/-home-user/bbdf9db1-6a70-50d8-8c4a-2fe889e65e9c/scratchpad/ux';
 fs.mkdirSync(SHOTS, { recursive: true });
 /** Hosts other data sources may ask (county lookup, Overture): answered "not here". */
-const OTHER_SOURCES = /(^|\.)(geo\.fcc\.gov|tigerweb\.geo\.census\.gov|stac\.overturemaps\.org|amazonaws\.com)$/;
+const OTHER_SOURCES = /(^|\.)(geo\.fcc\.gov|tigerweb\.geo\.census\.gov|stac\.overturemaps\.org|amazonaws\.com|imagery\.nationalmap\.gov|planetarycomputer\.microsoft\.com)$/;
 const FX = path.join(ROOT, 'core/tests/fixtures/parcel');
 const fx = (n) => JSON.parse(fs.readFileSync(path.join(FX, n), 'utf8'));
 
@@ -110,9 +110,10 @@ const failures = [];
 let passed = 0;
 const allRecs = [];
 async function scenario(name, fn, viewport = { width: 1280, height: 900 }, dsf = 1, allowConsole = null) {
+  if (process.env.ONLY && !name.includes(process.env.ONLY)) return;
   const ctx = await browser.newContext({ viewport, deviceScaleFactor: dsf });
   const page = await ctx.newPage();
-  page.setDefaultTimeout(20000);
+  page.setDefaultTimeout(Number(process.env.TMO) || 20000);
   const rec = { name, external: [], mocked: [], consoleErrors: [], pageErrors: [], localRequests: [] };
   allRecs.push(rec);
   page.on('console', (m) => { if (m.type() === 'error') rec.consoleErrors.push(m.text()); });
@@ -153,6 +154,30 @@ async function happy(page, rec) {
   await settled(page);
 }
 const settled = (page) => page.waitForFunction(() => document.getElementById('progress').hidden && !document.querySelector('.fact[data-state="loading"]'), null, { timeout: 15000 });
+/** Page switching: the property list is page 1, everything about earnings is page 2. */
+const onEarn = (page) => page.locator('#view-earn').isVisible();
+async function toEarn(page) {
+  if (!(await onEarn(page))) await page.click('#next-earn');
+  await page.waitForSelector('#earn-headline');
+}
+async function toProperty(page) {
+  if (await onEarn(page)) await page.click('#back-property');
+  await page.waitForSelector('#facts');
+}
+/** Open every "Details" on page 2 (the breakdowns, assumptions and editors sit inside them). */
+async function openAll(page) {
+  await page.evaluate(() => document.querySelectorAll('#view-earn details').forEach((d) => { d.open = true; }));
+  await page.waitForTimeout(40);
+}
+/** Open one Details (and the ones around it) by its data-dk key. */
+async function ensureOpen(page, dk) {
+  await page.evaluate((k) => { for (let d = document.querySelector(`details[data-dk="${k}"]`); d; d = d.parentElement?.closest('details')) d.open = true; }, dk);
+  await page.waitForTimeout(40);
+}
+async function openDet(page, id) {
+  const d = page.locator(`details[data-dk="det-${id}"]`);
+  if (!(await d.evaluate((e) => e.open))) await d.locator(':scope > summary').click();
+}
 const row = (key) => `.fact[data-key="${key}"]`;
 const OUTCOME = '#facts, #confirm-yes, #cand-none';
 async function typeFact(page, key, value) { await page.fill(`#f-${key}`, String(value)); await page.press(`#f-${key}`, 'Enter'); }
@@ -169,8 +194,21 @@ async function setNum(page, sel, v) {
   await page.fill(sel, String(v));
   await page.locator(sel).blur();
 }
+/** the headline range is core's conservative and optimistic yearly net of the best combination (or says plainly there is none) */
+async function assertHeadline(page, core, label) {
+  const ids = core.opt.selected;
+  const el = page.locator('#earn-headline');
+  if (!ids.length) { assert.equal(await el.getAttribute('data-empty'), 'true', `${label}: headline says no way found`); return; }
+  const lo = summarize(core.estimates, ids, 'conservative').noiCentsPerYear, hi = summarize(core.estimates, ids, 'optimistic').noiCentsPerYear;
+  if (hi <= 0) return;
+  assert.equal(Number(await el.getAttribute('data-low-cents')), lo, `${label}: headline low`);
+  assert.equal(Number(await el.getAttribute('data-high-cents')), hi, `${label}: headline high`);
+  assert.equal(await text(page, '#earn-headline'), `Your property could earn about ${usd0.format(lo / 100)} to ${usd0.format(hi / 100)} a year`, `${label}: headline text`);
+}
 /** every baseline-year figure on the page equals the one computed by /core */
 async function assertMatchesCore(page, core, label) {
+  await toEarn(page);
+  await assertHeadline(page, core, label);
   const cards = await page.locator('[data-opp-card]').evaluateAll((els) => els.map((e) => e.getAttribute('data-opp-card')));
   assert.deepEqual([...cards].sort(), core.opps.map((o) => o.id).sort(), `${label}: same opportunities as core`);
   for (const o of core.opps) {
@@ -216,6 +254,13 @@ await scenario('happy path: the property list, three scenarios, numbers equal co
   assert.equal(await page.inputValue('#f-parking_spaces'), '');
   await page.click('details.sources > summary');
   assert.match(await text(page, '#sources-table tr[data-src="lot_area_sqft"]'), /Lot size .*LA County Assessor/);
+  assert.match(await text(page, '#status'), /Here is your property\./);
+  assert.doesNotMatch(await ownerText(page), FORBIDDEN);
+  // page 1 carries no earnings content at all
+  assert.equal((await page.locator('#view-property').innerText()).includes('$'), false, 'no dollar figure on page 1');
+  assert.equal(await page.locator('#view-property [data-opp-card], #view-property .scen, #view-property #plan-note, #view-property #combo-selected').count(), 0);
+  await toEarn(page);
+  await openAll(page);
   assert.equal(await text(page, '#plan-note'), 'These are planning estimates, not promises. Prices and bookings are Everyspace planning defaults unless you enter your own.');
   const body = (await page.locator('body').innerText()).toLowerCase();
   assert.equal(/you will (earn|make|get)/.test(body), false, '"you will earn" never appears');
@@ -227,29 +272,33 @@ await scenario('happy path: the property list, three scenarios, numbers equal co
   await assertMatchesCore(page, core, 'happy');
   const pool = core.estimates.pool.scenarios.baseline.noiCentsPerYear;
   assert.equal(await text(page, baseYear('pool')), usd0.format(pool / 100), 'displayed money is the formatted core value');
-  await page.click('details[data-dk="bd-pool"] > summary');
+  await ensureOpen(page, 'bd-pool');
   assert.match(await text(page, 'details[data-dk="bd-pool"]'), /Gross income.*Listing-site fees.*Cleaning.*Net income/);
-  await page.click('details[data-dk="as-pool"] > summary');
+  await ensureOpen(page, 'as-pool');
   assert.match(await text(page, 'details[data-dk="as-pool"]'), /Price per hour.*Estimated.*Everyspace planning default \(uncited\)/);
   assert.equal(await page.locator('table[data-assumptions="pool"] tbody tr').count(), 12);
   assert.match(await text(page, '[data-opp-card="pool"]'), /Local rules not checked — confirm with your city/);
   assert.match(await text(page, '[data-opp-card="pool"] [data-confidence]'), /^Low: price and bookings are Everyspace planning defaults, not market data/);
-  assert.match(await text(page, '#g-now'), /What you have now/);
-  assert.match(await text(page, '#g-later'), /Needs a permit or investment first/);
+  assert.match(await text(page, '#h-incl'), /Ways in your best combination/);
+  assert.match(await text(page, '#h-inv'), /Needs a permit or building work first/);
   assert.match(await text(page, '[data-opp-card="entire_home"]'), /Allowed with conditions/);
-  assert.match(await text(page, '#status'), /Here is your property\./);
+  await toProperty(page);
   assert.doesNotMatch(await ownerText(page), FORBIDDEN);
   await typeFact(page, 'bedrooms', 4);
+  await toEarn(page);
+  await page.selectOption('#goal', 'min_effort');
   await page.waitForFunction(() => /Estimates updated: \d+ ways? to earn found\./.test(document.querySelector('#status').textContent));
 });
 
 await scenario('combination: caution by default, naive-vs-real sentence, goal change, constraints, investments apart', async (page, rec) => {
   await happy(page, rec);
+  await toEarn(page);
+  await openAll(page);
   const r = await coreProfile(VENICE);
   const core = corePipeline(r.profile);
   assert.equal(await page.locator('#rules-caution').isVisible(), true, 'caution visible by default');
   assert.equal(await page.locator('#only-known').isChecked(), false);
-  const sel = async () => (await page.locator('#combo-selected li strong').allInnerTexts()).sort();
+  const sel = async () => (await page.locator('#combo-selected h3').allInnerTexts()).sort();
   const labelsOf = (opt, byId) => opt.selected.map((id) => byId[id].label).sort();
   const byId = Object.fromEntries(core.opps.map((o) => [o.id, o]));
   assert.deepEqual(await sel(), labelsOf(core.opt, byId), 'default goal matches core');
@@ -295,22 +344,24 @@ await scenario('editing: owner correction, answers, price override and investmen
   // 1. pool is wrong
   await page.click('#f-pool_present-no');
   p = owner(p, [['pool_present', false]]);
-  await page.waitForFunction(() => !document.querySelector('[data-opp-card="pool"]'));
   await edited(page, 'pool_present');
   await assertMatchesCore(page, corePipeline(p), 'after pool=false');
+  assert.equal(await page.locator('[data-opp-card="pool"]').count(), 0, 'pool idea gone');
   // 2. parking spaces: fill in an empty line; parking has no default volume, so it asks for it instead of guessing
+  await toProperty(page);
   await typeFact(page, 'parking_spaces', '2');
   p = owner(p, [['parking_spaces', 2]]);
+  await toEarn(page);
   await page.waitForSelector('[data-unavailable="parking_spot"]');
   assert.equal(await page.locator('[data-opp="parking_spot"]').count(), 0, 'no number while volume is unknown');
   await assertMatchesCore(page, corePipeline(p), 'parking, no volume');
   await page.fill('#need-parking_spot-unitsPerMonth', '60');
   await page.click('#need-save-parking_spot-unitsPerMonth');
   const ov = { parking_spot: { unitsPerMonth: 60 } };
-  await page.waitForSelector(baseYear('parking_spot'));
+  await page.waitForSelector(baseYear('parking_spot'), { state: 'attached' });
   await assertMatchesCore(page, corePipeline(p, { overrides: ov }), 'parking with owner volume');
   // 3. owner price on private room
-  await page.click('details[data-dk="as-private_room"] > summary');
+  await ensureOpen(page, 'as-private_room');
   await page.click('#ei-edit-private_room-priceCents');
   await page.fill('#ei-private_room-priceCents', '150');
   await page.click('#ei-save-private_room-priceCents');
@@ -322,14 +373,15 @@ await scenario('editing: owner correction, answers, price override and investmen
   await page.waitForFunction(() => ![...document.querySelectorAll('[data-assumptions="private_room"] tr[data-input="priceCents"] .chip')].some((c) => c.textContent === 'You confirmed'));
   await assertMatchesCore(page, corePipeline(p, { overrides: ov }), 'after reset');
   // 4. a question: "yes" adds that idea, and the answer becomes a line in the list
+  await toProperty(page);
   await page.click('details[data-dk="questions"] > summary');
   assert.match(await text(page, 'details[data-dk="questions"] > summary'), /^More things you could rent \(\d+ questions?\)$/);
-  assert.equal(await page.locator('[data-opp-card="workspace"]').count(), 0);
   await page.click('#q-workspace_available-yes');
   p = owner(p, [['workspace_available', true]]);
+  assert.equal(await page.getAttribute('#f-workspace_available-yes', 'aria-pressed'), 'true');
+  await toEarn(page);
   await page.waitForSelector('[data-opp-card="workspace"]');
   await assertMatchesCore(page, corePipeline(p, { overrides: ov }), 'after answering a question');
-  assert.equal(await page.getAttribute('#f-workspace_available-yes', 'aria-pressed'), 'true');
   // 5. investment ideas
   const beforeCount = await page.locator('[data-opp-card]').count();
   await page.check('#include-investments');
@@ -337,6 +389,7 @@ await scenario('editing: owner correction, answers, price override and investmen
   await assertMatchesCore(page, corePipeline(p, { overrides: ov, includeInvestmentIdeas: true }), 'with investment ideas');
   assert.match(await text(page, '[data-opp-card="adu"]'), /Needs building work first/);
   // a refused entry changes nothing
+  await toProperty(page);
   await typeFact(page, 'bedrooms', '-4');
   assert.match(await text(page, `${row('bedrooms')} .fact-hint`), /Enter a number/);
   await assertMatchesCore(page, corePipeline(p, { overrides: ov, includeInvestmentIdeas: true }), 'after a refused entry');
@@ -378,6 +431,7 @@ await scenario('candidates: "None of these" -> the list keeps what was found, an
   await page.selectOption('#f-property_type', 'multi_family');
   await edited(page, 'property_type');
   await typeFact(page, 'bedrooms', 4);
+  await toEarn(page);
   await page.waitForSelector('[data-opp-card]');
   const r = await coreProfile(SPRING_S);
   const p = owner(r.profile, [['property_type', 'multi_family'], ['bedrooms', 4]]);
@@ -390,8 +444,12 @@ await scenario('nothing found: one sentence, empty list, owner basics still give
   await page.waitForSelector('#not-found');
   assert.match(await text(page, '#status'), /couldn't find that address automatically/i);
   assert.equal(await page.locator('[data-opp-card]').count(), 0);
-  assert.match(await text(page, '#combo-empty'), /No combination fits/);
   assert.doesNotMatch(await ownerText(page), FORBIDDEN);
+  await toEarn(page);
+  assert.equal(await page.getAttribute('#earn-headline', 'data-empty'), 'true');
+  assert.match(await text(page, '#earn-headline'), /^We have not found a way to earn yet\. Add a few details about your property and we can show what it could earn\./);
+  assert.ok(await page.locator('#back-property').count() >= 1, 'points back to page 1');
+  await toProperty(page);
   await page.selectOption('#f-property_type', 'single_family');
   await edited(page, 'property_type');
   await typeFact(page, 'bedrooms', 3);
@@ -400,6 +458,7 @@ await scenario('nothing found: one sentence, empty list, owner basics still give
   await edited(page, 'pool_present');
   await typeFact(page, 'parking_spaces', 2);
   await page.click('#f-garage_present-yes');
+  await toEarn(page);
   await page.waitForSelector('[data-opp-card="garage_storage"]');
   const r = await coreProfile(FAIL);
   assert.equal(r.ok, false);
@@ -408,23 +467,26 @@ await scenario('nothing found: one sentence, empty list, owner basics still give
   await assertMatchesCore(page, core, 'manual');
   for (const k of ['pool', 'backyard', 'private_room', 'garage_storage', 'parking_spot']) assert.equal(await page.locator(`[data-opp-card="${k}"]`).count(), 1, k);
   // a yard of 0 removes yard ideas
+  await toProperty(page);
   await typeFact(page, 'yard_area_sqft', 0);
+  await toEarn(page);
   await page.waitForFunction(() => !document.querySelector('[data-opp-card="backyard"]'));
   await assertMatchesCore(page, corePipeline(owner(p, [['yard_area_sqft', 0]])), 'yard 0');
   // "enter details myself" asks before dropping the owner's values, and looks nothing up
   const mockedBefore = rec.mocked.length;
+  await toProperty(page);
   await page.click('#manual-start');
   assert.match(await text(page, '#status'), /You have changes on this page\. Starting again clears them/);
-  assert.ok(await page.locator('[data-opp-card]').count() > 0, 'first press changes nothing');
+  assert.ok(await page.locator('#facts .fact[data-state="edited"]').count() > 0, 'first press changes nothing');
   await page.click('#manual-start');
-  await page.waitForFunction(() => !document.querySelector('[data-opp-card]'));
+  await page.waitForFunction(() => !document.querySelector('.fact[data-state="edited"]'));
   assert.equal(rec.mocked.length, mockedBefore);
 }, { width: 1280, height: 900 }, 1, /^Failed to load resource: the server responded with a status of 503/);
 
 await scenario('privacy and accessibility: nothing stored, labelled controls, only lookup hosts', async (page, rec, ctx) => {
   await happy(page, rec);
   await page.click('details[data-dk="questions"] > summary');
-  await page.click('details[data-dk="as-pool"] > summary');
+  await ensureOpen(page, 'as-pool');
   const unlabeled = await page.evaluate(() => [...document.querySelectorAll('input, select')].filter((el) => !(el.labels && el.labels.length) && !el.getAttribute('aria-label') && !el.closest('label')).map((el) => el.id || el.outerHTML.slice(0, 60)));
   assert.deepEqual(unlabeled, [], 'every control has a label');
   const groups = await page.evaluate(() => [...document.querySelectorAll('.yn')].filter((g) => !g.getAttribute('aria-labelledby') && !g.getAttribute('aria-label')).length);
@@ -461,14 +523,20 @@ await scenario('mobile 390px: no horizontal scroll at any stage; screenshot', as
   await settled(page);
   await page.click('details[data-dk="questions"] > summary');
   await page.click('details.sources > summary');
-  await page.click('details[data-dk="as-pool"] > summary');
-  await page.click('details[data-dk="bd-pool"] > summary');
-  await page.click('#include-investments');
-  await page.waitForSelector('[data-opp-card="adu"]');
   await fits('results');
   await typeFact(page, 'bedrooms', 'x');
   await fits('hint shown');
   await page.screenshot({ path: `${SHOTS}/estimate-phone.png`, fullPage: true });
+  await page.fill('#f-bedrooms', '3'); await page.press('#f-bedrooms', 'Enter');
+  await toEarn(page);
+  await fits('page 2');
+  await ensureOpen(page, 'as-pool');
+  await ensureOpen(page, 'bd-pool');
+  await page.click('#include-investments');
+  await page.waitForSelector('[data-opp-card="adu"]', { state: 'attached' });
+  await openAll(page);
+  await fits('page 2 all open');
+  await page.screenshot({ path: `${SHOTS}/estimate-phone-earn.png`, fullPage: true });
 }, { width: 390, height: 844 }, 2);
 
 await scenario('dark mode renders (colour scheme follows the console)', async (page, rec) => {
@@ -616,7 +684,9 @@ await scenario('no-JavaScript notice; range per selected idea', async (page, rec
   assert.match((await p2.locator('noscript').first().innerText().catch(() => '')) || (await p2.locator('main').innerText()), /needs JavaScript/);
   await nojs.close();
   await happy(page, rec);
-  assert.match(await text(page, '#combo-selected li'), /\$[\d,]+ to \$[\d,]+ a year on its own, baseline \$[\d,]+/, 'a range, not a lone number');
+  await toEarn(page);
+  assert.match(await text(page, '#combo-selected [data-range]'), /^About \$[\d,]+ to \$[\d,]+ a year$/, 'a range, not a lone number');
+  assert.match(await text(page, '#earn-headline'), /^Your property could earn about \$[\d,]+ to \$[\d,]+ a year$/, 'the headline is a range too');
 });
 
 // ---- the county path (first choice): Los Angeles County's public services, mocked from synthetic fixtures ----------------
@@ -655,7 +725,7 @@ await scenario('county path: an LA address uses the county services; floors, bat
   assert.equal(await page.inputValue('#f-bathrooms'), '2');
   assert.equal(await page.inputValue('#f-living_area_sqft'), '2,800');
   assert.match(await page.inputValue('#f-roof_area_sqft'), /^[\d,]+$/);
-  for (const k of ['front_yard_sqft', 'back_yard_sqft', 'side_yard_sqft', 'yard_area_sqft']) {
+  for (const k of ['front_yard_sqft', 'back_yard_sqft', 'yard_area_sqft']) {
     assert.match(await page.inputValue(`#f-${k}`), /^[\d,]+$/, k);
     assert.equal(await page.locator(row(k)).getAttribute('data-state'), 'estimated', k);
   }
@@ -684,7 +754,7 @@ await scenario('county path: an estimated value carries only "≈"; typing over 
 
 await scenario('county path: with no street-side reference the yard lines are simply empty to fill in; total open ground is still estimated', withCounty({ cams: (b) => { b.candidates[0].location = { x: -118.29992, y: 34.00018 }; return b; } }, async (page) => {
   await countyPage(page);
-  for (const k of ['front_yard_sqft', 'back_yard_sqft', 'side_yard_sqft']) {
+  for (const k of ['front_yard_sqft', 'back_yard_sqft']) {
     assert.equal(await page.inputValue(`#f-${k}`), '', k);
     assert.equal(await page.getAttribute(`#f-${k}`, 'placeholder'), 'Add');
   }
@@ -709,6 +779,7 @@ await scenario('county path: a missing building outline leaves roof and footprin
   assert.equal(await page.inputValue('#f-building_footprint_sqft'), '');
   assert.equal(await page.inputValue('#f-roof_area_sqft'), '');
   assert.doesNotMatch(await ownerText(page), FORBIDDEN);
+  await toEarn(page);
   assert.ok(await page.locator('[data-opp-card]').count() >= 1);
 }));
 
@@ -733,6 +804,7 @@ for (const [name, over, addr, expectList] of FALLBACKS) {
     if (expectList) {
       await settled(page);
       assert.equal(await page.inputValue('#f-floors'), '', 'the older path has no floors');
+      await toEarn(page);
       assert.ok(await page.locator('[data-opp-card]').count() >= 1, 'earnings sections still work');
     }
   }), { width: 1280, height: 900 }, 1, /^Failed to load resource: the server responded with a status of 5\d\d/);
@@ -776,7 +848,7 @@ await scenario('non-LA address: county lookup + Overture fill footprint, roof an
   assert.match(await page.inputValue('#f-roof_area_sqft'), /^[\d,]+$/); assert.match(await page.inputValue('#f-floors'), /^\d+$/);
   assert.equal(await page.inputValue('#f-lot_area_sqft'), '', 'lot size: simply an empty input');
   assert.equal(await page.locator(row('lot_area_sqft')).getAttribute('data-state'), 'empty');
-  for (const k of ['front_yard_sqft', 'back_yard_sqft', 'side_yard_sqft']) assert.equal(await page.inputValue(`#f-${k}`), '', `${k}: no street reference, so no front is guessed`);
+  for (const k of ['front_yard_sqft', 'back_yard_sqft']) assert.equal(await page.inputValue(`#f-${k}`), '', `${k}: no street reference, so no front is guessed`);
   assert.doesNotMatch(await text(page, 'main'), FAILURE_WORDS);
   assert.doesNotMatch(await ownerText(page), FORBIDDEN);
   assert.equal(await page.getAttribute('#f-lot_area_sqft', 'placeholder'), 'Add', 'the owner can type the lot size');
@@ -849,6 +921,307 @@ await scenario('Photon: an LA-looking address with no state still gets the count
   await page.waitForTimeout(700);
   assert.equal(rec.mocked.filter((u) => u.includes('CAMS_Locator')).length, 0);
   assert.ok(rec.mocked.some((u) => u.startsWith('https://photon.komoot.io/api/?')));
+});
+
+// ---- two pages: the property list, then what it could earn ------------------------------------------------------------------
+/** Serve county-path.js with extra looked-up attributes taken from window.__testAttrs (a stand-in for a lookup that supplies them). */
+async function supplyAttrs(page, attrs) {
+  await page.addInitScript((a) => { window.__testAttrs = a; }, attrs);
+  await page.route('**/estimate/county-path.js', async (route) => {
+    const res = await route.fetch();
+    const body = (await res.text()).replace('let p = base ?? createProfile();', `let p = base ?? createProfile();
+  for (const [k, v] of Object.entries(globalThis.__testAttrs ?? {})) p = setAttribute(p, k, Object.assign(sourced(v.value, { tag: v.tag, source: 'test fixture', confidence: v.tag === 'estimated' ? 0.2 : 0.9, retrievedAt: null }), v.hidden ? { hidden: true } : {}));`);
+    await route.fulfill({ response: res, body });
+  });
+}
+const headlineCents = async (page) => [Number(await page.getAttribute('#earn-headline', 'data-low-cents')), Number(await page.getAttribute('#earn-headline', 'data-high-cents'))];
+
+await scenario('two pages: Next is disabled before a property, page 1 has no money, page 2 headline is core\'s range, Back keeps the owner\'s edit', async (page, rec) => {
+  await page.goto(URL_PAGE);
+  assert.equal(await page.locator('#next-earn').isDisabled(), true, 'disabled before any property');
+  assert.equal(await page.locator('#view-earn').isVisible(), false);
+  await search(page, VENICE);
+  await page.waitForSelector('#facts');
+  await settled(page);
+  assert.equal(await page.locator('#next-earn').isEnabled(), true, 'enabled once the list is on screen');
+  assert.equal(await text(page, '#next-earn'), 'Next: see what it could earn');
+  const p1 = await page.locator('main').innerText();
+  assert.equal(p1.includes('$'), false, 'no dollar figure anywhere on page 1');
+  assert.doesNotMatch(p1, /planning estimates|best combination|conservative|baseline|optimistic|ways your property could earn/i);
+  assert.equal(await page.locator('main h1').count(), 1);
+  const r = await coreProfile(VENICE);
+  // an owner edit on page 1 ...
+  await typeFact(page, 'bedrooms', 5);
+  await edited(page, 'bedrooms');
+  let p = owner(r.profile, [['bedrooms', 5]]);
+  // ... Next: the headline is core's conservative to optimistic yearly net of the best combination
+  const ms = await page.evaluate(() => { const t0 = performance.now(); document.getElementById('next-earn').click(); const t1 = performance.now(); return { sync: t1 - t0, ready: Boolean(document.getElementById('earn-headline')) }; });
+  assert.equal(ms.ready, true); assert.ok(ms.sync < 300, `page 2 renders in ${Math.round(ms.sync)} ms`);
+  await toEarn(page);
+  assert.equal(await page.evaluate(() => location.hash), '#earn');
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'h-earn', 'focus moves to the page heading');
+  assert.equal(await page.evaluate(() => window.scrollY), 0);
+  assert.match(await text(page, '#status'), /Showing what your property could earn/);
+  assert.equal(await page.locator('#view-property').isVisible(), false);
+  let core = corePipeline(p);
+  await assertHeadline(page, core, 'page 2');
+  const [lo0, hi0] = await headlineCents(page);
+  assert.ok(lo0 <= hi0);
+  assert.match(await text(page, '#earn-headline'), /^Your property could earn about \$[\d,]+ to \$[\d,]+ a year$/);
+  assert.equal(await page.locator('#plan-note').count(), 1, 'the planning-estimates line is kept');
+  assert.equal(await page.locator('#rules-caution').count(), 1, 'the local-rules caution is kept');
+  assert.ok(await page.locator('#combo-selected [data-opp-card]').count() >= 1, 'the included ways are cards');
+  assert.equal(await page.locator('#combo-selected details.opp-details').count(), await page.locator('#combo-selected [data-opp-card]').count(), 'each card has Details');
+  // Back: page 1 again, the edit is still there, focus on the heading
+  await page.click('#back-property');
+  await page.waitForSelector('#facts');
+  assert.equal(await page.inputValue('#f-bedrooms'), '5');
+  assert.equal(await page.locator(`${row('bedrooms')}[data-state="edited"]`).count(), 1);
+  assert.equal(await page.evaluate(() => location.hash), '');
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'h-address');
+  // another edit, Next again: page 2 reflects it
+  await page.click('#f-pool_present-no');
+  await edited(page, 'pool_present');
+  p = owner(p, [['pool_present', false]]);
+  await page.click('#next-earn');
+  await page.waitForSelector('#earn-headline');
+  await assertMatchesCore(page, corePipeline(p), 'after Back and Next again');
+  assert.equal(await page.locator('[data-opp-card="pool"]').count(), 0);
+  // goal change changes the headline to core's range for that goal
+  await page.selectOption('#goal', 'min_upfront');
+  await page.waitForFunction(() => document.querySelector('#goal').value === 'min_upfront');
+  await assertHeadline(page, corePipeline(p, { goal: 'min_upfront' }), 'goal min_upfront');
+  // nothing stored
+  assert.equal(await page.evaluate(() => localStorage.length + sessionStorage.length + document.cookie.length), 0);
+});
+
+await scenario('two pages: the browser Back and Forward buttons move between the pages; direct #earn and a reload show page 1 without an error', async (page, rec, ctx) => {
+  await happy(page, rec);
+  await typeFact(page, 'bedrooms', 4);
+  await edited(page, 'bedrooms');
+  await page.click('#next-earn');
+  await page.waitForSelector('#earn-headline');
+  await page.goBack();
+  await page.waitForSelector('#facts');
+  assert.equal(await page.locator('#view-earn').isVisible(), false);
+  assert.equal(await page.inputValue('#f-bedrooms'), '4', 'values intact after browser Back');
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'h-address');
+  await page.goForward();
+  await page.waitForSelector('#earn-headline');
+  assert.equal(await page.evaluate(() => location.hash), '#earn');
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'h-earn');
+  await assertHeadline(page, corePipeline(owner((await coreProfile(VENICE)).profile, [['bedrooms', 4]])), 'after Forward');
+  // the Back link on page 2 is the same as the browser Back
+  await page.click('#back-property');
+  await page.waitForSelector('#facts');
+  assert.equal(await page.inputValue('#f-bedrooms'), '4');
+  // a reload on page 2: nothing is saved, so page 1 with the address box and no error
+  await page.click('#next-earn');
+  await page.waitForSelector('#earn-headline');
+  await page.reload();
+  await page.waitForSelector('#address');
+  assert.equal(await page.locator('#view-earn').isVisible(), false);
+  assert.equal(await page.locator('#facts').count(), 0);
+  assert.equal(await page.locator('[role="alert"]').count(), 0, 'no error');
+  assert.equal(await page.evaluate(() => location.hash), '', 'the #earn is dropped');
+  assert.equal(await page.locator('#next-earn').isDisabled(), true);
+  assert.match(await text(page, '#h-address'), /^Your property$/);
+  // a link straight to #earn
+  const fresh = await ctx.newPage();
+  fresh.on('console', (m) => { if (m.type() === 'error' && !/status of 404/.test(m.text())) rec.consoleErrors.push(m.text()); });
+  fresh.on('pageerror', (e) => rec.pageErrors.push(String(e)));
+  await fresh.goto(`${URL_PAGE}#earn`);
+  await fresh.waitForSelector('#address');
+  assert.equal(await fresh.locator('#view-earn').isVisible(), false);
+  assert.equal(await fresh.locator('#view-property').isVisible(), true);
+  assert.equal(await fresh.locator('[role="alert"]').count(), 0);
+  assert.match(await fresh.locator('main').innerText(), /Type your address/);
+  assert.equal(await fresh.locator('#next-earn').isDisabled(), true);
+  await fresh.close();
+});
+
+await scenario('two pages: keyboard only, Next by Enter, focus on the page heading, Back link by Enter', async (page, rec) => {
+  await happy(page, rec);
+  await page.focus('#next-earn');
+  await page.keyboard.press('Enter');
+  await page.waitForSelector('#earn-headline');
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'h-earn');
+  await page.keyboard.press('Shift+Tab');
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'back-property', 'the Back link is just before the heading');
+  await page.keyboard.press('Enter');
+  await page.waitForSelector('#facts');
+  assert.equal(await page.locator('#view-earn').isVisible(), false);
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'h-address');
+}, { width: 1280, height: 900 });
+
+await scenario('remodeled year: empty by default under Year built, takes a valid year, refuses 12, 3000 and a year before Year built, changes no earnings', async (page, rec) => {
+  await happy(page, rec);
+  const keys = await page.locator('#facts .fact').evaluateAll((els) => els.map((e) => e.dataset.key));
+  assert.equal(keys[keys.indexOf('year_built') + 1], 'remodeled_year', 'directly under Year built');
+  assert.equal(await text(page, `${row('remodeled_year')} .flabel`), 'Remodeled (year)');
+  assert.equal(await page.inputValue('#f-remodeled_year'), '');
+  assert.equal(await page.getAttribute('#f-remodeled_year', 'placeholder'), 'Add');
+  assert.equal(await page.locator(`${row('remodeled_year')}`).getAttribute('data-state'), 'empty');
+  await toEarn(page);
+  const before = await headlineCents(page);
+  await toProperty(page);
+  const thisYear = new Date().getUTCFullYear();
+  for (const bad of ['12', '3000', String(thisYear + 1), 'abc']) {
+    await typeFact(page, 'remodeled_year', bad);
+    assert.match(await text(page, `${row('remodeled_year')} .fact-hint`), /year/i, `hint for ${bad}`);
+    assert.equal(await page.inputValue('#f-remodeled_year'), '', `previous value stays after ${bad}`);
+    assert.equal(await page.locator(`${row('remodeled_year')}[data-state="edited"]`).count(), 0);
+  }
+  // before the year built
+  await typeFact(page, 'year_built', 1990);
+  await edited(page, 'year_built');
+  await typeFact(page, 'remodeled_year', 1985);
+  assert.match(await text(page, `${row('remodeled_year')} .fact-hint`), /before the year built \(1990\)/);
+  assert.equal(await page.inputValue('#f-remodeled_year'), '');
+  await typeFact(page, 'remodeled_year', 2015);
+  await edited(page, 'remodeled_year');
+  assert.equal(await page.inputValue('#f-remodeled_year'), '2015', 'a year has no thousands comma');
+  await typeFact(page, 'remodeled_year', 2020);
+  assert.equal(await page.inputValue('#f-remodeled_year'), '2020');
+  // stored as an owner correction, listed in the sources
+  await page.click('details.sources > summary');
+  assert.match(await text(page, '#sources-table tr[data-src="remodeled_year"]'), /Remodeled \(year\) You/);
+  // a year built after the remodel is refused too? the earlier value stays untouched
+  await typeFact(page, 'remodeled_year', 1990);
+  assert.equal(await page.inputValue('#f-remodeled_year'), '1990', 'the same year as built is fine');
+  // no effect on earnings today
+  const r = await coreProfile(VENICE);
+  await toEarn(page);
+  const core = corePipeline(owner(r.profile, [['year_built', 1990]]));
+  await assertHeadline(page, core, 'with a remodeled year');
+  assert.deepEqual(await headlineCents(page), before, 'a remodeled year changes no earnings figure');
+  await toProperty(page);
+  await page.click('#undo-remodeled_year');
+  assert.equal(await page.inputValue('#f-remodeled_year'), '');
+});
+
+await scenario('remodeled year and the optional lines: prefilled when the lookup supplies them, "≈" only when estimated; labels only when present', async (page, rec) => {
+  await supplyAttrs(page, {
+    remodeled_year: { value: 2012, tag: 'estimated' },
+    green_area_sqft: { value: 1800, tag: 'estimated' }, paved_area_sqft: { value: 950, tag: 'measured' },
+    pool_area_sqft: { value: 320, tag: 'measured' }, tree_cover_sqft: { value: 600, tag: 'estimated' },
+  });
+  await happy(page, rec);
+  assert.equal(await page.inputValue('#f-remodeled_year'), '2012');
+  assert.equal(await page.locator(`${row('remodeled_year')}`).getAttribute('data-state'), 'estimated');
+  assert.equal(await page.getAttribute(`${row('remodeled_year')} .approx`, 'title'), 'Estimated — change it if you know the exact figure');
+  assert.match(await text(page, `${row('remodeled_year')} .approx`), /≈/);
+  const labels = { green_area_sqft: 'Lawn and planting', paved_area_sqft: 'Paved area (driveway, patio)', pool_area_sqft: 'Pool size', tree_cover_sqft: 'Tree cover' };
+  const keys = await page.locator('#facts .fact').evaluateAll((els) => els.map((e) => e.dataset.key));
+  for (const [k, l] of Object.entries(labels)) {
+    assert.equal(await text(page, `${row(k)} .flabel`), l);
+    assert.equal(await page.locator(`#f-${k}`).count(), 1, `${k} is an editable input`);
+    assert.ok(keys.indexOf(k) > keys.indexOf('yard_area_sqft') && keys.indexOf(k) < keys.indexOf('building_footprint_sqft'), `${k} sits after the yard lines`);
+  }
+  assert.equal(await page.inputValue('#f-green_area_sqft'), '1,800');
+  assert.match(await text(page, `${row('green_area_sqft')} .approx`), /≈/);
+  assert.equal((await text(page, `${row('paved_area_sqft')} .approx`)).includes('≈'), false, 'a measured value has no ≈');
+  assert.equal(await page.inputValue('#f-paved_area_sqft'), '950');
+  await typeFact(page, 'green_area_sqft', 2000);
+  await edited(page, 'green_area_sqft');
+  assert.equal(await page.inputValue('#f-green_area_sqft'), '2,000');
+  assert.doesNotMatch(await ownerText(page), FORBIDDEN);
+  // typing over the estimated remodeled year makes it the owner's
+  await typeFact(page, 'remodeled_year', 2018);
+  await edited(page, 'remodeled_year');
+  assert.equal(await page.locator(`${row('remodeled_year')} .approx[title]`).count(), 0);
+});
+
+await scenario('the optional lines are absent when the lookup supplies nothing for them', async (page, rec) => {
+  await happy(page, rec);
+  for (const k of ['green_area_sqft', 'paved_area_sqft', 'pool_area_sqft', 'tree_cover_sqft']) assert.equal(await page.locator(row(k)).count(), 0, k);
+  assert.equal(await page.locator(row('remodeled_year')).count(), 1);
+});
+
+await scenario('two pages on a phone (390 px) and desktop, light and dark: no horizontal scroll, screenshots', async (page, rec, ctx) => {
+  const fits = async (label) => {
+    const m = await page.evaluate(() => ({ sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth }));
+    assert.ok(m.sw <= m.cw, `${label}: scrollWidth ${m.sw} > ${m.cw}`);
+  };
+  fs.mkdirSync(`${SHOTS.replace(/ux$/, 'flow')}`, { recursive: true });
+  const out = SHOTS.replace(/ux$/, 'flow');
+  for (const scheme of ['light', 'dark']) {
+    await page.emulateMedia({ colorScheme: scheme });
+    for (const [w, h, tag] of [[390, 844, 'phone'], [1280, 900, 'desktop']]) {
+      await page.setViewportSize({ width: w, height: h });
+      await page.goto('about:blank');
+      await happy(page, rec);
+      await fits(`${tag} ${scheme} page 1`);
+      await page.screenshot({ path: `${out}/${tag}-${scheme}-page1.png`, fullPage: true });
+      await page.click('#next-earn');
+      await page.waitForSelector('#earn-headline');
+      await fits(`${tag} ${scheme} page 2`);
+      await page.screenshot({ path: `${out}/${tag}-${scheme}-page2.png`, fullPage: true });
+      await openAll(page);
+      await fits(`${tag} ${scheme} page 2 open`);
+      await page.screenshot({ path: `${out}/${tag}-${scheme}-page2-open.png`, fullPage: true });
+    }
+  }
+});
+
+await scenario('yard lines: no Side yard even when supplied; usable lines only when supplied, after Front/Back yard, with one helper line; "hidden" attributes skipped', async (page, rec) => {
+  await supplyAttrs(page, {
+    side_yard_sqft: { value: 700, tag: 'estimated' },
+    front_yard_sqft: { value: 900, tag: 'estimated' }, back_yard_sqft: { value: 2400, tag: 'estimated' }, yard_area_sqft: { value: 4000, tag: 'estimated' },
+    usable_front_yard_sqft: { value: 800, tag: 'estimated' }, usable_back_yard_sqft: { value: 2100, tag: 'measured' }, usable_yard_sqft: { value: 3200, tag: 'estimated' },
+    tree_cover_sqft: { value: 500, tag: 'estimated', hidden: true },
+  });
+  await happy(page, rec);
+  const keys = await page.locator('#facts .fact').evaluateAll((els) => els.map((e) => e.dataset.key));
+  assert.equal(keys.includes('side_yard_sqft'), false, 'no Side yard line');
+  assert.equal(keys.includes('tree_cover_sqft'), false, 'a hidden attribute is skipped');
+  assert.doesNotMatch(await text(page, '#facts'), /Side yard/);
+  const at = (k) => keys.indexOf(k);
+  assert.equal(at('usable_front_yard_sqft'), at('front_yard_sqft') + 1);
+  assert.equal(at('usable_back_yard_sqft'), at('back_yard_sqft') + 1);
+  assert.equal(at('usable_yard_sqft'), at('yard_area_sqft') + 1);
+  const labels = { usable_yard_sqft: 'Usable yard', usable_front_yard_sqft: 'Usable front yard', usable_back_yard_sqft: 'Usable back yard' };
+  for (const [k, l] of Object.entries(labels)) { assert.equal(await text(page, `${row(k)} .flabel`), l); assert.equal(await page.locator(`#f-${k}`).count(), 1); }
+  assert.match(await text(page, `${row('usable_front_yard_sqft')} .approx`), /≈/);
+  assert.equal((await text(page, `${row('usable_back_yard_sqft')} .approx`)).includes('≈'), false);
+  assert.equal(await page.locator('#yard-note').count(), 1, 'one helper line');
+  assert.equal(await text(page, '#yard-note'), 'Usable yard leaves out strips too narrow to use.');
+  assert.equal(keys.indexOf('usable_yard_sqft') < keys.length && await page.locator('#facts .fact + #yard-note, #facts #yard-note').count(), 1);
+  await typeFact(page, 'usable_yard_sqft', 3000);
+  await edited(page, 'usable_yard_sqft');
+  assert.equal(await page.inputValue('#f-usable_yard_sqft'), '3,000');
+  assert.doesNotMatch(await ownerText(page), FORBIDDEN);
+});
+
+await scenario('yard lines without usable attributes: no usable lines, no helper line, no Side yard', async (page, rec) => {
+  await happy(page, rec);
+  const keys = await page.locator('#facts .fact').evaluateAll((els) => els.map((e) => e.dataset.key));
+  assert.equal(keys.some((k) => k.startsWith('usable_') || k === 'side_yard_sqft'), false);
+  assert.equal(await page.locator('#yard-note').count(), 0);
+});
+
+await scenario('map mount point and exports: #lot-map sits between the heading and the list; getProfile and applyOwnerCorrections update the list and page 2', async (page, rec) => {
+  await happy(page, rec);
+  assert.equal(await page.locator('#lot-map').count(), 1);
+  assert.equal(await page.locator('#lot-map').count(), 1, 'the lot map mounts here (it shows itself once there is an outline)');
+  const order = await page.evaluate(() => {
+    const m = document.getElementById('lot-map'), h = document.getElementById('h-profile'), f = document.getElementById('facts');
+    return { afterHeading: Boolean(h.compareDocumentPosition(m) & Node.DOCUMENT_POSITION_FOLLOWING), beforeFacts: Boolean(m.compareDocumentPosition(f) & Node.DOCUMENT_POSITION_FOLLOWING) };
+  });
+  assert.deepEqual(order, { afterHeading: true, beforeFacts: true });
+  const r = await coreProfile(VENICE);
+  const api = await page.evaluate(async () => {
+    const m = await import('/estimate/app.js');
+    const before = m.getProfile();
+    m.applyOwnerCorrections({ bedrooms: 6, parking_spaces: 3 });
+    return { names: Object.keys(m).sort(), hadProfile: Boolean(before && before.attributes), bedrooms: m.getProfile().attributes.bedrooms.value };
+  });
+  assert.deepEqual(api.names, ['applyOwnerCorrections', 'clearOwnerCorrections', 'getProfile']);
+  assert.equal(api.hadProfile, true); assert.equal(api.bedrooms, 6);
+  assert.equal(await page.inputValue('#f-bedrooms'), '6');
+  assert.equal(await page.locator(`${row('bedrooms')}[data-state="edited"]`).count(), 1);
+  assert.equal(await page.locator('#lot-map').count(), 1, 'the mount point survives the re-render');
+  await assertMatchesCore(page, corePipeline(owner(r.profile, [['bedrooms', 6], ['parking_spaces', 3]])), 'after a batch of corrections');
 });
 
 // no lookup request may ever carry a broken number (regression: an outline of type Polygon produced "around:NaN")

@@ -117,7 +117,7 @@ test('registry: swapping in another vendor (ATTOM/Regrid-like) is one file + one
 
 test('default registry: ids, kinds, honesty flags and licence notes', async () => {
   const r = await createDefaultRegistry();
-  assert.deepEqual(r.list().map((p) => p.id).sort(), ['census-address', 'google-solar', 'la-assessor', 'la-cams-address', 'lariac-buildings', 'overture-buildings', 'parcel-registry', 'rentcast']);
+  assert.deepEqual(r.list().map((p) => p.id).sort(), ['census-address', 'google-solar', 'la-assessor', 'la-cams-address', 'lariac-buildings', 'naip-aerial', 'overture-buildings', 'overture-roads', 'parcel-registry', 'rentcast']); // AERIAL: + road lines and the aerial photo
   for (const p of r.list()) { assert.equal(typeof p.needsKey, 'boolean'); assert.ok(p.licenseNote.length > 10); assert.ok('retentionDays' in p); assert.ok(p.coverage); }
   assert.equal(rentcast.verified, false); assert.equal(googleSolar.verified, false); assert.equal(googleSolar.retentionDays, 30);
   assert.match(googleSolar.licenseNote, /caching/); assert.equal(rentcast.needsKey, true); assert.equal(googleSolar.needsKey, true);
@@ -455,7 +455,7 @@ test('polygon helpers agree: the synthetic parcel is 6,500 sq ft', () => {
 test('browser registry: only keyless providers that answer cross-origin, in order locator, assessor, footprints', async () => {
   const { createBrowserRegistry, countyLocator } = await import('../providers/browser.js');
   const reg = createBrowserRegistry();
-  assert.deepEqual(reg.list().map((p) => p.id), ['la-cams-address', 'la-assessor', 'parcel-registry', 'lariac-buildings', 'overture-buildings']);
+  assert.deepEqual(reg.list().map((p) => p.id), ['la-cams-address', 'la-assessor', 'parcel-registry', 'lariac-buildings', 'overture-buildings', 'overture-roads', 'naip-aerial']); // AERIAL: both CORS-verified, keyless
   assert.ok(reg.list().every((p) => p.needsKey === false));
   for (const id of ['census-address', 'rentcast', 'google-solar', 'google-places']) assert.equal(reg.get(id), null, `${id} must not be in the browser registry`);
   const j = { state: 'CA', countyFips: '06037' };

@@ -3,8 +3,8 @@
 // providers that cover the jurisdiction, primaries before fallbacks, then by priority, then registration order. A
 // provider that needs a key and has none is not an error: it is reported in `skipped` as 'no API key'.
 
-const KINDS = ['records', 'footprint', 'address', 'street'];
-const ENTRY = { records: 'lookup', footprint: 'lookup', street: 'lookup', address: 'resolve' };
+const KINDS = ['records', 'footprint', 'address', 'street', 'aerial'];
+const ENTRY = { records: 'lookup', footprint: 'lookup', street: 'lookup', aerial: 'lookup', address: 'resolve' };
 
 /** @param {any} p */
 function validate(p) {
@@ -72,11 +72,11 @@ export const providersFor = (/** @type {string} */ kind, /** @type {any} */ opts
  * assessor (LA County only), then the nationwide parcel registry (national except LA County). The assembler needs no change to get this.
  */
 export async function createDefaultRegistry() {
-  const [{ laAssessor }, { lariacBuildings }, { laCamsAddress }, { censusAddress }, { rentcast }, { googleSolar }, { overtureBuildings, withOvertureFallback }, { parcelRegistry }] = await Promise.all([
+  const [{ laAssessor }, { lariacBuildings }, { laCamsAddress }, { censusAddress }, { rentcast }, { googleSolar }, { overtureBuildings, withOvertureFallback }, { parcelRegistry }, { overtureRoads }, { naipAerial }] = await Promise.all([
     import('./la-assessor.js'), import('./lariac-buildings.js'), import('./la-cams-address.js'), import('./census-address.js'),
-    import('./rentcast.js'), import('./google-solar.js'), import('./overture-buildings.js'), import('./parcel-registry.js'),
+    import('./rentcast.js'), import('./google-solar.js'), import('./overture-buildings.js'), import('./parcel-registry.js'), import('./overture-roads.js'), import('./naip-aerial.js'),
   ]);
   const r = createRegistry();
-  for (const p of [laCamsAddress, censusAddress, rentcast, laAssessor, { ...parcelRegistry, needsPointInParcel: true }, googleSolar, { ...withOvertureFallback(lariacBuildings), needsParcel: true }, overtureBuildings]) r.register(p);
+  for (const p of [laCamsAddress, censusAddress, rentcast, laAssessor, { ...parcelRegistry, needsPointInParcel: true }, googleSolar, { ...withOvertureFallback(lariacBuildings), needsParcel: true }, overtureBuildings, overtureRoads, naipAerial]) r.register(p);
   return r;
 }

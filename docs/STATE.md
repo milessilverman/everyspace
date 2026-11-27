@@ -11,6 +11,7 @@ Updated 2026-11-27. Read this first. Detail lives in the files named here.
 | Property-data providers, yard split, profile storage, accuracy run | done on branch (keyless path) | `claude/trusting-cannon-yynabw`; `docs/property-data.md`, `docs/phase1-accuracy.md` |
 | Property-data wired into the homepage flow | done on branch (keyless path) | same branch; LA County addresses use the county locator, assessor and building outlines first, earlier lookup as fallback; address suggestions from the county service |
 | Owner-first property screen, fast lookups, progress bar, nationwide autofill; City Pretty and StreetForge methods reused | done on branch | `estimate/`, `core/{roof,transit,building-size}.js`, `core/providers/{overture-buildings,parcel-registry,county-lookup,photon-address}.js`; `docs/audit/reuse-*.md`, `docs/zillow.md` |
+| Two-page flow (property, then Next to earnings), remodeled year, usable yard, satellite view with adjustable outlines, yards from street lines | done on branch | `estimate/{app,lot-map,county-path}.js`, `core/{measure,usable-yard,street-ref,aerial,lot-estimate}.js`, `core/providers/{overture-roads,naip-aerial}.js`; measurements in `docs/yard-accuracy.md` |
 | Rename to "Spacavia" ("Your space, your way") and repository rename | on hold | waiting for the owner's go-ahead |
 | Backend from run 1 (orgs, conflict engine, adapters) | staging only | not applied to the live database |
 
@@ -27,8 +28,8 @@ Live backend functions (checked read-only 2026-11-27): `calendar-feed`, `calenda
 ## Test commands and last results
 | command | result |
 |---|---|
-| `npm test` (core unit tests) | 464 pass |
-| `npm run e2e` (every `tests/*.e2e.mjs`) | 9 files pass (home, address entry, address suggestions, property confirm, navigation, speed, sign-in, console navigation, console) |
+| `npm test` (core unit tests) | 484 pass |
+| `npm run e2e` (every `tests/*.e2e.mjs`) | 10 files pass (adds the satellite view) |
 | `cd platform && npm test` | 264 pass |
 | `cd platform && npm run test:staging` | 16 pass |
 | demo repo: `node --test tests/*.test.mjs` | 15 pass |
@@ -99,6 +100,9 @@ All three need an account with the provider (and a billing account for Google), 
 | A8 | Go-ahead for the Spacavia rename and the repository rename | brand change; the public address changes and Supabase's allowed redirect addresses must be updated |
 
 ## Known limits
+- Side yard is computed but not shown (owner's call). Usable yard = open ground at least 10 ft wide (a stated assumption, adjustable); slope is not known.
+- From the aerial photo: lawn vs paving is on but not validated; pool detection and tree cover are off (one false pool and one miss in ten lots); the estimated lot is off (median error 14% but one lot off by 274%). Where no parcel record answers, the owner draws the lot on the satellite view.
+- The satellite backdrop is the free government photo (about 60 cm per pixel, soft). Mapbox was rejected: its terms require a paid commercial licence for production use in a real-estate-related application. LA County's public aerial tiles are sharp but dated 2008.
 - Outside LA County an owner gets footprint, roof and floors, and lot size only when their county's service answers; home size, beds, baths, year and front/back yards stay empty boxes to fill in.
 - The property screen deliberately shows no failure or source text; sources are in one collapsed section.
 - Every earnings estimate is low confidence until the owner enters their own price and bookings.

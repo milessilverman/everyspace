@@ -1,0 +1,961 @@
+// Everyspace "Your lot from above": the aerial photo of the lot with the outlines that were measured on top of it, which the owner can adjust.
+// Dependency-free ES module (no map library). It draws into #lot-map and talks to the estimator page only through the two functions app.js hands
+// it (getProfile, applyOwnerCorrections) plus clearOwnerCorrections, so it never reaches into app.js state and app.js never waits for it.
+//
+// THE FRAME. The picture is a "frame" whose logical size is Wd x Hd CSS pixels (re-measured on resize). The frame shows the box
+// [west, south, east, north] in WGS84 degrees, which is the lot's box plus 15 m on every side. Mapping used everywhere (outlines, handles,
+// tints, the canvas, the photo):
+//     x = (lng - west)  / (east - west)  * Wd        y = (north - lat) / (north - south) * Hd
+// Wd / Hd is the TRUE ground aspect, ((east - west) * cos(lat)) / (north - south), so one pixel is the same length east-west and north-south.
+// THE PHOTO. One request to the USGS NAIP image service (core/providers/naip-aerial.js USGS_EXPORT) for exactly that box, in WGS84 (bboxSR and
+// imageSR 4326), with the pixel grid in DEGREES square (Wr / Hr = (east - west) / (north - south)). Asking for square degree pixels means the
+// service has nothing to adjust, so the image is the box stretched edge to edge. The <img> is then displayed in the true-aspect frame, which
+// squeezes it east-west by cos(lat): that is the "pixel aspect corrected for latitude" and it is what makes outlines and photo line up.
+// The photo is NAIP at about 60 cm per pixel, so it is soft when enlarged; the caption says so. If it does not load, nothing is said and the
+// outlines sit on a plain background.
+//
+// NUMBERS. Every figure comes from core/measure.js measureFromGeometry, the same function the lookup's numbers can be reproduced with, so a dragged
+// outline and the list cannot disagree. While dragging it runs once per animation frame (and backs off when a frame is slow); on release the
+// figures that changed are pushed into the list through applyOwnerCorrections ("Edited by you" + Undo, as if typed).
+// Core modules are imported lazily inside the page (dynamic import) so that a problem there can never stop the estimator itself from loading.
+
+const R_EARTH = 6371008.8, RAD = Math.PI / 180, FT = 0.3048;
+const MARGIN_M = 15;
+const FRONT_OFFSET_M = 3; // the street line handed to the yard split runs this far outside the chosen lot edge
+const SIDE_PX = { min: 480, max: 900 };
+const USGS_EXPORT_FALLBACK = 'https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPPlus/ImageServer/exportImage';
+const CREDIT_FALLBACK = 'Aerial photo: USDA NAIP (US Government imagery)';
+const SVGNS = 'http://www.w3.org/2000/svg';
+const COMMIT_IDLE_MS = 350;
+const DOUBLE_TAP_MS = 420;
+
+// keys the map can change, and which ones each kind of change may touch (a number the owner typed is only overwritten when an outline it depends on moved)
+const YARD_KEYS = ['front_yard_sqft', 'back_yard_sqft', 'yard_area_sqft', 'usable_yard_sqft', 'usable_front_yard_sqft', 'usable_back_yard_sqft'];
+const AFFECTS = {
+  lot: ['lot_area_sqft', ...YARD_KEYS],
+  bld: ['building_footprint_sqft', 'roof_area_sqft', ...YARD_KEYS],
+  front: YARD_KEYS,
+};
+const ALL_KEYS = ['lot_area_sqft', 'building_footprint_sqft', 'roof_area_sqft', ...YARD_KEYS];
+
+// ---------------------------------------------------------------------------------------------------------------
+// pure helpers (exported for tests)
+// ---------------------------------------------------------------------------------------------------------------
+let VID = 0;
+const num = (v) => typeof v === 'number' && Number.isFinite(v);
+const fmt = (n) => Math.round(n).toLocaleString('en-US');
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+/** Equirectangular scale at a latitude: metres per degree of longitude and latitude (the same constants as core/geometry.js localProjection). */
+export const metresPerDegree = (lat) => ({ kx: R_EARTH * Math.cos(lat * RAD) * RAD, ky: R_EARTH * RAD });
+
+/** Do two segments cross or touch? (a1-a2 against b1-b2, points are [x, y]) */
+function segHit(a1, a2, b1, b2) {
+  const o = (p, q, r) => (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]);
+  const on = (p, q, r) => Math.min(p[0], q[0]) <= r[0] && r[0] <= Math.max(p[0], q[0]) && Math.min(p[1], q[1]) <= r[1] && r[1] <= Math.max(p[1], q[1]);
+  const d1 = o(a1, a2, b1), d2 = o(a1, a2, b2), d3 = o(b1, b2, a1), d4 = o(b1, b2, a2);
+  if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) return true;
+  return (d1 === 0 && on(a1, a2, b1)) || (d2 === 0 && on(a1, a2, b2)) || (d3 === 0 && on(b1, b2, a1)) || (d4 === 0 && on(b1, b2, a2));
+}
+/** True when the ring (array of {lng, lat}) crosses itself, repeats a corner, or has no area. */
+export function ringCrosses(verts) {
+  const n = verts.length;
+  if (n < 3) return true;
+  const p = verts.map((v) => [v.lng, v.lat]);
+  let area = 0;
+  for (let i = 0; i < n; i++) area += p[i][0] * p[(i + 1) % n][1] - p[(i + 1) % n][0] * p[i][1];
+  if (Math.abs(area) < 1e-18) return true;
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      if (j === i + 1 || (i === 0 && j === n - 1)) continue; // neighbours share a corner
+      if (segHit(p[i], p[(i + 1) % n], p[j], p[(j + 1) % n])) return true;
+    }
+  }
+  return false;
+}
+
+const outerOf = (g) => (g?.type === 'Polygon' ? g.coordinates : g?.type === 'MultiPolygon' ? (g.coordinates.reduce((a, c) => (ringArea(c[0]) > ringArea(a[0]) ? c : a))) : null);
+function ringArea(r) { let a = 0; for (let i = 0; i < r.length; i++) { const p = r[i], q = r[(i + 1) % r.length]; a += p[0] * q[1] - q[0] * p[1]; } return Math.abs(a / 2); }
+const ptsOfRing = (r) => {
+  const out = [];
+  for (const p of r) { if (!Array.isArray(p) || !num(p[0]) || !num(p[1])) continue; const q = out[out.length - 1]; if (q && q[0] === p[0] && q[1] === p[1]) continue; out.push([p[0], p[1]]); }
+  if (out.length > 1 && out[0][0] === out[out.length - 1][0] && out[0][1] === out[out.length - 1][1]) out.pop();
+  return out;
+};
+
+/**
+ * What the map needs from a property profile: the builder's `profile.geometry` bundle when present, otherwise the same bundle built from
+ * the profile's attributes (parcel_boundary, buildings, location, roof inputs). Pure. Returns null when there is no outline to show.
+ * @param {any} profile
+ */
+export function sourceFromProfile(profile) {
+  if (!profile) return null;
+  const g = profile.geometry;
+  if (g && typeof g === 'object' && (g.parcel || (Array.isArray(g.buildings) && g.buildings.length))) {
+    const { parcel, parcelSource, buildings, image, zones: _z, ...rest } = g;
+    const list = (buildings ?? []).filter((b) => b && (b.polygon || b.type)).map((b) => ({ polygon: b.polygon ?? b, main: Boolean(b.main) }));
+    return { from: 'bundle', parcel: parcel ?? null, parcelSource: parcel ? (parcelSource ?? 'record') : null, buildings: list, rest, image: image ?? null };
+  }
+  const a = profile.attributes ?? {};
+  const val = (k) => (a[k] && a[k].tag !== 'unavailable' && a[k].value !== null && a[k].value !== undefined ? a[k].value : null);
+  const parcel = val('parcel_boundary');
+  const rows = val('buildings');
+  const list = Array.isArray(rows) ? rows.filter((r) => r && r.polygon).map((r) => ({ polygon: r.polygon, main: false, sq: Number(r.footprintSqft) || 0 })) : [];
+  if (!parcel && !list.length) return null;
+  let mi = -1;
+  list.forEach((b, i) => { if (mi < 0 || b.sq > list[mi].sq) mi = i; });
+  if (mi >= 0) list[mi].main = true;
+  const loc = val('location');
+  const jur = val('jurisdiction');
+  const rest = {
+    roof: { yearBuilt: num(val('year_built')) ? val('year_built') : null, propertyType: typeof val('property_type') === 'string' ? val('property_type') : null, stories: num(val('floors')) ? val('floors') : null, state: jur && typeof jur.state === 'string' ? jur.state : null },
+    ...(loc ? { frontPointHint: loc } : {}),
+  };
+  const ps = parcel ? (a.parcel_boundary?.tag === 'estimated' ? 'estimated' : 'record') : null;
+  return { from: 'attributes', parcel: parcel ?? null, parcelSource: ps, buildings: list.map(({ polygon, main }) => ({ polygon, main })), rest, image: null };
+}
+
+/** A simple starting lot around a building: its footprint plus 15 ft along its long axis and 5 ft across it. Returns a closed [lng, lat] ring or null. */
+export function starterRing(buildingGeom) {
+  const part = outerOf(buildingGeom);
+  const ring = part ? ptsOfRing(part[0]) : [];
+  if (ring.length < 3) return null;
+  const lat0 = ring.reduce((s, p) => s + p[1], 0) / ring.length, lng0 = ring.reduce((s, p) => s + p[0], 0) / ring.length;
+  const { kx, ky } = metresPerDegree(lat0);
+  const xy = ring.map((p) => [(p[0] - lng0) * kx, (p[1] - lat0) * ky]);
+  let best = null;
+  for (let i = 0; i < xy.length; i++) {
+    const a = xy[i], b = xy[(i + 1) % xy.length];
+    const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    if (len < 1e-6) continue;
+    const ux = (b[0] - a[0]) / len, uy = (b[1] - a[1]) / len;
+    let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity;
+    for (const p of xy) { const u = p[0] * ux + p[1] * uy, v = -p[0] * uy + p[1] * ux; u0 = Math.min(u0, u); u1 = Math.max(u1, u); v0 = Math.min(v0, v); v1 = Math.max(v1, v); }
+    const area = (u1 - u0) * (v1 - v0);
+    if (!best || area < best.area - 1e-9) best = { area, ux, uy, u0, u1, v0, v1 };
+  }
+  if (!best) return null;
+  // the long side of the building's tightest box is the "front/back" direction (15 ft each end); the short side gets 5 ft each
+  let { ux, uy, u0, u1, v0, v1 } = best;
+  if (u1 - u0 < v1 - v0) { const t = [ux, uy]; ux = -t[1]; uy = t[0]; [u0, u1, v0, v1] = [v0, v1, -u1, -u0]; }
+  u0 -= 15 * FT; u1 += 15 * FT; v0 -= 5 * FT; v1 += 5 * FT;
+  const at = (u, v) => [lng0 + (u * ux - v * uy) / kx, lat0 + (u * uy + v * ux) / ky];
+  const c = [at(u0, v0), at(u1, v0), at(u1, v1), at(u0, v1)];
+  c.push(c[0]);
+  return c;
+}
+
+/**
+ * Lng/lat <-> frame pixels for a backdrop whose picture covers [west, south, east, north]: 'wgs84' (linear in degrees, what NAIP is asked for) or
+ * 'webmercator' (latitude through the Mercator formula), so a backdrop in either frame can sit under the same overlay. Only 'wgs84' is used today.
+ */
+export function frameProject(frame, bbox, W, H) {
+  const [w, s, e, n] = bbox;
+  const my = (lat) => Math.log(Math.tan(Math.PI / 4 + (lat * RAD) / 2));
+  if (frame === 'webmercator') {
+    const y0 = my(n), y1 = my(s);
+    return {
+      toPx: (lng, lat) => [((lng - w) / (e - w)) * W, ((y0 - my(lat)) / (y0 - y1)) * H],
+      toLngLat: (x, y) => { const m = y0 - (y / H) * (y0 - y1); return [w + (x / W) * (e - w), (2 * Math.atan(Math.exp(m)) - Math.PI / 2) / RAD]; },
+    };
+  }
+  return { toPx: (lng, lat) => [((lng - w) / (e - w)) * W, ((n - lat) / (n - s)) * H], toLngLat: (x, y) => [w + (x / W) * (e - w), n - (y / H) * (n - s)] };
+}
+
+/** The photo behind the outlines. Swappable: any source that can draw a box in one of the two frames and says who to credit. Only NAIP is used. */
+export const NAIP_BACKDROP = {
+  id: 'naip', frame: 'wgs84', credit: CREDIT_FALLBACK,
+  /** @param {{bbox:number[], width:number, height:number}} q @param {string} [base] */
+  imageUrl(q, base = USGS_EXPORT_FALLBACK) {
+    const u = new URL(base);
+    for (const [k, v] of Object.entries({ bbox: q.bbox.map((x) => x.toFixed(7)).join(','), bboxSR: '4326', imageSR: '4326', size: `${q.width},${q.height}`, format: 'jpg', bandIds: '0,1,2', interpolation: 'RSP_BilinearInterpolation', f: 'image' })) u.searchParams.set(k, v);
+    return u.href;
+  },
+};
+
+/** Image request for a box: WGS84, square degree pixels, about `longSide` px on the long side. Returns the URL. */
+export function photoUrl(bbox, longSide, base = USGS_EXPORT_FALLBACK, backdrop = NAIP_BACKDROP) {
+  const [w, s, e, n] = bbox;
+  const ar = (e - w) / (n - s);
+  const width = ar >= 1 ? longSide : Math.max(8, Math.round(longSide * ar)), height = ar >= 1 ? Math.max(8, Math.round(longSide / ar)) : longSide;
+  return backdrop.imageUrl({ bbox, width, height }, base);
+}
+
+/** The frame box for a ring: its bounds plus the margin, and the true ground aspect. */
+export function frameFor(ring) {
+  let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
+  for (const p of ring) { w = Math.min(w, p[0]); e = Math.max(e, p[0]); s = Math.min(s, p[1]); n = Math.max(n, p[1]); }
+  const { kx, ky } = metresPerDegree((s + n) / 2);
+  const bbox = [w - MARGIN_M / kx, s - MARGIN_M / ky, e + MARGIN_M / kx, n + MARGIN_M / ky];
+  const aspect = ((bbox[2] - bbox[0]) * kx) / ((bbox[3] - bbox[1]) * ky);
+  return { bbox, aspect, kx, ky };
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// the view
+// ---------------------------------------------------------------------------------------------------------------
+/**
+ * @param {{getProfile:()=>any, applyOwnerCorrections:(b:Record<string,any>)=>any, clearOwnerCorrections:(keys:string[])=>any, mount:HTMLElement, now?:()=>string}} opts
+ * @returns {{update:()=>void}}
+ */
+export function initLotMap(opts) {
+  const { getProfile, applyOwnerCorrections, clearOwnerCorrections, mount } = opts;
+  const now = opts.now ?? (() => new Date().toISOString());
+  /** @type {any} */ let core = null;
+  let coreState = 'idle';
+  /** @type {any} */ let M = null; // the model for the property on screen
+  let pushing = false, setupTimer = 0, layoutObs = null;
+  const uid = 'lm';
+
+  const loadCore = () => {
+    if (coreState !== 'idle') return;
+    coreState = 'loading';
+    Promise.all([import('../core/measure.js'), import('../core/geometry.js'), import('../core/providers/naip-aerial.js').catch(() => ({}))])
+      .then(([me, ge, na]) => { core = { measure: me.measureFromGeometry, areaSqft: ge.polygonAreaSqft, usgs: na.USGS_EXPORT ?? USGS_EXPORT_FALLBACK, credit: na.ATTRIBUTION_TEXT ?? CREDIT_FALLBACK }; coreState = 'ready'; update(); })
+      .catch(() => { coreState = 'none'; mount.hidden = true; });
+  };
+
+  // ----- model --------------------------------------------------------------------------------------------------
+  const sigOf = (g) => {
+    const rings = [];
+    const walk = (c) => { if (typeof c[0] === 'number') { rings.push(c); } else for (const x of c) walk(x); };
+    try { walk(g?.coordinates ?? []); } catch { /* ignore */ }
+    let sx = 0, sy = 0; for (const p of rings) { sx += p[0]; sy += p[1]; }
+    return `${rings.length}:${sx.toFixed(7)}:${sy.toFixed(7)}`;
+  };
+  const makeShape = (geom, kind, main, name) => {
+    const parts = geom.type === 'Polygon' ? [geom.coordinates] : geom.coordinates;
+    let ei = 0, ea = -1;
+    parts.forEach((p, i) => { const a = ringArea(p[0]); if (a > ea) { ea = a; ei = i; } });
+    const pts = ptsOfRing(parts[ei][0]);
+    return { id: kind === 'lot' ? 'lot' : `bld${VID++}`, kind, main, name, geomType: geom.type, parts: parts.map((p) => p.map((r) => r.map((q) => [q[0], q[1]]))), ei, verts: pts.map(([lng, lat]) => ({ id: ++VID, lng, lat })) };
+  };
+  const toGeo = (sh) => {
+    const ring = sh.verts.map((v) => [v.lng, v.lat]); ring.push([sh.verts[0].lng, sh.verts[0].lat]);
+    const parts = sh.parts.map((p, i) => (i === sh.ei ? [ring, ...p.slice(1)] : p));
+    return sh.geomType === 'Polygon' ? { type: 'Polygon', coordinates: parts[0] } : { type: 'MultiPolygon', coordinates: parts };
+  };
+  const snap = () => ({ lot: M.lot ? M.lot.verts.map((v) => ({ ...v })) : null, blds: M.blds.map((b) => b.verts.map((v) => ({ ...v }))), front: M.frontIds ? [...M.frontIds] : null, frontSet: M.frontSet });
+  const restore = (s) => {
+    if (M.lot && s.lot) M.lot.verts = s.lot.map((v) => ({ ...v }));
+    M.blds.forEach((b, i) => { if (s.blds[i]) b.verts = s.blds[i].map((v) => ({ ...v })); });
+    M.frontIds = s.front ? [...s.front] : null; M.frontSet = s.frontSet;
+  };
+
+  /** the front line handed to the yard split: the chosen lot corners, pushed 3 m outward so it reads as the street in front of that side */
+  const frontLine = (ids) => {
+    const vs = ids.map((id) => M.lot.verts.find((v) => v.id === id)).filter(Boolean);
+    if (vs.length < 2) return null;
+    const { kx, ky } = metresPerDegree(vs[0].lat);
+    const c = M.lot.verts.reduce((s, v) => [s[0] + v.lng / M.lot.verts.length, s[1] + v.lat / M.lot.verts.length], [0, 0]);
+    const a = vs[0], b = vs[vs.length - 1];
+    let nx = (b.lat - a.lat) * ky, ny = -(b.lng - a.lng) * kx; // right of a->b in metres
+    const l = Math.hypot(nx, ny) || 1; nx /= l; ny /= l;
+    const toC = [(c[0] - a.lng) * kx, (c[1] - a.lat) * ky];
+    if (nx * toC[0] + ny * toC[1] > 0) { nx = -nx; ny = -ny; } // make it point away from the lot's middle
+    return vs.map((v) => [v.lng + (nx * FRONT_OFFSET_M) / kx, v.lat + (ny * FRONT_OFFSET_M) / ky]);
+  };
+
+  const bundle = () => {
+    const rest = { ...M.rest };
+    if (M.source === 'attributes') {
+      const p = getProfile(); const a = p?.attributes ?? {};
+      const v = (k) => (a[k] && a[k].tag !== 'unavailable' ? a[k].value : null);
+      rest.roof = { yearBuilt: num(v('year_built')) ? v('year_built') : null, propertyType: typeof v('property_type') === 'string' ? v('property_type') : null, stories: num(v('floors')) ? v('floors') : null, state: rest.roof?.state ?? null };
+    }
+    const g = { ...rest, parcel: M.lot ? toGeo(M.lot) : null, buildings: M.blds.map((b) => ({ polygon: toGeo(b), main: b.main })) };
+    if (M.frontIds && M.lot) { const l = frontLine(M.frontIds); if (l) { g.streets = []; g.streetName = null; g.frontPoint = null; g.frontEdge = { coordinates: l }; } }
+    return g;
+  };
+  const measureNow = () => {
+    const t0 = performance.now();
+    let m = null;
+    try { m = core.measure(bundle(), { now: now() }); } catch { m = null; }
+    M.lastMs = performance.now() - t0;
+    return m;
+  };
+
+  /** with no street data on the page (the lookup's bundle absent), find which lot side the lookup treated as the front by matching its front/back yard numbers */
+  const inferFront = () => {
+    const a = getProfile()?.attributes ?? {};
+    const f0 = a.front_yard_sqft, b0 = a.back_yard_sqft;
+    if (!M.lot || !f0 || !b0 || f0.tag === 'owner-confirmed' || b0.tag === 'owner-confirmed' || !num(f0.value) || !num(b0.value)) return null;
+    const vs = M.lot.verts; let best = null;
+    for (let i = 0; i < vs.length; i++) {
+      const ids = [vs[i].id, vs[(i + 1) % vs.length].id];
+      M.frontIds = ids;
+      const m = measureNow();
+      if (!m || !num(m.front_yard_sqft) || !num(m.back_yard_sqft)) continue;
+      const err = Math.abs(m.front_yard_sqft - f0.value) + Math.abs(m.back_yard_sqft - b0.value);
+      if (!best || err < best.err) best = { err, ids };
+    }
+    M.frontIds = null;
+    return best && best.err <= 2 ? best.ids : null;
+  };
+
+  const readSource = () => {
+    const p = getProfile();
+    return p ? sourceFromProfile(p) : null;
+  };
+
+  function setup(src) {
+    const sigP = src.parcel ? sigOf(src.parcel) : 'none';
+    const m0 = { sigP, sigB: src.buildings.map((b) => sigOf(b.polygon)).join('|') };
+    M = {
+      ...m0, source: src.from, rest: src.rest, parcelSource: src.parcelSource, starter: false, lot: null, blds: [], frontIds: null, frontSet: false, base: null, baseFront: null,
+      history: [], mapKeys: new Map(), gestureBefore: null, edited: false, sel: null, m: null, lastMeasure: null, lastMs: 0, note: '', image: null, imgState: 'idle', imageInfo: src.image,
+      Wd: 0, Hd: 0, frame: null, drag: null, lastTap: null,
+    };
+    try {
+      src.buildings.forEach((b, i) => { try { M.blds.push(makeShape(b.polygon, 'bld', b.main, b.main ? 'House' : 'Building')); } catch { /* skip an outline that is not a polygon */ } });
+      if (!M.blds.some((b) => b.main) && M.blds.length) M.blds[0].main = true;
+      if (src.parcel) M.lot = makeShape(src.parcel, 'lot', false, 'Lot');
+      else {
+        const main = M.blds.find((b) => b.main);
+        const ring = main ? starterRing(toGeo(main)) : null;
+        if (ring) { M.lot = makeShape({ type: 'Polygon', coordinates: [ring] }, 'lot', false, 'Lot'); M.starter = true; }
+      }
+    } catch { M = null; return false; }
+    if (!M.lot) { M = null; return false; }
+    M.frame = frameFor(M.lot.verts.map((v) => [v.lng, v.lat]));
+    const hasRef = (M.rest.streets && M.rest.streets.length) || M.rest.frontEdge || M.rest.frontPoint;
+    if (!hasRef && !M.starter) { const ids = inferFront(); if (ids) { M.frontIds = ids; M.baseFront = ids; } }
+    M.base = snap();
+    M.m = measureNow();
+    M.lastMeasure = M.m;
+    return true;
+  }
+
+  // ----- DOM ----------------------------------------------------------------------------------------------------
+  /** @type {any} */ const D = {};
+  const svgEl = (name, attrs = {}, parent = null) => { const e = document.createElementNS(SVGNS, name); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, String(v)); if (parent) parent.append(e); return e; };
+  const html = (tag, attrs = {}, text = null, parent = null) => { const e = document.createElement(tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, String(v)); if (text !== null) e.textContent = text; if (parent) parent.append(e); return e; };
+
+  function build() {
+    mount.textContent = '';
+    mount.className = 'lm';
+    mount.setAttribute('role', 'region');
+    mount.setAttribute('aria-labelledby', `${uid}-title`);
+    const head = html('div', { class: 'lm-head' }, null, mount);
+    const tw = html('div', { class: 'lm-titlewrap' }, null, head);
+    html('h3', { id: `${uid}-title`, class: 'lm-title' }, 'Your lot from above', tw);
+    D.sub = html('p', { class: 'lm-sub small muted', id: `${uid}-sub` }, '', tw);
+    D.toggle = html('button', { type: 'button', class: 'btn sm', id: `${uid}-toggle`, 'aria-expanded': 'true', 'aria-controls': `${uid}-body` }, 'Hide photo', head);
+    D.body = html('div', { id: `${uid}-body`, class: 'lm-body' }, null, mount);
+    D.stage = html('div', { class: 'lm-stage' }, null, D.body);
+    D.frame = html('div', { class: 'lm-frame' }, null, D.stage);
+    D.img = html('img', { class: 'lm-img', alt: '', 'aria-hidden': 'true', decoding: 'async', referrerpolicy: 'no-referrer', draggable: 'false', hidden: '' }, null, D.frame);
+    D.canvas = html('canvas', { class: 'lm-canvas', 'aria-hidden': 'true' }, null, D.frame);
+    D.svg = svgEl('svg', { class: 'lm-svg', role: 'group', 'aria-label': 'Outlines of your lot and buildings on the photo. Each corner can be dragged or moved with the arrow keys.', 'aria-describedby': `${uid}-keys` }, D.frame);
+    D.defs = svgEl('defs', {}, D.svg);
+    defsMarkup(D.defs);
+    D.gZones = svgEl('g', { mask: `url(#${uid}-bmask)` }, D.svg);
+    D.zFront = svgEl('path', { class: 'lm-zone', fill: `url(#${uid}-pf)`, 'fill-rule': 'evenodd' }, D.gZones);
+    D.zBack = svgEl('path', { class: 'lm-zone', fill: `url(#${uid}-pb)`, 'fill-rule': 'evenodd' }, D.gZones);
+    D.gShapes = svgEl('g', {}, D.svg);
+    D.gFront = svgEl('g', { class: 'lm-frontline' }, D.svg);
+    D.gLabels = svgEl('g', { class: 'lm-labels', 'aria-hidden': 'true' }, D.svg);
+    D.gEdges = svgEl('g', {}, D.svg);
+    D.gHandles = svgEl('g', {}, D.svg);
+    D.frame.append(D.canvas); // the hatched usable yard sits over the tints (it ignores the pointer, so corners stay draggable)
+    html('p', { id: `${uid}-keys`, class: 'sr-only' }, 'Arrow keys move the corner 1 foot. Shift and an arrow key move it 5 feet. Delete removes it.', D.body);
+    D.credit = html('p', { class: 'lm-credit tiny muted', hidden: '' }, '', D.body);
+    D.actions = html('div', { class: 'lm-actions', role: 'group', 'aria-label': 'Outline tools' }, null, D.body);
+    D.selText = html('span', { class: 'lm-sel small', id: `${uid}-seltext` }, '', D.actions);
+    D.bFront = html('button', { type: 'button', class: 'btn sm', id: `${uid}-bfront`, 'data-lm': 'front', hidden: '' }, 'This side faces the street', D.actions);
+    D.bAdd = html('button', { type: 'button', class: 'btn sm', id: `${uid}-badd`, 'data-lm': 'add', hidden: '' }, 'Add a corner', D.actions);
+    D.bRemove = html('button', { type: 'button', class: 'btn sm', id: `${uid}-bremove`, 'data-lm': 'remove', hidden: '' }, 'Remove corner', D.actions);
+    D.bReset = html('button', { type: 'button', class: 'btn sm', id: `${uid}-breset`, 'data-lm': 'reset', hidden: '' }, 'Reset outlines', D.actions);
+    D.noteEl = html('p', { class: 'lm-note small', id: `${uid}-note`, role: 'status', 'aria-live': 'polite' }, '', D.body);
+    D.legend = html('ul', { class: 'lm-legend', 'aria-label': 'Sizes of the outlines' }, null, D.body);
+    D.hintUnknown = html('p', { class: 'lm-tip small muted', hidden: '' }, 'Tap the side of your lot that faces the street to see the front and back yard.', D.body);
+    D.sr = html('p', { class: 'sr-only', id: `${uid}-sr`, role: 'status', 'aria-live': 'polite' }, '', D.body);
+
+    D.toggle.addEventListener('click', () => {
+      const open = D.body.hidden;
+      D.body.hidden = !open;
+      D.toggle.textContent = open ? 'Hide photo' : 'Show photo of my lot';
+      D.toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+      if (open) { layout(); paint(true); }
+    });
+    D.svg.addEventListener('pointerdown', onDown);
+    D.svg.addEventListener('pointermove', onMove);
+    D.svg.addEventListener('pointerup', onUp);
+    D.svg.addEventListener('pointercancel', onUp);
+    D.svg.addEventListener('touchstart', (e) => { if (e.target.closest?.('.lm-h')) e.preventDefault(); }, { passive: false }); // a corner drag by touch must not scroll the page
+    D.svg.addEventListener('keydown', onKey);
+    D.svg.addEventListener('focusin', onFocusIn);
+    D.actions.addEventListener('click', onAction);
+    D.img.addEventListener('load', () => { if (!M) return; M.imgState = 'ok'; D.img.hidden = false; showCredit(); });
+    D.img.addEventListener('error', () => { if (!M) return; M.imgState = 'none'; D.img.hidden = true; D.img.removeAttribute('src'); D.credit.hidden = true; });
+    if (typeof ResizeObserver === 'function') { layoutObs?.disconnect(); layoutObs = new ResizeObserver(() => { if (M && !D.body.hidden && D.stage.clientWidth && Math.abs(D.stage.clientWidth - (M.stageW ?? 0)) > 1) { layout(); paint(true); } }); layoutObs.observe(D.stage); }
+  }
+
+  function defsMarkup(defs) {
+    const mask = svgEl('mask', { id: `${uid}-bmask`, maskUnits: 'userSpaceOnUse' }, defs);
+    D.maskBg = svgEl('rect', { x: 0, y: 0, width: 10, height: 10, fill: '#fff' }, mask);
+    D.maskG = svgEl('g', { fill: '#000' }, mask);
+    const pf = svgEl('pattern', { id: `${uid}-pf`, width: 8, height: 8, patternUnits: 'userSpaceOnUse' }, defs);
+    svgEl('rect', { width: 8, height: 8, fill: '#38bdf8', 'fill-opacity': '.34' }, pf);
+    svgEl('circle', { cx: 4, cy: 4, r: 1.5, fill: '#ffffff', stroke: '#075985', 'stroke-width': '.7' }, pf);
+    const pb = svgEl('pattern', { id: `${uid}-pb`, width: 8, height: 8, patternUnits: 'userSpaceOnUse' }, defs);
+    svgEl('rect', { width: 8, height: 8, fill: '#c084fc', 'fill-opacity': '.34' }, pb);
+    svgEl('path', { d: 'M-1 9 L9 -1 M-1 1 L1 -1 M7 9 L9 7', stroke: '#6b21a8', 'stroke-width': '1.6', fill: 'none' }, pb);
+    const pu = svgEl('pattern', { id: `${uid}-pu`, width: 8, height: 8, patternUnits: 'userSpaceOnUse' }, defs);
+    svgEl('rect', { width: 8, height: 8, fill: '#ffffff', 'fill-opacity': '.28' }, pu);
+    svgEl('path', { d: 'M-1 -1 L9 9 M-1 7 L1 9 M7 -1 L9 1', stroke: '#111827', 'stroke-width': '2.6', 'stroke-opacity': '.6', fill: 'none' }, pu);
+    svgEl('path', { d: 'M-1 -1 L9 9 M-1 7 L1 9 M7 -1 L9 1', stroke: '#ffffff', 'stroke-width': '1.3', fill: 'none' }, pu);
+  }
+
+  // ----- layout / structure ------------------------------------------------------------------------------------
+  function layout() {
+    if (!M) return;
+    const cw = D.stage.clientWidth || mount.clientWidth || 600;
+    M.stageW = cw;
+    const maxH = Math.min(640, Math.max(320, (window.innerHeight || 800) * 0.75));
+    const Wd = Math.max(160, Math.floor(Math.min(cw, maxH * M.frame.aspect)));
+    const Hd = Math.round(Wd / M.frame.aspect);
+    M.Wd = Wd; M.Hd = Hd;
+    D.frame.style.width = `${Wd}px`; D.frame.style.height = `${Hd}px`;
+    D.svg.setAttribute('viewBox', `0 0 ${Wd} ${Hd}`);
+    D.svg.setAttribute('width', String(Wd)); D.svg.setAttribute('height', String(Hd));
+    D.maskBg.setAttribute('width', String(Wd)); D.maskBg.setAttribute('height', String(Hd));
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    D.canvas.width = Math.round(Wd * dpr); D.canvas.height = Math.round(Hd * dpr);
+    D.frame.dataset.bbox = M.frame.bbox.map((v) => v.toFixed(9)).join(',');
+    D.frame.dataset.size = `${Wd}x${Hd}`;
+  }
+
+  const proj = () => frameProject(NAIP_BACKDROP.frame, M.frame.bbox, M.Wd, M.Hd);
+  const px = (lng, lat) => proj().toPx(lng, lat);
+  const inv = (x, y) => proj().toLngLat(x, y);
+
+  const shapes = () => [M.lot, ...M.blds];
+  const shapeOf = (key) => (key === 'lot' ? M.lot : M.blds.find((b) => b.id === key));
+  /** Corners that get a handle. Short outlines show every corner. A long one (a rounded corner or a curved wall is many tiny segments) shows the
+   *  real turns only, and never two handles within 1.5 m of each other, so the picture does not fill with dots. */
+  const visibleVerts = (sh) => {
+    const vs = sh.verts;
+    if (vs.length <= 12) return vs;
+    const keep = [];
+    vs.forEach((v, i) => {
+      const a = vs[(i + vs.length - 1) % vs.length], b = vs[(i + 1) % vs.length];
+      const { kx, ky } = metresPerDegree(v.lat);
+      const x1 = (v.lng - a.lng) * kx, y1 = (v.lat - a.lat) * ky, x2 = (b.lng - v.lng) * kx, y2 = (b.lat - v.lat) * ky;
+      const l1 = Math.hypot(x1, y1), l2 = Math.hypot(x2, y2);
+      if (l1 < 1e-6 || l2 < 1e-6) return;
+      if (Math.acos(Math.max(-1, Math.min(1, (x1 * x2 + y1 * y2) / (l1 * l2)))) <= 25 * RAD) return;
+      if (keep.some((k) => Math.hypot((k.lng - v.lng) * kx, (k.lat - v.lat) * ky) < 1.5)) return;
+      keep.push(v);
+    });
+    return keep.length >= 3 ? keep : vs.slice(0, 3);
+  };
+
+  function structure() {
+    // outlines, edge hit lines, handles: rebuilt when the corner list changes; positions are set by paint()
+    D.gShapes.textContent = ''; D.gEdges.textContent = ''; D.gHandles.textContent = ''; D.maskG.textContent = ''; D.legend.textContent = '';
+    D.els = { shapes: new Map(), edges: [], handles: new Map(), legend: new Map(), mask: new Map() };
+    shapes().forEach((sh) => {
+      const cls = sh.kind === 'lot' ? 'lm-lot' : sh.main ? 'lm-house' : 'lm-other';
+      const casing = svgEl('path', { class: `lm-casing`, fill: 'none' }, D.gShapes);
+      const path = svgEl('path', { class: cls, fill: 'none' }, D.gShapes);
+      D.els.shapes.set(sh.id, { casing, path });
+      if (sh.kind === 'bld') D.els.mask.set(sh.id, svgEl('path', {}, D.maskG));
+      sh.verts.forEach((v, i) => {
+        const line = svgEl('line', { class: 'lm-edge', 'data-shape': sh.id, 'data-i': i }, D.gEdges);
+        if (sh.kind === 'lot') { line.setAttribute('tabindex', '0'); line.setAttribute('role', 'button'); line.setAttribute('aria-label', `Lot side ${i + 1} of ${sh.verts.length}. Press Enter to choose it as the side facing the street.`); line.id = `${uid}-e-${v.id}`; }
+        D.els.edges.push({ sh, i, line });
+      });
+      const vis = new Set(visibleVerts(sh).map((v) => v.id));
+      sh.verts.forEach((v, i) => {
+        if (!vis.has(v.id)) return;
+        const g = svgEl('g', { class: 'lm-h', id: `${uid}-v-${v.id}`, tabindex: '0', role: 'button', 'data-vid': v.id, 'data-shape': sh.id, 'aria-label': `${sh.kind === 'lot' ? 'Lot' : sh.main ? 'House' : 'Building'} corner ${i + 1} of ${sh.verts.length}` }, D.gHandles);
+        svgEl('circle', { class: 'lm-hit', r: 17 }, g);
+        svgEl('circle', { class: 'lm-ring', r: 11 }, g);
+        svgEl('circle', { class: `lm-dot ${sh.kind === 'lot' ? 'is-lot' : 'is-bld'}`, r: 6 }, g);
+        D.els.handles.set(v.id, g);
+      });
+    });
+    buildLegend();
+  }
+
+  const swatch = (kind) => {
+    const defsRef = (id) => `url(#${uid}-${id})`;
+    const body = {
+      lot: '<rect x="2" y="2" width="26" height="14" rx="2" class="lm-casing" fill="none"/><rect x="2" y="2" width="26" height="14" rx="2" class="lm-lot" fill="none"/>',
+      house: '<rect x="2" y="2" width="26" height="14" rx="2" class="lm-casing" fill="none"/><rect x="2" y="2" width="26" height="14" rx="2" class="lm-house" fill="none"/>',
+      other: '<rect x="2" y="2" width="26" height="14" rx="2" class="lm-casing" fill="none"/><rect x="2" y="2" width="26" height="14" rx="2" class="lm-other" fill="none"/>',
+      front: `<rect x="1" y="1" width="28" height="16" rx="2" fill="${defsRef('pf')}" stroke="#075985" stroke-width="1"/>`,
+      back: `<rect x="1" y="1" width="28" height="16" rx="2" fill="${defsRef('pb')}" stroke="#6b21a8" stroke-width="1"/>`,
+      usable: `<rect x="1" y="1" width="28" height="16" rx="2" fill="${defsRef('pu')}" stroke="#111827" stroke-opacity=".7" stroke-width="1"/>`,
+    }[kind];
+    return `<svg class="lm-sw" width="30" height="18" viewBox="0 0 30 18" aria-hidden="true" focusable="false">${body}</svg>`;
+  };
+  function buildLegend() {
+    const rows = [['lot', 'lot', 'Lot outline']];
+    M.blds.forEach((b, i) => rows.push([b.id, b.main ? 'house' : 'other', b.main ? 'House' : `Other building${M.blds.filter((x) => !x.main).length > 1 ? ` ${M.blds.filter((x) => !x.main).indexOf(b) + 1}` : ''}`]));
+    rows.push(['front', 'front', 'Front yard'], ['back', 'back', 'Back yard'], ['usable', 'usable', 'Usable yard']);
+    for (const [id, kind, name] of rows) {
+      const li = html('li', { class: 'lm-li', 'data-row': id }, null, D.legend);
+      li.innerHTML = `${swatch(kind)}<span class="lm-name">${esc(name)}</span><span class="lm-val"></span>`;
+      D.els.legend.set(id, { li, val: li.querySelector('.lm-val') });
+    }
+  }
+
+  const pathOf = (pts) => (pts.length ? `M${pts.map((p) => `${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join('L')}Z` : '');
+
+  // ----- paint (one animation frame) ---------------------------------------------------------------------------
+  let raf = 0, needMeasure = false, lastMeasureAt = 0;
+  const schedule = (measure = true) => { if (measure) needMeasure = true; if (!raf) raf = requestAnimationFrame(() => { raf = 0; paint(false); }); };
+
+  function paint(full) {
+    if (!M || !M.Wd || D.body.hidden) return;
+    const tNow = performance.now();
+    if (full || (needMeasure && tNow - lastMeasureAt >= Math.min(250, M.lastMs * 2))) {
+      M.m = measureNow(); needMeasure = false; lastMeasureAt = performance.now();
+    } else if (needMeasure) schedule(true); // too soon after a slow one: try again next frame
+    const m = M.m;
+    // outlines + handles
+    for (const sh of shapes()) {
+      const pts = sh.verts.map((v) => px(v.lng, v.lat));
+      const e = D.els.shapes.get(sh.id);
+      const d = pathOf(pts);
+      e.casing.setAttribute('d', d); e.path.setAttribute('d', d);
+      if (sh.kind === 'bld') D.els.mask.get(sh.id).setAttribute('d', d);
+      sh.verts.forEach((v, i) => {
+        const h = D.els.handles.get(v.id);
+        if (h) { h.setAttribute('transform', `translate(${pts[i][0].toFixed(2)} ${pts[i][1].toFixed(2)})`); h.dataset.lng = v.lng.toFixed(9); h.dataset.lat = v.lat.toFixed(9); h.dataset.x = pts[i][0].toFixed(2); h.dataset.y = pts[i][1].toFixed(2); }
+      });
+    }
+    for (const { sh, i, line } of D.els.edges) {
+      const a = px(sh.verts[i].lng, sh.verts[i].lat), b = px(sh.verts[(i + 1) % sh.verts.length].lng, sh.verts[(i + 1) % sh.verts.length].lat);
+      line.setAttribute('x1', a[0].toFixed(1)); line.setAttribute('y1', a[1].toFixed(1)); line.setAttribute('x2', b[0].toFixed(1)); line.setAttribute('y2', b[1].toFixed(1));
+      line.classList.toggle('is-sel', Boolean(M.sel && M.sel.type === 'e' && M.sel.shape === sh.id && M.sel.i === i));
+    }
+    for (const [id, g] of D.els.handles) g.classList.toggle('is-sel', Boolean(M.sel && M.sel.type === 'v' && M.sel.vid === id));
+    paintZones(m);
+    paintLegend(m);
+    paintUsable(m);
+    if (full) D.frame.dataset.model = JSON.stringify({ lot: M.lot.verts.map((v) => [v.lng, v.lat]), blds: M.blds.map((b) => ({ main: b.main, geo: toGeo(b) })) });
+    D.frame.dataset.front = M.frontIds && M.lot ? JSON.stringify(frontLine(M.frontIds)) : '';
+    updateActions();
+  }
+
+  // Sutherland-Hodgman against one half-plane: keep points with f(p) <= 0
+  const clipHalf = (ring, f) => {
+    const out = [];
+    for (let i = 0; i < ring.length; i++) {
+      const a = ring[i], b = ring[(i + 1) % ring.length], fa = f(a), fb = f(b);
+      if (fa <= 0) out.push(a);
+      if ((fa < 0 && fb > 0) || (fa > 0 && fb < 0)) { const t = fa / (fa - fb); out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]); }
+    }
+    return out;
+  };
+  const centroidPx = (pts) => {
+    let a = 0, cx = 0, cy = 0;
+    for (let i = 0; i < pts.length; i++) { const p = pts[i], q = pts[(i + 1) % pts.length]; const f = p[0] * q[1] - q[0] * p[1]; a += f; cx += (p[0] + q[0]) * f; cy += (p[1] + q[1]) * f; }
+    return Math.abs(a) < 1e-6 ? null : [cx / (3 * a), cy / (3 * a)];
+  };
+  const boxOf = (pts) => { let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity; for (const p of pts) { x0 = Math.min(x0, p[0]); x1 = Math.max(x1, p[0]); y0 = Math.min(y0, p[1]); y1 = Math.max(y1, p[1]); } return { x0, y0, x1, y1, w: x1 - x0, h: y1 - y0 }; };
+  const label = (x, y, text, cls = '') => { const t = svgEl('text', { x: x.toFixed(1), y: y.toFixed(1), class: `lm-label ${cls}`, 'text-anchor': 'middle', 'dominant-baseline': 'middle' }, D.gLabels); t.textContent = text; };
+
+  function paintZones(m) {
+    D.gLabels.textContent = ''; D.gFront.textContent = '';
+    const b = m?.zones?.bands;
+    let front = '', back = '';
+    if (b) {
+      const { kx, ky } = metresPerDegree(b.origin.lat);
+      const ring = M.lot.verts.map((v) => [(v.lng - b.origin.lng) * kx, (v.lat - b.origin.lat) * ky]);
+      const depth = (p) => p[0] * b.nx + p[1] * b.ny - b.depth0;
+      const toPx = (r) => r.map((p) => px(b.origin.lng + p[0] / kx, b.origin.lat + p[1] / ky));
+      const f = toPx(clipHalf(ring, (p) => depth(p) - b.d1)), k = toPx(clipHalf(ring, (p) => b.d2 - depth(p)));
+      front = f.length >= 3 ? pathOf(f) : ''; back = k.length >= 3 ? pathOf(k) : '';
+      for (const [pts, text] of [[f, 'Front yard'], [k, 'Back yard']]) {
+        if (pts.length < 3) continue;
+        const bx = boxOf(pts), c = centroidPx(pts);
+        if (c && bx.w > 74 && bx.h > 26) label(c[0], c[1], text, 'is-zone');
+      }
+    }
+    D.zFront.setAttribute('d', front); D.zBack.setAttribute('d', back);
+    const fe = m?.zones?.frontEdge?.edges;
+    if (Array.isArray(fe) && fe.length) {
+      const pts = [px(fe[0].from.lng, fe[0].from.lat), ...fe.map((e) => px(e.to.lng, e.to.lat))];
+      svgEl('polyline', { class: 'lm-front-casing', points: pts.map((p) => p.join(',')).join(' '), fill: 'none' }, D.gFront);
+      svgEl('polyline', { class: 'lm-front-line', points: pts.map((p) => p.join(',')).join(' '), fill: 'none' }, D.gFront);
+      const mid = pts[Math.floor(pts.length / 2)], nxt = pts[Math.floor(pts.length / 2) - 1] ?? pts[0];
+      const c = M.lot.verts.reduce((s, v) => { const q = px(v.lng, v.lat); return [s[0] + q[0] / M.lot.verts.length, s[1] + q[1] / M.lot.verts.length]; }, [0, 0]);
+      let ox = (mid[0] + nxt[0]) / 2 - c[0], oy = (mid[1] + nxt[1]) / 2 - c[1]; const l = Math.hypot(ox, oy) || 1; ox /= l; oy /= l;
+      const mx = (mid[0] + nxt[0]) / 2 + ox * 15, my = (mid[1] + nxt[1]) / 2 + oy * 15;
+      label(Math.max(30, Math.min(M.Wd - 30, mx)), Math.max(10, Math.min(M.Hd - 10, my)), 'Street side', 'is-street');
+    }
+    const house = M.blds.find((x) => x.main);
+    if (house && m && num(m.roof_area_sqft)) {
+      const pts = house.verts.map((v) => px(v.lng, v.lat)), bx = boxOf(pts), c = centroidPx(pts);
+      if (c && bx.w > 96 && bx.h > 30) label(c[0], c[1], `Roof about ${fmt(m.roof_area_sqft)} sq ft`, 'is-roof');
+    }
+  }
+
+  function paintLegend(m) {
+    const set = (id, text, muted = false, hide = false) => { const r = D.els.legend.get(id); if (!r) return; r.li.hidden = hide; r.val.textContent = text; r.val.classList.toggle('is-muted', muted); };
+    set('lot', m && num(m.lot_area_sqft) ? `${fmt(m.lot_area_sqft)} sq ft${M.starter || M.parcelSource === 'estimated' ? ' (a first guess; drag the corners)' : ''}` : '', false, !(m && num(m.lot_area_sqft)));
+    for (const b of M.blds) {
+      let text;
+      if (b.main) text = m && num(m.building_footprint_sqft) ? `${fmt(m.building_footprint_sqft)} sq ft footprint${num(m.roof_area_sqft) ? ` · roof about ${fmt(m.roof_area_sqft)} sq ft` : ''}` : '';
+      else { try { text = `${fmt(core.areaSqft(toGeo(b)))} sq ft`; } catch { text = ''; } }
+      set(b.id, text, false, !text);
+    }
+    const hasYard = m && num(m.front_yard_sqft) && num(m.back_yard_sqft);
+    set('front', hasYard ? `${fmt(m.front_yard_sqft)} sq ft` : 'tap the side that faces the street', !hasYard, !M.blds.length);
+    set('back', hasYard ? `${fmt(m.back_yard_sqft)} sq ft` : '', false, !hasYard);
+    const u = m && num(m.usable_yard_sqft);
+    set('usable', u ? `${fmt(m.usable_yard_sqft)} sq ft${num(m.usable_front_yard_sqft) && num(m.usable_back_yard_sqft) ? ` (front ${fmt(m.usable_front_yard_sqft)} · back ${fmt(m.usable_back_yard_sqft)})` : ''}` : '', false, !u);
+    D.hintUnknown.hidden = Boolean(hasYard) || !M.blds.length;
+  }
+
+  let hatchTile = null;
+  function paintUsable(m) {
+    const c = D.canvas, ctx = c.getContext('2d');
+    if (!ctx) return;
+    ctx.clearRect(0, 0, c.width, c.height);
+    const cells = m?.usable?.cells;
+    if (!cells || !cells.mask || !cells.width || !cells.height) return;
+    const k = c.width / M.Wd;
+    const t = document.createElement('canvas'); t.width = cells.width; t.height = cells.height;
+    const tc = t.getContext('2d'); if (!tc) return;
+    const img = tc.createImageData(cells.width, cells.height);
+    for (let i = 0; i < cells.mask.length; i++) if (cells.mask[i]) img.data[i * 4 + 3] = 255;
+    tc.putImageData(img, 0, 0);
+    const [w, s, e, n] = cells.bbox;
+    const [x0, y0] = px(w, n), [x1, y1] = px(e, s);
+    ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(t, x0 * k, y0 * k, (x1 - x0) * k, (y1 - y0) * k);
+    ctx.globalCompositeOperation = 'source-in'; ctx.fillStyle = 'rgba(255,255,255,.26)'; ctx.fillRect(0, 0, c.width, c.height);
+    if (!hatchTile || hatchTile.k !== k) {
+      const tile = document.createElement('canvas'); const s8 = Math.max(4, Math.round(8 * k)); tile.width = s8; tile.height = s8;
+      const g = tile.getContext('2d');
+      if (g) {
+        const line = (w2, col) => { g.lineWidth = w2 * k; g.strokeStyle = col; g.beginPath(); g.moveTo(-s8, -s8); g.lineTo(2 * s8, 2 * s8); g.moveTo(-s8, 0); g.lineTo(s8, 2 * s8); g.moveTo(0, -s8); g.lineTo(2 * s8, s8); g.stroke(); };
+        line(2.6, 'rgba(17,24,39,.6)'); line(1.3, '#fff');
+      }
+      hatchTile = { k, tile };
+    }
+    const pat = ctx.createPattern(hatchTile.tile, 'repeat');
+    if (pat) { ctx.globalCompositeOperation = 'source-atop'; ctx.fillStyle = pat; ctx.fillRect(0, 0, c.width, c.height); }
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  function updateActions() {
+    const sel = M.sel;
+    const v = sel?.type === 'v' ? vertexById(sel.vid) : null;
+    D.bFront.hidden = !(sel?.type === 'e' && sel.shape === 'lot');
+    D.bAdd.hidden = !(sel && (sel.type === 'e' || v));
+    D.bRemove.hidden = !v;
+    D.bRemove.disabled = Boolean(v && v.sh.verts.length <= 3);
+    D.bReset.hidden = !M.edited;
+    D.selText.textContent = sel?.type === 'e' ? 'Side selected.' : v ? `${v.sh.kind === 'lot' ? 'Lot' : v.sh.main ? 'House' : 'Building'} corner selected.` : '';
+    D.bAdd.textContent = sel?.type === 'e' ? 'Add a corner here' : 'Add a corner next to it';
+    D.noteEl.textContent = M.note || (M.needsMatchNote ? 'Outline no longer matches the number · Reset outlines' : '');
+  }
+
+  const vertexById = (vid) => { for (const sh of shapes()) { const i = sh.verts.findIndex((x) => x.id === Number(vid)); if (i >= 0) return { sh, i, v: sh.verts[i] }; } return null; };
+  const setNote = (t) => { M.note = t; D.noteEl.textContent = t; };
+  const announce = (t) => { D.sr.textContent = ''; setTimeout(() => { D.sr.textContent = t; }, 30); };
+
+  // ----- interaction -------------------------------------------------------------------------------------------
+  const pointerXY = (e) => { const r = D.svg.getBoundingClientRect(); return [((e.clientX - r.left) * M.Wd) / r.width, ((e.clientY - r.top) * M.Hd) / r.height]; };
+  const beginGesture = () => { if (!M.gestureBefore) M.gestureBefore = snap(); };
+  const kindOf = (sh) => (sh.kind === 'lot' ? 'lot' : 'bld');
+
+  function moveVertex(sh, v, lng, lat) {
+    const [w, s, e, n] = M.frame.bbox;
+    lng = Math.max(w, Math.min(e, lng)); lat = Math.max(s, Math.min(n, lat));
+    const old = { lng: v.lng, lat: v.lat };
+    v.lng = lng; v.lat = lat;
+    if (ringCrosses(sh.verts)) { v.lng = old.lng; v.lat = old.lat; setNote("An outline can't cross itself, so the corner went back."); return false; }
+    if (M.note) setNote('');
+    return true;
+  }
+
+  function onDown(e) {
+    if (!M || (e.button && e.button !== 0)) return;
+    const h = e.target.closest?.('.lm-h');
+    if (h) {
+      const ref = vertexById(h.dataset.vid); if (!ref) return;
+      const [x, y] = pointerXY(e), [vx, vy] = px(ref.v.lng, ref.v.lat);
+      M.drag = { pid: e.pointerId, vid: ref.v.id, shape: ref.sh.id, dx: vx - x, dy: vy - y, moved: false };
+      try { h.setPointerCapture(e.pointerId); } catch { /* not capturable */ }
+      select({ type: 'v', vid: ref.v.id });
+      h.focus({ preventScroll: true });
+      beginGesture();
+      e.preventDefault();
+      return;
+    }
+    const ed = e.target.closest?.('.lm-edge');
+    if (ed) { M.tap = { pid: e.pointerId, shape: ed.dataset.shape, i: Number(ed.dataset.i), x: e.clientX, y: e.clientY, t: performance.now() }; }
+    else M.tap = { pid: e.pointerId, none: true, x: e.clientX, y: e.clientY };
+  }
+  function onMove(e) {
+    if (!M?.drag || e.pointerId !== M.drag.pid) return;
+    const sh = shapeOf(M.drag.shape); const v = sh?.verts.find((x) => x.id === M.drag.vid);
+    if (!sh || !v) return;
+    const [x, y] = pointerXY(e);
+    const [lng, lat] = inv(x + M.drag.dx, y + M.drag.dy);
+    M.drag.moved = true;
+    moveVertex(sh, v, lng, lat);
+    schedule(true);
+  }
+  function onUp(e) {
+    if (!M) return;
+    if (M.drag && e.pointerId === M.drag.pid) {
+      const d = M.drag; M.drag = null;
+      const sh = shapeOf(d.shape);
+      if (d.moved && sh) { M.edited = true; paint(true); commit(kindOf(sh)); } else { M.gestureBefore = null; }
+      return;
+    }
+    const t = M.tap; M.tap = null;
+    if (!t || t.pid !== e.pointerId || Math.hypot(e.clientX - t.x, e.clientY - t.y) > 8) return;
+    if (t.none) { if (M.sel) { select(null); } M.lastTap = null; return; }
+    const now2 = performance.now(), last = M.lastTap;
+    if (last && last.shape === t.shape && last.i === t.i && now2 - last.t < DOUBLE_TAP_MS) { M.lastTap = null; addCornerAt(shapeOf(t.shape), t.i, pointerXY(e)); return; }
+    M.lastTap = { shape: t.shape, i: t.i, t: now2 };
+    if (t.shape === 'lot') select({ type: 'e', shape: 'lot', i: t.i });
+    else select(null);
+  }
+  function select(sel) { M.sel = sel; schedule(false); updateActions(); }
+  function onFocusIn(e) {
+    if (!M) return;
+    const h = e.target.closest?.('.lm-h');
+    if (h) { if (!(M.sel?.type === 'v' && String(M.sel.vid) === h.dataset.vid)) select({ type: 'v', vid: Number(h.dataset.vid) }); return; }
+    const ed = e.target.closest?.('.lm-edge');
+    if (ed && ed.dataset.shape === 'lot') select({ type: 'e', shape: 'lot', i: Number(ed.dataset.i) });
+  }
+
+  let commitTimer = 0;
+  function onKey(e) {
+    if (!M) return;
+    const h = e.target.closest?.('.lm-h'), ed = e.target.closest?.('.lm-edge');
+    if (e.key === 'Escape') { select(null); return; }
+    if (h) {
+      const ref = vertexById(h.dataset.vid); if (!ref) return;
+      const step = e.shiftKey ? 5 : 1;
+      const dir = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, 1], ArrowDown: [0, -1] }[e.key];
+      if (dir) {
+        e.preventDefault();
+        beginGesture();
+        const { kx, ky } = metresPerDegree(ref.v.lat);
+        if (moveVertex(ref.sh, ref.v, ref.v.lng + (dir[0] * step * FT) / kx, ref.v.lat + (dir[1] * step * FT) / ky)) M.edited = true;
+        schedule(true);
+        clearTimeout(commitTimer); commitTimer = setTimeout(() => { paint(true); commit(kindOf(ref.sh)); }, COMMIT_IDLE_MS);
+        return;
+      }
+      if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); removeCorner(ref.sh, ref.v.id); }
+      return;
+    }
+    if (ed && ed.dataset.shape === 'lot' && (e.key === 'Enter' || e.key === ' ')) {
+      e.preventDefault();
+      select({ type: 'e', shape: 'lot', i: Number(ed.dataset.i) });
+      D.bFront.focus();
+    }
+  }
+
+  function onAction(e) {
+    const b = e.target.closest?.('[data-lm]'); if (!b || !M) return;
+    const act = b.dataset.lm, sel = M.sel;
+    if (act === 'front' && sel?.type === 'e') chooseFront(sel.i);
+    else if (act === 'add' && sel) { if (sel.type === 'e') addCornerAt(shapeOf(sel.shape), sel.i, null); else { const r = vertexById(sel.vid); if (r) addCornerAt(r.sh, r.i, null); } }
+    else if (act === 'remove' && sel?.type === 'v') { const r = vertexById(sel.vid); if (r) removeCorner(r.sh, r.v.id); }
+    else if (act === 'reset') resetAll();
+  }
+
+  function addCornerAt(sh, i, point) {
+    if (!sh || !M) return;
+    const a = sh.verts[i], b = sh.verts[(i + 1) % sh.verts.length];
+    let lng = (a.lng + b.lng) / 2, lat = (a.lat + b.lat) / 2;
+    if (point) { // the tap's position projected onto the side, so the shape does not change until the corner is moved
+      const [ax, ay] = px(a.lng, a.lat), [bx, by] = px(b.lng, b.lat);
+      const dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy || 1;
+      const t = Math.max(0.1, Math.min(0.9, ((point[0] - ax) * dx + (point[1] - ay) * dy) / l2));
+      [lng, lat] = inv(ax + dx * t, ay + dy * t);
+    }
+    beginGesture();
+    const nv = { id: ++VID, lng, lat };
+    sh.verts.splice(i + 1, 0, nv);
+    if (sh.kind === 'lot' && M.frontIds) { const ia = M.frontIds.indexOf(a.id), ib = M.frontIds.indexOf(b.id); if (ia >= 0 && ib === ia + 1) M.frontIds.splice(ib, 0, nv.id); }
+    M.edited = true;
+    structure(); select({ type: 'v', vid: nv.id });
+    paint(true); commit(kindOf(sh));
+    focusVertex(nv.id);
+    announce('Corner added.');
+  }
+
+  function removeCorner(sh, vid) {
+    if (sh.verts.length <= 3) { setNote('An outline needs at least 3 corners.'); return; }
+    const i = sh.verts.findIndex((v) => v.id === vid);
+    const trial = sh.verts.filter((v) => v.id !== vid);
+    if (ringCrosses(trial)) { setNote("That would make the outline cross itself, so the corner stayed."); return; }
+    beginGesture();
+    const before = M.frontIds ? [...M.frontIds] : null;
+    sh.verts = trial;
+    if (sh.kind === 'lot' && M.frontIds) {
+      M.frontIds = M.frontIds.filter((x) => x !== vid);
+      if (M.frontIds.length < 2) { // the street side lost a corner: keep the side that is now nearest to where it was
+        const keep = before.map((id) => sh.verts.find((v) => v.id === id)).filter(Boolean)[0] ?? sh.verts[Math.max(0, i - 1)];
+        const k = sh.verts.findIndex((v) => v.id === keep.id);
+        M.frontIds = [sh.verts[k].id, sh.verts[(k + 1) % sh.verts.length].id];
+      }
+    }
+    setNote('');
+    M.edited = true; M.sel = null;
+    structure(); paint(true); commit(kindOf(sh));
+    const nb = sh.verts[Math.max(0, i - 1) % sh.verts.length];
+    focusVertex(nb.id);
+    announce('Corner removed.');
+  }
+
+  function focusVertex(vid) { const g = D.els.handles.get(vid) ?? D.els.handles.values().next().value; g?.focus({ preventScroll: true }); }
+
+  function chooseFront(i) {
+    const vs = M.lot.verts;
+    beginGesture();
+    M.frontIds = [vs[i].id, vs[(i + 1) % vs.length].id]; M.frontSet = true;
+    M.edited = true;
+    const m = measureNow(); M.m = m;
+    paint(true); commit('front');
+    D.bFront.hidden = true;
+    announce('Street side set.');
+  }
+
+  /** push what changed into the list, remember how to take it back */
+  function commit(kind) {
+    clearTimeout(commitTimer);
+    const before = M.gestureBefore; M.gestureBefore = null;
+    if (!before) return;
+    const m = M.m ?? measureNow(); M.m = m;
+    const keys = new Set(AFFECTS[kind] ?? ALL_KEYS);
+    if (M.starter) keys.add('lot_area_sqft');
+    const batch = {};
+    for (const k of keys) {
+      const v = m?.[k];
+      if (!num(v)) continue;
+      if (M.starter && !M.history.length && !M.mapKeys.size) { batch[k] = v; continue; }
+      if (v !== M.lastMeasure?.[k]) batch[k] = v;
+    }
+    M.lastMeasure = m;
+    if (!Object.keys(batch).length) return;
+    M.history.push({ before, keys: Object.keys(batch) });
+    for (const [k, v] of Object.entries(batch)) M.mapKeys.set(k, { pushed: v, typed: false });
+    pushing = true;
+    try { applyOwnerCorrections(batch); } finally { pushing = false; }
+    announce(`${num(batch.lot_area_sqft) ? `Lot size is now ${fmt(batch.lot_area_sqft)} sq ft. ` : ''}${num(batch.building_footprint_sqft) ? `House footprint is now ${fmt(batch.building_footprint_sqft)} sq ft. ` : ''}`.trim() || 'Numbers updated.');
+  }
+
+  function resetAll() {
+    const typedKeep = [...M.mapKeys].filter(([, o]) => o.typed).map(([k]) => k);
+    const clear = [...M.mapKeys.keys()].filter((k) => !typedKeep.includes(k));
+    restore(M.base);
+    M.frontIds = M.baseFront ? [...M.baseFront] : null; M.frontSet = false;
+    M.history = []; M.mapKeys = new Map(); M.edited = false; M.sel = null; M.gestureBefore = null; M.note = ''; M.needsMatchNote = false;
+    structure();
+    M.m = measureNow(); M.lastMeasure = M.m;
+    pushing = true;
+    try { if (clear.length) clearOwnerCorrections(clear); } finally { pushing = false; }
+    paint(true);
+    D.toggle.focus({ preventScroll: true });
+    announce('Outlines reset to what we measured.');
+  }
+
+  /** the owner pressed Undo on a line in the list: take the outlines back to before the change that produced it */
+  function rollback(undone) {
+    let idx = M.history.findIndex((h) => h.keys.some((k) => undone.includes(k)));
+    if (idx < 0) idx = 0;
+    const dropped = M.history.slice(idx);
+    const droppedKeys = new Set(dropped.flatMap((h) => h.keys));
+    for (const k of undone) droppedKeys.add(k);
+    const target = M.history[idx]?.before ?? M.base;
+    restore(target);
+    M.history = M.history.slice(0, idx);
+    const clear = [];
+    for (const k of droppedKeys) {
+      const o = M.mapKeys.get(k);
+      M.mapKeys.delete(k);
+      if (o && !o.typed && !undone.includes(k)) clear.push(k);
+    }
+    M.edited = M.history.length > 0; M.sel = null; M.note = '';
+    structure();
+    M.m = measureNow(); M.lastMeasure = M.m;
+    if (clear.length) { pushing = true; try { clearOwnerCorrections(clear); } finally { pushing = false; } }
+    paint(true);
+  }
+
+  // ----- the photo ---------------------------------------------------------------------------------------------
+  function showCredit() {
+    const year = M.imageInfo?.date ? String(M.imageInfo.date).slice(0, 4) : '';
+    D.credit.textContent = `${M.imageInfo?.credit ?? core.credit}${/^\d{4}$/.test(year) ? `, ${year}` : ''}. It is a soft public photo, so treat it as a guide.`;
+    D.credit.hidden = false;
+  }
+  function loadPhoto() {
+    if (!M || M.imgState !== 'idle') return;
+    M.imgState = 'loading';
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const long = Math.max(SIDE_PX.min, Math.min(SIDE_PX.max, Math.round(Math.max(M.Wd, M.Hd) * dpr)));
+    const url = photoUrl(M.frame.bbox, long, core.usgs);
+    D.frame.dataset.photoUrl = url;
+    D.img.src = url;
+  }
+
+  // ----- update (called after every render of the page) -----------------------------------------------------
+  function update() {
+    let profile = null;
+    try { profile = getProfile(); } catch { profile = null; }
+    if (!profile) { if (M) { M = null; mount.hidden = true; } return; }
+    if (coreState === 'none') return;
+    const src = readSource();
+    if (!src || (!src.parcel && !src.buildings.length)) { if (M) { M = null; mount.hidden = true; } return; }
+    if (coreState !== 'ready') { loadCore(); return; }
+    if (pushing) return;
+    // a new property, or new outlines arriving for this one
+    const sigP = src.parcel ? sigOf(src.parcel) : 'none', sigB = src.buildings.map((b) => sigOf(b.polygon)).join('|');
+    if (M && M.sigP !== sigP) { clearTimeout(setupTimer); M = null; }
+    else if (M && M.sigB !== sigB && !M.starter && (!M.edited || !M.blds.length)) { refreshBuildings(src, sigB); return; }
+    if (!M) {
+      mount.hidden = true;
+      if (setupTimer) return;
+      // heavy work after the page has painted the list
+      setupTimer = requestAnimationFrame(() => { setupTimer = setTimeout(() => {
+        setupTimer = 0;
+        const s2 = readSource();
+        if (!s2 || !setup(s2)) { mount.hidden = true; return; }
+        build(); mount.hidden = false; layout(); structure(); D.sub.textContent = subline(); paint(true);
+        setTimeout(() => { if (M) loadPhoto(); }, 0);
+      }, 0); });
+      return;
+    }
+    // typed-over or undone lines
+    if (!pushing) {
+      const a = profile.attributes ?? {};
+      const undone = [];
+      for (const [k, o] of M.mapKeys) {
+        const at = a[k];
+        if (!at || at.tag !== 'owner-confirmed') undone.push(k);
+        else if (at.value !== o.pushed) o.typed = true;
+      }
+      if (undone.length) rollback(undone);
+    }
+  }
+  /** building outlines arrived (or changed) for the property on screen: swap them in place, keeping the frame and the photo */
+  function refreshBuildings(src, sigB) {
+    M.sigB = sigB; M.blds = [];
+    for (const b of src.buildings) { try { M.blds.push(makeShape(b.polygon, 'bld', b.main, b.main ? 'House' : 'Building')); } catch { /* skip */ } }
+    if (!M.blds.some((b) => b.main) && M.blds.length) M.blds[0].main = true;
+    M.base = snap(); M.history = []; M.mapKeys = new Map(); M.sel = null; M.gestureBefore = null;
+    const hasRef = (M.rest.streets && M.rest.streets.length) || M.rest.frontEdge || M.rest.frontPoint;
+    if (!hasRef && !M.frontSet) { const ids = inferFront(); M.frontIds = ids; M.baseFront = ids; M.base = snap(); }
+    M.m = measureNow(); M.lastMeasure = M.m;
+    structure(); paint(true);
+  }
+  const subline = () => (M.starter ? 'This is a starting box around your house. Drag the corners to match your lot.'
+    : M.parcelSource === 'estimated' ? 'This lot outline is an estimate. Drag the corners to match your lot.'
+      : 'These are the outlines we measured. Drag a corner if one is off.');
+
+  return { update };
+}

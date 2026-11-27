@@ -79,6 +79,7 @@ async function scenario(name, url, fn, { viewport = { width: 1280, height: 900 }
     }
     if (parsed.hostname === 'public.gis.lacounty.gov' && u.includes('CAMS_Locator')) { rec.other.push(u); return route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify({ candidates: [] }) }); }
     if (parsed.hostname === 'nominatim.openstreetmap.org') { rec.other.push(u); return route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: '[]' }); } // only after a real submit
+    if (/(^|\.)(imagery\.nationalmap\.gov|planetarycomputer\.microsoft\.com)$/.test(parsed.hostname)) return route.fulfill({ status: 404, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: '{}' });
     rec.external.push(u); allExternal.push(u);
     return route.abort('failed');
   });

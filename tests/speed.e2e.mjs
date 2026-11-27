@@ -33,9 +33,9 @@ const nominatimChicago = [{ _fixture_note: 'synthetic, shaped like the recorded 
   display_name: '121, North LaSalle Street, Chicago, Cook County, Illinois, 60602, United States', address: { house_number: '121', road: 'North LaSalle Street', city: 'Chicago', county: 'Cook County', state: 'Illinois', 'ISO3166-2-lvl4': 'US-IL', postcode: '60602', country_code: 'us' } }];
 const VENICE = '99999 Venice Blvd, Los Angeles, CA 90034';
 const DELAY = 400;
-const BUILDING_ROWS = ['floors', 'roof_area_sqft', 'building_footprint_sqft', 'front_yard_sqft', 'back_yard_sqft', 'side_yard_sqft', 'yard_area_sqft'];
+const BUILDING_ROWS = ['floors', 'roof_area_sqft', 'building_footprint_sqft', 'front_yard_sqft', 'back_yard_sqft', 'yard_area_sqft'];
 /** Hosts other data sources may ask (county lookup, Overture): mocked with a delayed "not here" answer. */
-const OTHER_SOURCES = /(^|\.)(geo\.fcc\.gov|tigerweb\.geo\.census\.gov|stac\.overturemaps\.org|amazonaws\.com)$/;
+const OTHER_SOURCES = /(^|\.)(geo\.fcc\.gov|tigerweb\.geo\.census\.gov|stac\.overturemaps\.org|amazonaws\.com|imagery\.nationalmap\.gov|planetarycomputer\.microsoft\.com)$/;
 
 let world = 'county';
 let slowOutlines = 0; // extra delay for the building outlines in one scenario
@@ -50,6 +50,7 @@ function answer(urlStr, range = null) {
     const o = chicagoOv.answer(urlStr, range);
     if (o) return { status: o.status, raw: Buffer.from(typeof o.body === 'string' ? o.body : o.body), type: o.type };
     if (u.hostname === 'photon.komoot.io') return { status: 200, body: { features: [] } };
+    if (OTHER_SOURCES.test(u.hostname)) return { status: 404, body: {} }; // other data sources (photo catalogue, road tiles): "not here"
     return null;
   }
   if (OTHER_SOURCES.test(u.hostname)) return { status: 404, body: {} };
@@ -218,7 +219,10 @@ await scenario('older path: screen < 2.5 s and settled < 8 s with Overpass never
   const settled = await waitSettled(page);
   assert.ok(settled < 8000, `settled after ${Math.round(settled)} ms`);
   checkProgress(await page.evaluate(() => window.__pv), 'older');
-  assert.ok(await page.locator('[data-opp-card]').count() >= 1, 'earnings shown');
+  assert.equal(await page.locator('#next-earn').isEnabled(), true);
+  const ms = await page.evaluate(() => { const t0 = performance.now(); document.getElementById('next-earn').click(); return { sync: performance.now() - t0, ready: Boolean(document.getElementById('earn-headline')) }; });
+  assert.ok(ms.ready && ms.sync < 300, `page 2 rendered in ${Math.round(ms.sync)} ms after Next`);
+  assert.ok(await page.locator('[data-opp-card]').count() >= 1, 'earnings shown on page 2');
   timings.push(`older path (mocked 400 ms, Overpass never answers): screen ${Math.round(main)} ms, settled ${Math.round(settled)} ms`);
 });
 
@@ -244,6 +248,28 @@ await scenario('late values never move focus or replace what the owner is typing
   assert.equal(await page.evaluate(() => document.activeElement.id), 'f-parking_spaces');
   assert.equal(await page.inputValue('#f-parking_spaces'), '2');
   assert.equal(await page.inputValue('#f-floors'), '3', 'owner value still wins after everything arrived');
+  slowOutlines = 0;
+});
+
+await scenario('Next does not wait for late facts; facts arriving while on page 2 update it without moving focus or typed text', async (page) => {
+  world = 'county'; slowOutlines = 2500;
+  await timedLookup(page, SFR);
+  assert.ok(await page.locator('.fact[data-key="floors"][data-state="loading"]').count() === 1, 'floors still loading');
+  assert.equal(await page.locator('#next-earn').isEnabled(), true, 'Next is enabled while facts are still arriving');
+  const ms = await page.evaluate(() => { const t0 = performance.now(); document.getElementById('next-earn').click(); return { sync: performance.now() - t0, ready: Boolean(document.getElementById('earn-headline')) }; });
+  assert.ok(ms.ready && ms.sync < 300, `page 2 rendered in ${Math.round(ms.sync)} ms`);
+  const head0 = await page.evaluate(() => document.getElementById('earn-headline').textContent);
+  await page.click('#max-upfront');
+  await page.keyboard.type('5000');
+  await page.waitForFunction(() => document.getElementById('progress').hidden, null, { timeout: 15000 });
+  await page.waitForFunction(() => /Estimates updated/.test(document.getElementById('status').textContent), null, { timeout: 8000 });
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'max-upfront', 'focus stayed where the owner was');
+  assert.equal(await page.inputValue('#max-upfront'), '5000', 'typed text kept');
+  assert.equal(await page.locator('#view-earn').isVisible(), true, 'still on page 2');
+  assert.ok(head0.length > 0);
+  await page.click('#back-property');
+  await page.waitForSelector('#facts');
+  assert.notEqual(await page.inputValue('#f-floors'), '', 'the late fact is on page 1 now');
   slowOutlines = 0;
 });
 

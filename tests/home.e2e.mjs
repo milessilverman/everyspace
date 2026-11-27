@@ -27,7 +27,7 @@ function answer(urlStr) {
   if (u.hostname.endsWith('lacounty.gov') && dec.includes('CAMS_Locator')) return { status: 200, body: dec.includes('/suggest') ? { suggestions: [] } : { candidates: [] } };
   if (u.hostname.endsWith('lacounty.gov')) return { status: 200, body: fx('arcgis-la-parcel.json') };
   if (u.hostname.includes('overpass')) return { status: 200, body: dec.includes('34.0516') ? fx('overpass-no-features.json') : fx('overpass-la.json') };
-  if (/(^|\.)(geo\.fcc\.gov|tigerweb\.geo\.census\.gov|stac\.overturemaps\.org|amazonaws\.com)$/.test(u.hostname)) return { status: 404, body: {} }; // other data sources: "not here"
+  if (/(^|\.)(geo\.fcc\.gov|tigerweb\.geo\.census\.gov|stac\.overturemaps\.org|amazonaws\.com|imagery\.nationalmap\.gov|planetarycomputer\.microsoft\.com)$/.test(u.hostname)) return { status: 404, body: {} }; // other data sources: "not here"
   return null;
 }
 

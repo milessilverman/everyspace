@@ -29,7 +29,7 @@ function answer(urlStr) {
   if (u.hostname.endsWith('lacounty.gov') && dec.includes('CAMS_Locator')) return { json: dec.includes('/suggest') ? { suggestions: [] } : { candidates: [] } };
   if (u.hostname.endsWith('lacounty.gov')) return { json: fx('arcgis-la-parcel.json') };
   if (u.hostname.includes('overpass')) return { json: dec.includes('34.0516') ? fx('overpass-no-features.json') : fx('overpass-la.json') };
-  if (/(^|\.)(geo\.fcc\.gov|tigerweb\.geo\.census\.gov|stac\.overturemaps\.org|amazonaws\.com)$/.test(u.hostname)) return { json: {}, status: 404 }; // other data sources: "not here"
+  if (/(^|\.)(geo\.fcc\.gov|tigerweb\.geo\.census\.gov|stac\.overturemaps\.org|amazonaws\.com|imagery\.nationalmap\.gov|planetarycomputer\.microsoft\.com)$/.test(u.hostname)) return { json: {}, status: 404 }; // other data sources: "not here"
   return null;
 }
 // What the Host Console asks the outside world for: fonts and the Supabase script. Only its sign-in screen is asserted.
