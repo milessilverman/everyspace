@@ -11,6 +11,7 @@ import { googleSolar, parseBuildingInsights } from '../providers/google-solar.js
 import { normalizePlace } from '../providers/google-places.js';
 import { compareValues, redact, callJson, qs } from '../providers/util.js';
 import { polygonAreaSqft } from '../geometry.js';
+import { PARCEL_SERVICES as parcelServicesSync } from '../data/parcel-services.js';
 
 const fx = (n) => JSON.parse(readFileSync(new URL(`./fixtures/providers/${n}`, import.meta.url), 'utf8'));
 const NOW = '2026-11-27T12:00:00Z';
@@ -116,7 +117,7 @@ test('registry: swapping in another vendor (ATTOM/Regrid-like) is one file + one
 
 test('default registry: ids, kinds, honesty flags and licence notes', async () => {
   const r = await createDefaultRegistry();
-  assert.deepEqual(r.list().map((p) => p.id).sort(), ['census-address', 'google-solar', 'la-assessor', 'la-cams-address', 'lariac-buildings', 'rentcast']);
+  assert.deepEqual(r.list().map((p) => p.id).sort(), ['census-address', 'google-solar', 'la-assessor', 'la-cams-address', 'lariac-buildings', 'overture-buildings', 'parcel-registry', 'rentcast']);
   for (const p of r.list()) { assert.equal(typeof p.needsKey, 'boolean'); assert.ok(p.licenseNote.length > 10); assert.ok('retentionDays' in p); assert.ok(p.coverage); }
   assert.equal(rentcast.verified, false); assert.equal(googleSolar.verified, false); assert.equal(googleSolar.retentionDays, 30);
   assert.match(googleSolar.licenseNote, /caching/); assert.equal(rentcast.needsKey, true); assert.equal(googleSolar.needsKey, true);
@@ -454,7 +455,7 @@ test('polygon helpers agree: the synthetic parcel is 6,500 sq ft', () => {
 test('browser registry: only keyless providers that answer cross-origin, in order locator, assessor, footprints', async () => {
   const { createBrowserRegistry, countyLocator } = await import('../providers/browser.js');
   const reg = createBrowserRegistry();
-  assert.deepEqual(reg.list().map((p) => p.id), ['la-cams-address', 'la-assessor', 'lariac-buildings']);
+  assert.deepEqual(reg.list().map((p) => p.id), ['la-cams-address', 'la-assessor', 'parcel-registry', 'lariac-buildings', 'overture-buildings']);
   assert.ok(reg.list().every((p) => p.needsKey === false));
   for (const id of ['census-address', 'rentcast', 'google-solar', 'google-places']) assert.equal(reg.get(id), null, `${id} must not be in the browser registry`);
   const j = { state: 'CA', countyFips: '06037' };
@@ -487,4 +488,39 @@ test('browserSplitYard: refuses a front point that is inside the lot, far away o
   assert.equal(seen.length, 0, 'the splitter was never reached');
   assert.equal(wrap({ parcel, frontPoint: { lat: 33.99997, lng: -118.29992 } }).passed, true);
   assert.equal(seen.length, 1);
+});
+
+// ---- REUSE-B: footprint / records order with Overture and the nationwide parcel registry ---------------------------------------------
+test('default registry order: LARIAC (with its Overture fallback) in LA County; outside LA only Overture; records: assessor in LA, parcel-registry elsewhere', async () => {
+  const r = await createDefaultRegistry();
+  const ids = (kind, j) => r.providersFor(kind, { jurisdiction: j, keys: {} }).providers.map((p) => p.id);
+  assert.deepEqual(ids('footprint', { state: 'CA', countyFips: '06037' }), ['lariac-buildings'], 'one provider in LA County: LARIAC, with Overture inside it as the fallback');
+  assert.deepEqual(ids('footprint', { state: 'CA', countyFips: '06059' }), ['overture-buildings']);
+  assert.deepEqual(ids('footprint', { state: 'IL', countyFips: '17031' }), ['overture-buildings']);
+  assert.deepEqual(ids('records', { state: 'CA', countyFips: '06037' }), ['la-assessor'], 'LA County keeps the richer assessor provider only');
+  assert.deepEqual(ids('records', { state: 'IL', countyFips: '17031' }), ['parcel-registry']);
+  assert.equal(r.get('overture-buildings').needsKey, false); assert.equal(r.get('parcel-registry').needsKey, false);
+  assert.equal(covers({ national: true, exceptCountyFips: ['06037'] }, { state: 'CA', countyFips: '06037' }), false);
+  assert.equal(covers({ national: true, exceptCountyFips: ['06037'] }, { state: 'CA' }), true);
+  assert.equal(covers({ national: true }, { state: 'CA', countyFips: '06037' }), true);
+});
+
+test('browser registry: Overture is in (CORS verified), the parcel registry skips untested services, opt-in tries them; suggestionSources is empty', async () => {
+  const { createBrowserRegistry, suggestionSources } = await import('../providers/browser.js');
+  const reg = createBrowserRegistry();
+  assert.equal(reg.get('overture-buildings').needsKey, false);
+  assert.deepEqual(reg.providersFor('footprint', { jurisdiction: { state: 'AZ' } }).providers.map((p) => p.id), ['overture-buildings']);
+  const calls = [];
+  const f = async (u) => { calls.push(String(u)); throw new Error('no network in this test'); };
+  const pr = reg.get('parcel-registry');
+  const r = await pr.lookup({ lat: 33.45, lng: -112.07, jurisdiction: { state: 'AZ', countyFips: '04013', county: 'Maricopa County' } }, { fetch: f, now: NOW });
+  assert.equal(r.ok, false); assert.equal(calls.length, 0, 'not one request went to an untested county server');
+  assert.ok(r.code === 'cors_unverified' || r.code === 'no_service', r.code);
+  const az = parcelServicesSync.find((s) => s.coverage.state === 'AZ' && s.coverage.countyFips);
+  const r2 = await pr.lookup({ lat: 33.45, lng: -112.07, jurisdiction: { state: 'AZ', countyFips: az.coverage.countyFips } }, { fetch: f, now: NOW });
+  assert.equal(r2.code, 'cors_unverified'); assert.match(r2.reason, /CORS not verified/);
+  const tried = createBrowserRegistry({ tryUnverifiedParcelServices: true }).get('parcel-registry');
+  const r3 = await tried.lookup({ lat: 33.45, lng: -112.07, jurisdiction: { state: 'AZ', countyFips: az.coverage.countyFips } }, { fetch: f, now: NOW });
+  assert.equal(calls.length, 1, 'the opt-in asked the one county service'); assert.equal(r3.ok, false); assert.match(r3.reason, /no network in this test/);
+  assert.deepEqual(suggestionSources(), []);
 });

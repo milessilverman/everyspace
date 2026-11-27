@@ -19,7 +19,8 @@ function validate(p) {
 /** @param {any} coverage @param {{state?:string, countyFips?:string}|undefined} j */
 export function covers(coverage, j) {
   if (!j) return true;
-  if (coverage.national) return true;
+  // {national:true, exceptCountyFips:[...]}: everywhere except counties another provider serves better (parcel-registry leaves out LA County)
+  if (coverage.national) return !(j.countyFips && Array.isArray(coverage.exceptCountyFips) && coverage.exceptCountyFips.includes(j.countyFips));
   if (j.state && coverage.state.toUpperCase() !== j.state.toUpperCase()) return false;
   if (coverage.countyFips && j.countyFips && coverage.countyFips !== j.countyFips) return false;
   return true;
@@ -64,13 +65,18 @@ export const get = (/** @type {string} */ id) => shared.get(id);
 export const list = (/** @type {string} [kind] */ kind) => shared.list(kind);
 export const providersFor = (/** @type {string} */ kind, /** @type {any} */ opts) => shared.providersFor(kind, opts);
 
-/** The built-in providers, in a fresh registry. Imported lazily so registry.js has no import cycle with adapters. */
+/**
+ * The built-in providers, in a fresh registry. Imported lazily so registry.js has no import cycle with adapters.
+ * Footprints: in LA County the one provider is LARIAC wrapped by withOvertureFallback (LARIAC first; Overture only when LARIAC finds
+ * nothing or fails); everywhere else it is Overture (coverage: national except LA County). Records: the keyed primary, then the LA
+ * assessor (LA County only), then the nationwide parcel registry (national except LA County). The assembler needs no change to get this.
+ */
 export async function createDefaultRegistry() {
-  const [{ laAssessor }, { lariacBuildings }, { laCamsAddress }, { censusAddress }, { rentcast }, { googleSolar }] = await Promise.all([
+  const [{ laAssessor }, { lariacBuildings }, { laCamsAddress }, { censusAddress }, { rentcast }, { googleSolar }, { overtureBuildings, withOvertureFallback }, { parcelRegistry }] = await Promise.all([
     import('./la-assessor.js'), import('./lariac-buildings.js'), import('./la-cams-address.js'), import('./census-address.js'),
-    import('./rentcast.js'), import('./google-solar.js'),
+    import('./rentcast.js'), import('./google-solar.js'), import('./overture-buildings.js'), import('./parcel-registry.js'),
   ]);
   const r = createRegistry();
-  for (const p of [laCamsAddress, censusAddress, rentcast, laAssessor, googleSolar, lariacBuildings]) r.register(p);
+  for (const p of [laCamsAddress, censusAddress, rentcast, laAssessor, parcelRegistry, googleSolar, withOvertureFallback(lariacBuildings), overtureBuildings]) r.register(p);
   return r;
 }

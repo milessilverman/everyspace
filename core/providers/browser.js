@@ -4,11 +4,19 @@
 // docs/property-data.md "Browser wiring"). So: the LA County locator, the LA County assessor parcel layer and the LARIAC
 // building outlines. NOT included: the Census geocoder (no CORS header), RentCast / Google Solar / Google Places (need keys).
 // No Google code is loaded from here.
+// Added 2026-11-27 (REUSE-B): Overture buildings (the catalog host stac.overturemaps.org answers `access-control-allow-origin: *` and the
+// tile host overturemaps-extras-us-west-2.s3.us-west-2.amazonaws.com answers a ranged GET with `access-control-allow-origin: *` and exposes
+// Content-Range, both checked live 2026-11-27) and the nationwide parcel registry restricted to services whose CORS support was verified
+// (`corsStatus: 'verified'`; today only LA County, which the assessor provider serves, so outside LA the registry answers with the reason
+// "CORS not verified" instead of firing requests at 130 servers nobody tested). `createBrowserRegistry({tryUnverifiedParcelServices:true})`
+// tries a county's untested service anyway, with a 4 s timeout: a CORS block looks like a network error and costs one failed request.
 
 import { createRegistry } from './registry.js';
 import { laCamsAddress } from './la-cams-address.js';
 import { laAssessor } from './la-assessor.js';
 import { lariacBuildings } from './lariac-buildings.js';
+import { overtureBuildings, withOvertureFallback } from './overture-buildings.js';
+import { createParcelRegistryProvider } from './parcel-registry.js';
 import { pointInPolygon } from '../geometry.js';
 import { distanceToPolygonM } from '../property-profile.js';
 
@@ -32,10 +40,22 @@ export const countyLocator = {
   },
 };
 
-/** Fresh registry: county locator, then assessor records + parcel polygon, then LARIAC footprints. Nothing else. */
-export function createBrowserRegistry() {
-  return createRegistry().register(countyLocator).register(laAssessor).register(lariacBuildings);
+/**
+ * Fresh registry: county locator; assessor records + parcel polygon (LA County) and the nationwide parcel registry (CORS-verified services
+ * only unless `tryUnverifiedParcelServices`); footprints: LARIAC with an Overture fallback in LA County, Overture elsewhere.
+ * @param {{tryUnverifiedParcelServices?:boolean}} [opts]
+ */
+export function createBrowserRegistry(opts = {}) {
+  const parcels = createParcelRegistryProvider({ corsMode: opts.tryUnverifiedParcelServices ? 'try-unverified' : 'verified-only' });
+  return createRegistry().register(countyLocator).register(laAssessor).register(parcels).register(withOvertureFallback(lariacBuildings)).register(overtureBuildings);
 }
+
+/**
+ * Extra address-suggestion sources for the address field (estimate/address-suggest.js reads this if present). None yet: the county
+ * locator is the only source. Each future entry would be `{id, label, suggest(text, deps)}`.
+ * @returns {Array<{id:string, label:string, suggest:Function}>}
+ */
+export function suggestionSources() { return []; }
 
 /**
  * Wrap core/yard.js splitYard for the browser. Without a front point that is outside the parcel and close to it, no front

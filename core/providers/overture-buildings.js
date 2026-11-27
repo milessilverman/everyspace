@@ -3,9 +3,10 @@
 //
 // PORTED FROM StreetForge streetforge2d.html (read-only reference):
 //   13596-13597  release catalog + tile-file URL (`OV`)         -> OVERTURE_CATALOG_URL, tileFileUrl
-//   13631-13638  `ovFile`: current release from the catalog, remembered one day, refreshed once if the file is gone -> resolveRelease/openFile
+//   13631-13638  `ovFile`: current release from the catalog, remembered one day, refreshed once if the file is gone -> resolveRelease + lookup
 //   13639-13662  `overtureBuildings`: tile maths (zoom min(14, maxz)), `building` layer, filters, tile units -> lng/lat, fragments by id
-//   13663-13680 (`addMissingBuildings`, only its 8 m2 speck filter; its overlap test against a base map is NOT ported: Everyspace has no base map layer)
+//   13689-13700  `addMissingBuildings`: ONLY its 8 m2 speck filter (`if(a<8)continue`); its overlap test against a base map is not ported
+//   13684-13687  `overtureFor`: 5-minute outage memo and result cache: NOT ported (callers decide whether to retry)
 //   PMTiles + vector-tile decoding: see ./pmtiles.js (ported from 13598-13630).
 // What StreetForge actually does: reads the public `buildings.pmtiles` of the current release by HTTP range requests (16 KB header+root
 // directory, one leaf directory, one gzip tile per z14 tile), decodes the Mapbox Vector Tile `building` layer in plain JavaScript
@@ -23,7 +24,7 @@
 import { polygonAreaSqft, pointInPolygon, centroid } from '../geometry.js';
 import { CONFIDENCE, isoNow } from '../parcel.js';
 import { fail, round } from './util.js';
-import { createPmtilesReader, decodeMvtLayer, decodePolygons, tilePointToLngLat, lngToTileX, latToTileY, PmtilesError } from './pmtiles.js';
+import { createPmtilesReader, decodeMvtLayer, decodePolygons, tilePointToLngLat, lngToTileX, latToTileY, raceTimeout, PmtilesError } from './pmtiles.js';
 
 export const OVERTURE_CATALOG_URL = 'https://stac.overturemaps.org/catalog.json';
 /** @param {string} release @param {string} [theme] */
@@ -45,7 +46,7 @@ const DEFAULT_RADIUS_M = 40;
 
 /** Cache of the current release (one day) and of PMTiles directories (per file). */
 export function createOvertureCache() {
-  return { release: /** @type {{release:string, atMs:number}|null} */ (null), dirs: /** @type {Map<string, any[]>} */ (new Map()) };
+  return { release: /** @type {{release:string, atMs:number}|null} */ (null), dirs: /** @type {Map<string, any>} */ (new Map()) };
 }
 let shared = createOvertureCache();
 /** Forget the module-level cache (tests, or to force a fresh catalog read). */
@@ -90,20 +91,19 @@ async function resolveRelease(deps, cache, nowMs, stats, force = false) {
   if (!force && cache.release && nowMs - cache.release.atMs < DAY_MS) return { ok: true, release: cache.release.release, fromCache: true };
   const ctl = new AbortController();
   const timeoutMs = deps.timeoutMs ?? 12000;
-  let timedOut = false;
-  const timer = setTimeout(() => { timedOut = true; ctl.abort(); }, timeoutMs);
   try {
     stats.requests++;
-    const res = await deps.fetch(OVERTURE_CATALOG_URL, { signal: ctl.signal, credentials: 'omit', headers: { Accept: 'application/json' } });
+    const res = await raceTimeout(Promise.resolve(deps.fetch(OVERTURE_CATALOG_URL, { signal: ctl.signal, credentials: 'omit', headers: { Accept: 'application/json' } })), timeoutMs, () => ctl.abort());
     if (!res?.ok) return { ok: false, reason: `Overture catalog unreachable: HTTP ${res?.status ?? 'error'}`, code: 'catalog_unreachable' };
     let j;
-    try { j = await res.json(); } catch { return { ok: false, reason: 'Overture catalog is not valid JSON', code: 'catalog_unreachable' }; }
+    try { const t = await raceTimeout(Promise.resolve(res.text()), timeoutMs, () => ctl.abort()); stats.bytes += new TextEncoder().encode(t).length; j = JSON.parse(t); } catch (e2) { if (e2 instanceof PmtilesError && e2.code === 'timeout') throw e2; return { ok: false, reason: 'Overture catalog is not valid JSON', code: 'catalog_unreachable' }; }
     if (!j || typeof j.latest !== 'string' || !RELEASE_RE.test(j.latest)) return { ok: false, reason: 'Overture catalog names no usable current release', code: 'catalog_unreachable' };
     cache.release = { release: j.latest, atMs: nowMs };
     return { ok: true, release: j.latest, fromCache: false };
   } catch (e) {
+    const timedOut = (e instanceof PmtilesError && e.code === 'timeout') || (e instanceof Error && e.name === 'AbortError');
     return { ok: false, reason: timedOut ? `Overture catalog timeout after ${timeoutMs} ms` : `Overture catalog unreachable: ${e instanceof Error ? e.message : String(e)}`, code: timedOut ? 'timeout' : 'catalog_unreachable' };
-  } finally { clearTimeout(timer); }
+  }
 }
 
 /**
@@ -228,8 +228,11 @@ async function lookup(q, deps) {
   const buildings = [];
   for (const b of raw) {
     const c = mainCentroid(b.polygon);
-    const on = q.parcel ? pointInPolygon(c, q.parcel) : pointInPolygon({ lat: q.lat, lng: q.lng }, b.polygon) || withinRadius(c, q, q.radiusM ?? DEFAULT_RADIUS_M);
+    // with a parcel: on = the building's centroid lies on the parcel (as LARIAC does). Without one: on = the building contains the point,
+    // and a building is kept only if it contains the point or its centroid is within radiusM of it.
+    const on = q.parcel ? pointInPolygon(c, q.parcel) : pointInPolygon({ lat: q.lat, lng: q.lng }, b.polygon);
     if (q.parcel && !on) { if (!includeNear) { counts.outsideParcel++; continue; } counts.near++; }
+    if (!q.parcel && !on && !withinRadius(c, q, q.radiusM ?? DEFAULT_RADIUS_M)) { counts.outsideParcel++; continue; }
     if (b.partial) { counts.partial++; warnings.push(`building ${b.id} is cut by a map-tile edge; its footprint is the largest piece only`); }
     const p = b.props;
     const h = posNum(p.height), fl = posNum(p.num_floors);
@@ -266,7 +269,33 @@ function failFrom(e, what) {
 /** @type {import('./types.js').FootprintProvider} */
 export const overtureBuildings = {
   id: 'overture-buildings', label: SOURCE_NAME, kind: 'footprint', needsKey: false, role: 'fallback', priority: 50, verified: true,
-  coverage: { national: true }, retentionDays: null,
+  // everywhere except Los Angeles County, where it is reached only as the fallback inside the LARIAC provider (see withOvertureFallback)
+  coverage: /** @type {any} */ ({ national: true, exceptCountyFips: ['06037'] }), retentionDays: null,
   licenseNote: 'ODbL 1.0, Overture Maps Foundation (buildings theme; includes OpenStreetMap and ML-detected footprints). Attribution: "Drafted buildings: Overture Maps Foundation (ODbL)". Share-alike applies to a derived database; confirm before storing at scale.',
   lookup,
 };
+
+/**
+ * A footprint provider that asks `primary` (LARIAC) first and asks Overture ONLY when the primary found no building or failed, so the
+ * assembler (which calls every footprint provider it is given) pays Overture's ~5 requests / ~400 KB only when it is needed.
+ * Same id, kind, coverage and key rules as the primary. When Overture answers, the result says so: `source` is Overture's, `fallbackFrom`
+ * names the primary and why it was not used, `warnings` repeats it. If Overture finds nothing either, the PRIMARY's own result
+ * (empty or failed) is returned unchanged.
+ * @param {import('./types.js').FootprintProvider} primary
+ * @param {import('./types.js').FootprintProvider} [overture]
+ * @returns {import('./types.js').FootprintProvider}
+ */
+export function withOvertureFallback(primary, overture = overtureBuildings) {
+  return {
+    ...primary,
+    licenseNote: `${primary.licenseNote} If it finds no building, Overture Maps buildings (ODbL; "${ATTRIBUTION_TEXT}") are used instead and the result says so.`,
+    async lookup(q, deps) {
+      const r = await primary.lookup(q, deps);
+      if (r.ok && r.buildings.length) return r;
+      const why = r.ok ? `${primary.id} found no building on the parcel` : `${primary.id} failed: ${r.reason}`;
+      const o = await overture.lookup(q, deps);
+      if (!o.ok || !o.buildings.length) return r;
+      return { ...o, fallbackFrom: primary.id, fallbackReason: why, warnings: [...(o.warnings ?? []), `${why}; building outlines come from Overture Maps instead`] };
+    },
+  };
+}

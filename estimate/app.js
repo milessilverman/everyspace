@@ -1,12 +1,12 @@
 // Everyspace public income estimator. UI and glue only: every number shown comes from the /core modules.
-// Nothing the visitor types is stored (no localStorage, cookies, analytics or account). Network calls: address suggestions
-// (Los Angeles County's public address service, after 5 typed characters, see address-suggest.js) and, only after an explicit
-// submit, the lookups: first Los Angeles County's public services (county-path.js), and only when those cannot answer the
-// older path in core/parcel.js (OpenStreetMap Nominatim, the county parcel service, Overpass).
-import { resolveAddress, BROWSER_GEOCODERS } from '../core/parcel.js';
-import { runCountyPath } from './county-path.js';
+// Nothing the visitor types is stored (no localStorage, cookies, analytics or account); everything lives in memory.
+// Network: address suggestions while typing (address-suggest.js) and, only after an explicit submit, the property lookup
+// (county-path.js): Los Angeles County's public services first, the older OpenStreetMap path only when those cannot answer.
+// The property screen appears as soon as the address and the parcel records are in; building-derived values and the
+// optional map extras fill in afterwards without moving focus or replacing anything the owner typed.
+import { runCountyPath, runOlderPath, sessionFetch, mergeProfile } from './county-path.js';
 import { attachAddressSuggest } from './address-suggest.js';
-import { createProfile, applyOwnerCorrection, summarize as summarizeProfile } from '../core/profile.js';
+import { createProfile } from '../core/profile.js';
 import { confidenceLabel } from '../core/provenance.js';
 import { identifyOpportunities, missingEvidence, defaultResourceCapacity } from '../core/opportunities.js';
 import { defaultInputs, withOverrides, estimateOpportunity, summarize, INPUT_KEYS } from '../core/revenue.js';
@@ -39,16 +39,15 @@ const dateText = (iso) => {
 // ---------------------------------------------------------------------------------------------------------------
 // vocabulary
 // ---------------------------------------------------------------------------------------------------------------
-const TAG_WORDS = { measured: 'Measured', estimated: 'Estimated', 'owner-confirmed': 'You confirmed', unavailable: 'Not available' };
+const TAG_WORDS = { measured: 'Measured', estimated: 'Estimated', 'owner-confirmed': 'You confirmed', unavailable: 'Not set' };
 const TAG_CLASS = { measured: 'ok', estimated: 'warn', 'owner-confirmed': 'accent', unavailable: '' };
 const TAG_HELP = {
   measured: 'Read from an official record or computed from a recorded outline.',
-  estimated: 'Worked out by a rule of thumb or from map data that may be incomplete. Please check it.',
-  'owner-confirmed': 'You entered or confirmed this value, so it overrides automated values.',
-  unavailable: 'We could not find this. Fill it in if you know it.',
+  estimated: 'Worked out by a rule of thumb. Change it if you know better.',
+  'owner-confirmed': 'You entered or confirmed this value, so it is used instead of the planning default.',
+  unavailable: 'Enter it to include it.',
 };
 const CONF_WORDS = { low: 'Low', medium: 'Medium', high: 'High' };
-const STEP_NAMES = { geocode: 'Address search', parcel: 'Parcel record', buildings: 'Buildings', pool: 'Pool', transit: 'Transit stops' };
 const GOAL_LABELS = {
   max_net_income: 'Most net income',
   min_upfront: 'Least money up front',
@@ -71,32 +70,46 @@ const PROPERTY_TYPES = [
 ];
 const EQUIPMENT = [['atv', 'ATV'], ['snowmobile', 'Snowmobile'], ['kayak', 'Kayak'], ['boat', 'Boat'], ['jet_ski', 'Jet ski'], ['ebike', 'E-bike'], ['camper', 'Camper']];
 
-const ATTR_LABELS = {
-  address: 'Address', location: 'Map location', jurisdiction: 'City and state', parcel_id: 'Parcel number (APN)', parcel_boundary: 'Parcel outline',
-  lot_area_sqft: 'Lot size', property_type: 'Property type', use_type: 'Assessor use type', year_built: 'Year built', bedrooms: 'Bedrooms',
-  living_area_sqft: 'Living area', units: 'Number of units', buildings: 'Buildings on the lot', building_footprint_sqft: 'Building footprint',
-  roof_area_sqft: 'Roof area', yard_area_sqft: 'Yard area (all open ground)', floors: 'Floors', bathrooms: 'Bathrooms', front_yard_sqft: 'Front yard',
-  back_yard_sqft: 'Back yard', side_yard_sqft: 'Side yard', use_code: 'Assessor use code', driveway_area_sqft: 'Driveway area', parking_spaces: 'Parking spaces',
-  garage_present: 'Garage', pool_present: 'Pool', adu_present: 'Guest house or ADU', zoning: 'Zoning', transit_distance_m: 'Distance to transit',
-  demand_generators: 'Nearby venues and events', equipment_owned: 'Gear you could rent out',
+// ---- the owner's property list --------------------------------------------------------------------------------------
+/** Always listed, in this order (an empty input when nothing was found). */
+const FACT_ORDER = ['lot_area_sqft', 'living_area_sqft', 'bedrooms', 'bathrooms', 'floors', 'year_built', 'roof_area_sqft', 'front_yard_sqft',
+  'back_yard_sqft', 'side_yard_sqft', 'yard_area_sqft', 'building_footprint_sqft', 'pool_present', 'parking_spaces', 'garage_present', 'property_type'];
+/** Listed after those when the profile has a value for them, in this order; any other owner-meaningful attribute follows. */
+const MORE_ORDER = ['units', 'driveway_area_sqft', 'adu_present', 'zoning', 'transit_distance_m'];
+/** Never listed: map and record internals. Address and parcel number appear once in the heading. */
+const HIDDEN = new Set(['address', 'location', 'jurisdiction', 'parcel_id', 'parcel_boundary', 'use_code', 'use_type', 'buildings', 'place_id',
+  'demand_generators', 'equipment_owned', 'lat', 'lng', 'apn']);
+const HIDDEN_RE = /(^|_)(id|ids|code|codes|boundary|polygon|geometry|location|lat|lng|source|sources|url|count|counts|mapped|raw|fips|method)$/;
+const LABELS = {
+  lot_area_sqft: 'Lot size', living_area_sqft: 'Home size', bedrooms: 'Bedrooms', bathrooms: 'Bathrooms', floors: 'Floors', year_built: 'Year built',
+  roof_area_sqft: 'Roof area', front_yard_sqft: 'Front yard', back_yard_sqft: 'Back yard', side_yard_sqft: 'Side yard', yard_area_sqft: 'Yard (total open ground)',
+  building_footprint_sqft: 'Building footprint', pool_present: 'Pool', parking_spaces: 'Parking spaces', garage_present: 'Garage', property_type: 'Property type',
+  units: 'Units', driveway_area_sqft: 'Driveway area', adu_present: 'Guest house or ADU', zoning: 'Zoning', transit_distance_m: 'Nearest bus or train stop',
+  address: 'Address', parcel_id: 'Parcel number',
 };
-const humanKeys = (t) => t.replace(/\b[a-z]+(?:_[a-z]+)+\b/g, (k) => (ATTR_LABELS[k] ?? k.replace(/_/g, ' ')).toLowerCase());
-const attrLabel = (k) => ATTR_LABELS[k] ?? cap(k.replace(/_/g, ' ').replace(/\bavailable$/, 'available'));
-const UNIT_OF = { lot_area_sqft: 'sqft', living_area_sqft: 'sqft', building_footprint_sqft: 'sqft', roof_area_sqft: 'sqft', yard_area_sqft: 'sqft', front_yard_sqft: 'sqft', back_yard_sqft: 'sqft', side_yard_sqft: 'sqft', driveway_area_sqft: 'sqft', transit_distance_m: 'm' };
-const NUMBER_KEYS = new Set(['lot_area_sqft', 'year_built', 'bedrooms', 'bathrooms', 'floors', 'front_yard_sqft', 'back_yard_sqft', 'side_yard_sqft', 'living_area_sqft', 'units', 'building_footprint_sqft', 'roof_area_sqft', 'yard_area_sqft', 'driveway_area_sqft', 'parking_spaces', 'transit_distance_m']);
-const TEXT_KEYS = new Set(['address', 'use_type', 'use_code', 'parcel_id', 'zoning']);
-const READONLY_KEYS = new Set(['location', 'parcel_boundary', 'buildings', 'demand_generators']);
-const kindOf = (key) => {
+const factLabel = (k) => LABELS[k] ?? cap(k.replace(/_(sqft|present|available|m|ft)$/, '').replace(/_/g, ' '));
+const INT_KEYS = new Set(['year_built', 'bedrooms', 'units', 'parking_spaces', 'floors']);
+const NUMBER_KEYS = new Set(['lot_area_sqft', 'year_built', 'bedrooms', 'bathrooms', 'floors', 'front_yard_sqft', 'back_yard_sqft', 'side_yard_sqft', 'living_area_sqft', 'units',
+  'building_footprint_sqft', 'roof_area_sqft', 'yard_area_sqft', 'driveway_area_sqft', 'parking_spaces', 'transit_distance_m']);
+/** Unit shown next to a number, and the factor from the stored value to what is shown (metres are shown in feet). */
+function unitOf(key) {
+  if (/_sqft$/.test(key)) return { label: 'sq ft', store: 'sqft', factor: 1 };
+  if (/_m$/.test(key)) return { label: 'ft', store: 'm', factor: 3.28084 };
+  if (/_ft$/.test(key)) return { label: 'ft', store: 'ft', factor: 1 };
+  return { label: '', store: undefined, factor: 1 };
+}
+const isBoolKey = (k) => /_(present|available)$/.test(k) || k === 'waterfront_access';
+function kindOf(key, value) {
   if (key === 'property_type') return 'type';
-  if (key === 'jurisdiction') return 'jurisdiction';
   if (key === 'equipment_owned') return 'equipment';
-  if (READONLY_KEYS.has(key)) return 'readonly';
-  if (TEXT_KEYS.has(key)) return 'text';
-  if (NUMBER_KEYS.has(key)) return 'number';
-  if (/_(present|available)$/.test(key) || key === 'waterfront_access') return 'bool';
-  return 'number';
-};
+  if (isBoolKey(key) || typeof value === 'boolean') return 'bool';
+  if (NUMBER_KEYS.has(key) || typeof value === 'number' || /_(sqft|m|ft|spaces)$/.test(key)) return 'number';
+  if (typeof value === 'string' || key === 'zoning') return 'text';
+  return null; // objects and lists are not owner facts
+}
+const ESTIMATE_TIP = 'Estimated — change it if you know the exact figure';
 
+// ---- earnings inputs ----------------------------------------------------------------------------------------------------
 const INPUT_LABEL = (key, unit) => ({
   priceCents: `Price per ${unit}`, unitsPerMonth: `${cap(unit)}s rented per month`, capacityUnitsPerMonth: `${cap(unit)}s available per month`,
   bookingsPerMonth: 'Bookings per month', platformFeeRate: 'Listing-site fee', cleaningCentsPerBooking: 'Cleaning cost per booking',
@@ -114,98 +127,165 @@ const COST_LINES = [
   ['insuranceCentsPerMonth', 'Extra insurance', ['insuranceCentsPerMonth']],
   ['taxAndPermitCentsPerMonth', 'Taxes and permits', ['taxRate', 'permitCentsPerYear']],
 ];
+function badge(tag) {
+  return `<span class="chip ${TAG_CLASS[tag] ?? ''}" title="${esc(TAG_HELP[tag] ?? '')}">${esc(TAG_WORDS[tag] ?? tag)}</span>`;
+}
+const confText = (label) => `${CONF_WORDS[label] ?? label} confidence`;
+/** Earnings notes from core name attributes by key; show them as words. */
+const humanKeys = (t) => t.replace(/\b[a-z]+(?:_[a-z]+)+\b/g, (k) => factLabel(k).toLowerCase());
 
 // ---------------------------------------------------------------------------------------------------------------
 // state (in memory only)
 // ---------------------------------------------------------------------------------------------------------------
 const S = {
-  busy: false, address: '', phase: 'address', // address | confirm | candidates | results
-  result: null, confirmed: false, profile: null, steps: [], manual: false,
-  includeInvestments: false, overrides: {}, editAttr: null, editInput: null,
+  run: 0, busy: false, address: '', phase: 'address', // address | confirm | candidates | results
+  result: null, confirmed: false, path: '', countyMatched: '', // path: 'county' | 'fallback' (which lookup produced the profile)
+  base: null, extra: {}, owner: {}, profile: null, loading: new Set(), notFound: false, hints: {},
+  includeInvestments: false, overrides: {}, editInput: null,
   goal: 'max_net_income', maxUpfront: '', noStrangers: false, onlyKnownRules: false,
-  open: new Set(['steplog']), focusId: null, error: '',
-  path: '', pathNote: '', notes: {}, countyMatched: '', // path: 'county' | 'fallback' (which lookup produced the profile)
-  limiter: { lastAt: null }, yardYes: false, selectOnFocus: null, keepStatus: false,
+  open: new Set(), focusId: null, error: '', limiter: { lastAt: null }, keepStatus: false,
   dirty: false, discardOk: false, // dirty = the owner has typed a correction this session; discardOk = they were warned that searching again drops it
 };
 
 const MAX_ADDRESS = 300; // same cap as the input's maxlength; a street address is never longer
-const els = { form: $('#address-form'), input: $('#address'), submit: $('#address-submit'), status: $('#status'), lookup: $('#lookup'), results: $('#results') };
+const MAIN_MAX_MS = 10000; // the property screen (or the "add your details" list) is shown within this long after a submit
+const els = { form: $('#address-form'), input: $('#address'), submit: $('#address-submit'), status: $('#status'), lookup: $('#lookup'), results: $('#results'), progress: $('#progress') };
+/** Every lookup request goes through one in-memory session cache: the same question is never asked twice. */
+const lookupFetch = sessionFetch((url, init) => fetch(url, init));
 
 function announce(msg, isError = false) {
   els.status.textContent = msg;
   els.status.classList.toggle('err', isError);
 }
+function recompute() { S.profile = S.base ? mergeProfile(S.base, S.extra, S.owner, nowIso()) : null; }
+
+// ---------------------------------------------------------------------------------------------------------------
+// progress bar: advances by finished stages, creeps slowly inside a stage, never goes back, never reaches 100 while busy
+// ---------------------------------------------------------------------------------------------------------------
+const STAGES = [['address', 'Finding your property…', 3, 25], ['records', 'Getting property records…', 25, 55], ['buildings', 'Measuring buildings and yard…', 55, 82], ['finishing', 'Finishing up…', 82, 96]];
+const progress = {
+  on: false, i: 0, value: 0, t0: 0, ts: 0, timer: null,
+  start() {
+    this.on = true; this.i = 0; this.value = STAGES[0][2]; this.t0 = performance.now(); this.ts = this.t0;
+    clearInterval(this.timer); this.timer = setInterval(() => this.paint(), 250);
+    els.progress.hidden = false; this.paint();
+  },
+  stage(name) {
+    const j = STAGES.findIndex((s) => s[0] === name);
+    if (!this.on || j <= this.i) return;
+    this.i = j; this.ts = performance.now(); this.value = Math.max(this.value, STAGES[j][2]); this.paint();
+  },
+  paint() {
+    if (!this.on) return;
+    const [, label, from, to] = STAGES[this.i];
+    const t = (performance.now() - this.ts) / 1000;
+    this.value = Math.max(this.value, Math.round(from + (to - from) * 0.9 * (1 - Math.exp(-t / 2.5))));
+    const secs = Math.floor((performance.now() - this.t0) / 1000);
+    const bar = els.progress.querySelector('[role="progressbar"]');
+    bar.setAttribute('aria-valuenow', String(this.value));
+    bar.setAttribute('aria-valuetext', `${label} ${secs}s`);
+    bar.querySelector('i').style.width = `${this.value}%`;
+    els.progress.querySelector('.progress-label').textContent = `${label} ${secs}s`;
+  },
+  done() { this.on = false; clearInterval(this.timer); this.timer = null; els.progress.hidden = true; },
+};
 
 // ---------------------------------------------------------------------------------------------------------------
 // lookups
 // ---------------------------------------------------------------------------------------------------------------
 async function lookup(extra = {}) {
   if (S.busy) return;
+  const run = ++S.run;
+  const t0 = Date.now();
   S.busy = true; els.submit.disabled = true; els.submit.classList.add('busy');
-  announce('Looking up your address. This can take a few seconds.');
-  renderLookup();
-  let res = null, why = '';
-  const via = (url, init) => fetch(url, init);
+  announce('Finding your property…');
+  if (S.phase === 'confirm' || S.phase === 'candidates') S.phase = 'address';
+  progress.start();
+  renderAll();
+  const now = nowIso();
+  const onStage = (s) => { if (run === S.run) progress.stage(s); };
+  let out = null;
   // A candidate pick, or a confirmation that came from the older path, continues on the older path.
   const stayOld = Boolean(extra.parcelApn) || (extra.confirmMatchedAddress && S.path === 'fallback');
   if (!stayOld) {
     try {
-      const c = await runCountyPath(S.address, { fetch: via, now: nowIso(), ...(extra.confirmMatchedAddress && S.countyMatched ? { confirmedAddress: S.countyMatched } : {}) });
-      if (c.kind === 'ok') {
-        res = { ok: true, profile: c.profile, steps: c.steps }; S.path = 'county'; S.notes = c.notes;
-        S.pathNote = `Lookup path: ${c.summary}. OpenStreetMap Nominatim was not used. Pool and transit stops come from OpenStreetMap.`;
-      } else if (c.kind === 'confirm') {
-        res = { ok: false, needsConfirmation: true, matchedAddress: c.matchedAddress, profile: createProfile(), steps: [], reasonText: c.reason }; S.path = 'county'; S.countyMatched = c.matchedAddress;
-      } else why = c.why;
-    } catch (e) { why = `the county lookup failed (${e instanceof Error ? e.message : String(e)})`; }
+      const c = await runCountyPath(S.address, { fetch: lookupFetch, now, onStage, ...(extra.confirmMatchedAddress && S.countyMatched ? { confirmedAddress: S.countyMatched } : {}) });
+      if (c.kind === 'ok') { out = c; S.path = 'county'; }
+      else if (c.kind === 'confirm') { out = c; S.path = 'county'; S.countyMatched = c.matchedAddress; }
+    } catch { /* the older path below answers instead */ }
   }
-  if (!res) {
-    if (!stayOld) S.pathNote = `Lookup path: OpenStreetMap Nominatim (the older path), because ${why || 'the county lookup could not answer'}.`;
-    S.path = 'fallback'; S.notes = {};
-    try {
-      res = await resolveAddress(extra.confirmMatchedAddress && S.countyMatched ? S.countyMatched : S.address, {
-        fetch: via, now: nowIso(), geocoders: BROWSER_GEOCODERS, nowMs: () => Date.now(), nominatimLimiter: S.limiter, ...extra,
-      });
-    } catch (e) {
-      res = { ok: false, profile: createProfile(), steps: [{ step: 'geocode', ok: false, reason: e instanceof Error ? e.message : String(e), source: 'lookup' }] };
-    }
+  if (!out && run === S.run) {
+    S.path = 'fallback';
+    const query = extra.confirmMatchedAddress && S.countyMatched && !extra.parcelApn ? S.countyMatched : S.address;
+    out = await new Promise((resolve) => {
+      const left = MAIN_MAX_MS - (Date.now() - t0);
+      const t = setTimeout(() => resolve({ kind: 'none', profile: createProfile(), pending: [] }), Math.max(500, left));
+      runOlderPath(query, { fetch: lookupFetch, now, onStage, nominatimLimiter: S.limiter, ...(extra.confirmMatchedAddress ? { confirmMatchedAddress: true } : {}), ...(extra.parcelApn ? { parcelApn: extra.parcelApn } : {}) })
+        .then((r) => { clearTimeout(t); resolve(r); }, () => { clearTimeout(t); resolve({ kind: 'none', profile: createProfile(), pending: [] }); });
+    });
+    if (out.kind === 'confirm') S.countyMatched = out.matchedAddress;
   }
+  if (run !== S.run) return;
   S.busy = false; els.submit.disabled = false; els.submit.classList.remove('busy');
-  S.result = res; S.steps = res.steps ?? [];
-  if (res.needsConfirmation) {
-    S.phase = 'confirm'; S.profile = null;
-    S.focusId = 'confirm-yes';
-    announce(`We found ${res.matchedAddress}. Please confirm it is your property.`);
-  } else if (!res.ok && res.candidates?.length) {
-    S.phase = 'candidates'; S.profile = null;
-    S.focusId = 'cand-none';
-    announce('We could not tell which parcel is yours. Please pick it from the list.');
-  } else if (res.ok) {
-    S.phase = 'results'; S.manual = false; S.profile = res.profile;
-    announce('Property found. Review the details and answer a few questions below.');
+  S.result = out;
+  if (out.kind === 'confirm') {
+    progress.done(); S.phase = 'confirm'; S.base = null; recompute(); S.focusId = 'confirm-yes';
+    announce(`We found ${out.matchedAddress}. Is this your property?`);
+  } else if (out.kind === 'candidates') {
+    progress.done(); S.phase = 'candidates'; S.base = null; recompute(); S.focusId = 'cand-none';
+    announce('Several properties match. Pick yours from the list.');
+  } else if (out.kind === 'ok') {
+    S.phase = 'results'; S.notFound = false; S.base = out.profile; S.extra = {}; recompute();
+    announce('Here is your property. Type over anything that is not right.');
     S.focusId = 'h-profile';
+    follow(run, out.pending ?? []);
   } else {
-    S.phase = 'results'; S.manual = true; S.profile = res.profile ?? createProfile(); S.open.add('missing-attrs');
-    announce('We could not look up your property. Enter the basics below and we can still estimate.');
+    progress.done(); S.phase = 'results'; S.notFound = true; S.base = out.profile ?? createProfile(); S.extra = {}; recompute();
+    announce("We couldn't find that address automatically. Add your property details below.");
     S.focusId = 'h-profile';
   }
   S.keepStatus = S.phase === 'results';
   renderAll();
 }
 
+/** Fill in the values that arrive after the first screen. Each arrival re-renders without moving focus or typed text. */
+function follow(run, pending) {
+  const parts = pending.filter((p) => p && p.promise);
+  if (!parts.length) { progress.done(); return; }
+  for (const p of parts) for (const k of p.keys ?? []) S.loading.add(k);
+  const left = new Set(parts);
+  const nextStage = () => {
+    if (!left.size) { progress.done(); return; }
+    progress.stage([...left].some((p) => p.part === 'buildings') ? 'buildings' : 'finishing');
+  };
+  nextStage();
+  for (const p of parts) {
+    p.promise.then((v) => v, () => null).then((v) => {
+      if (run !== S.run) return;
+      if (v?.profile) S.base = v.profile;
+      if (v?.attrs) Object.assign(S.extra, v.attrs);
+      for (const k of p.keys ?? []) S.loading.delete(k);
+      left.delete(p);
+      recompute(); S.keepStatus = true;
+      renderAll();
+      nextStage();
+    });
+  }
+}
+
 function resetSession() {
-  S.result = null; S.confirmed = false; S.profile = null; S.steps = []; S.manual = false; S.overrides = {};
-  S.editAttr = null; S.editInput = null; S.phase = 'address'; S.error = ''; S.dirty = false; S.discardOk = false;
-  S.path = ''; S.pathNote = ''; S.notes = {}; S.countyMatched = '';
+  S.result = null; S.confirmed = false; S.base = null; S.extra = {}; S.owner = {}; S.profile = null; S.loading = new Set(); S.notFound = false; S.hints = {};
+  S.overrides = {}; S.editInput = null; S.phase = 'address'; S.error = ''; S.dirty = false; S.discardOk = false;
+  S.path = ''; S.countyMatched = '';
+  progress.done();
 }
 
 /** Start a new search or manual session only when nothing typed by the owner would be lost silently. */
 function canRestart() {
-  if (S.busy) { announce('Still looking up your address. Please wait a few seconds.'); return false; }
+  if (S.busy) { announce('Still finding your property. One moment.'); return false; }
   if (S.dirty && !S.discardOk) {
     S.discardOk = true;
-    announce('You have corrections on this page. Starting again discards them. Press the same button again to start over, or keep working below.', true);
+    announce('You have changes on this page. Starting again clears them. Press the same button again to start over, or keep working below.', true);
     return false;
   }
   return true;
@@ -214,16 +294,16 @@ function canRestart() {
 els.form.addEventListener('submit', (ev) => {
   ev.preventDefault();
   const q = els.input.value.trim().slice(0, MAX_ADDRESS);
-  if (S.busy) { announce('Still looking up your address. Please wait a few seconds.'); return; }
+  if (S.busy) { announce('Still finding your property. One moment.'); return; }
   if (!q) { announce('Please type an address first.', true); els.input.focus(); return; }
   if (!canRestart()) return;
-  resetSession(); S.address = q; renderAll();
+  resetSession(); S.address = q; S.run++; renderAll();
   lookup();
 });
 $('#manual-start').addEventListener('click', () => {
   if (!canRestart()) return;
-  resetSession(); S.address = els.input.value.trim(); S.phase = 'results'; S.manual = true; S.profile = createProfile(); S.open.add('missing-attrs');
-  announce('Enter the basics about your property below. Nothing is looked up.');
+  resetSession(); S.run++; S.address = els.input.value.trim(); S.phase = 'results'; S.base = createProfile(); recompute();
+  announce('Add what you know about your property below.');
   S.keepStatus = true; S.focusId = 'h-profile';
   renderAll();
 });
@@ -241,7 +321,7 @@ function compute() {
     let inputs = defaultInputs(o, profile);
     const ov = S.overrides[o.id];
     if (ov && Object.keys(ov).length) {
-      try { inputs = withOverrides(inputs, ov, now); } catch (e) { S.error = e instanceof Error ? e.message : String(e); delete S.overrides[o.id]; }
+      try { inputs = withOverrides(inputs, ov, now); } catch (e) { S.error = 'That value could not be used. Check it and try again.'; delete S.overrides[o.id]; }
     }
     estimates[o.id] = estimateOpportunity(o, inputs);
   }
@@ -255,19 +335,27 @@ function compute() {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// rendering
+// rendering. Every render keeps focus where it was and keeps text the owner is typing (late values never overwrite it).
 // ---------------------------------------------------------------------------------------------------------------
 function renderAll() {
-  const active = document.activeElement;
-  const wantFocus = S.focusId ?? (active && active.id && (els.results.contains(active) || els.lookup.contains(active)) ? active.id : null);
+  const explicit = S.focusId;
   S.focusId = null;
+  const a = document.activeElement;
+  const inPage = a && a !== document.body && a.id && (els.results.contains(a) || els.lookup.contains(a));
+  const keep = !explicit && inPage && a instanceof HTMLInputElement && a.type !== 'checkbox'
+    ? { value: a.value, s: a.selectionStart, e: a.selectionEnd, invalid: a.getAttribute('aria-invalid') } : null;
+  const target = explicit ?? (inPage ? a.id : null);
   renderLookup();
   renderResults();
-  if (wantFocus) {
-    const el = document.getElementById(wantFocus);
-    if (el) { el.focus({ preventScroll: false }); if (el.select && el.type === 'number' && S.selectOnFocus === wantFocus) el.select(); }
+  if (!target) return;
+  const el = document.getElementById(target);
+  if (!el) return;
+  if (keep && el instanceof HTMLInputElement) {
+    el.value = keep.value;
+    if (keep.invalid) el.setAttribute('aria-invalid', keep.invalid);
   }
-  S.selectOnFocus = null;
+  if (document.activeElement !== el) el.focus({ preventScroll: !explicit });
+  if (keep && el instanceof HTMLInputElement) { try { el.setSelectionRange(keep.s, keep.e); } catch { /* not a text field */ } }
 }
 
 function dKey(key, label, body, _unused = false, cls = 'panel') {
@@ -277,47 +365,40 @@ function dKey(key, label, body, _unused = false, cls = 'panel') {
 
 function renderLookup() {
   const parts = [];
-  if (S.busy) parts.push('<div class="card flat"><p>Looking up your address&hellip;</p></div>');
-  if (!S.busy && S.phase === 'confirm' && S.result) {
+  if (S.phase === 'confirm' && S.result) {
     parts.push(`<section class="card" aria-labelledby="h-confirm"><h2 id="h-confirm">Is this your property?</h2>
-      <p class="stack" style="margin-top:8px">We found: <strong id="matched-address">${esc(S.result.matchedAddress)}</strong>. Is this your property?</p>
-      <p class="small muted" style="margin-top:6px">You typed: ${esc(S.address)}. ${S.result.reasonText && S.path === 'county' && /another candidate/.test(S.result.reasonText) ? 'More than one address matched' : 'The search matched a different street address'}, so we have not looked up a parcel yet.</p>
+      <p class="stack" style="margin-top:8px">We found <strong id="matched-address">${esc(S.result.matchedAddress)}</strong>. Is this your property?</p>
+      <p class="small muted" style="margin-top:6px">You typed: ${esc(S.address)}</p>
       <div class="row" style="margin-top:12px"><button class="btn primary" id="confirm-yes" type="button" data-act="confirm-yes">Yes, that is my property</button>
       <button class="btn" id="confirm-no" type="button" data-act="confirm-no">No, edit the address</button></div></section>`);
   }
-  if (!S.busy && S.phase === 'candidates' && S.result) {
+  if (S.phase === 'candidates' && S.result) {
     const list = S.result.candidates.map((c, i) => `<li class="row between" style="padding:8px 0;border-top:${i ? '1px solid var(--line)' : '0'}">
-        <span>${c.address ? esc(c.address) : 'Parcel with no street address on file'} <span class="muted small">(parcel ${esc(c.apn ?? 'unknown')})</span></span>
+        <span>${c.address ? esc(c.address) : 'Property with no street address'}${c.apn ? ` <span class="muted small">(parcel ${esc(c.apn)})</span>` : ''}</span>
         <button class="btn sm" id="pick-${safeId(c.apn ?? i)}" type="button" data-act="pick" data-apn="${esc(c.apn ?? '')}"${c.apn ? '' : ' disabled'}>This is mine</button></li>`).join('');
-    parts.push(`<section class="card" aria-labelledby="h-cands"><h2 id="h-cands">Which parcel is yours?</h2>
-      <p class="small muted" style="margin-top:6px">We found parcels near that address but none matched it exactly, so we will not guess. Pick yours by its address.</p>
+    parts.push(`<section class="card" aria-labelledby="h-cands"><h2 id="h-cands">Which one is yours?</h2>
+      <p class="small muted" style="margin-top:6px">Several properties match that address. Pick yours.</p>
       <ul class="plain" style="list-style:none;padding:0;margin-top:8px">${list}</ul>
-      <div style="margin-top:10px"><button class="btn" id="cand-none" type="button" data-act="cand-none">None of these. I will enter the details myself</button></div></section>`);
+      <div style="margin-top:10px"><button class="btn" id="cand-none" type="button" data-act="cand-none">None of these. I will add the details myself</button></div></section>`);
   }
-  if (!S.busy && S.steps.length) {
-    const items = S.steps.map((s) => `<li><span class="chip ${s.ok ? 'ok' : 'bad'}">${s.ok ? 'Found' : 'Failed'}</span>
-      <strong>${esc(STEP_NAMES[s.step] ?? s.step)}</strong> <span class="muted">from ${esc(s.source)}</span>${s.ok ? '' : ` <span>${esc(s.reason ?? 'no reason given')}</span>`}</li>`).join('');
-    const failed = S.steps.filter((s) => !s.ok).length;
-    parts.push(dKey('steplog', `What we looked up (${S.steps.length} step${S.steps.length === 1 ? '' : 's'}${failed ? `, ${failed} failed` : ''})`, `${S.pathNote ? `<p class="small muted" id="path-note" style="margin-bottom:6px">${esc(S.pathNote)}</p>` : ''}<ul class="log" id="step-log">${items}</ul>`));
-  }
-  els.lookup.innerHTML = parts.join('<div style="height:14px"></div>');
+  els.lookup.innerHTML = parts.join('');
 }
 
 function renderResults() {
   if (S.phase !== 'results' || !S.profile) { els.results.innerHTML = ''; return; }
   let view;
   try { view = compute(); } catch (e) {
-    els.results.innerHTML = `<div class="callout bad" role="alert">Something went wrong while working out the estimates: ${esc(e instanceof Error ? e.message : e)}</div>`;
+    els.results.innerHTML = '<div class="callout bad" role="alert">Something went wrong while working out the estimates. Change a value above and try again.</div>';
     return;
   }
   S.view = view;
   const err = S.error ? `<div class="callout bad" role="alert" id="input-error">${esc(S.error)}</div>` : '';
   S.error = '';
   els.results.innerHTML = `<div class="stack">
+    ${profileHtml()}
     <div class="callout warn" id="plan-note"><strong>These are planning estimates, not promises.</strong> Prices and bookings are Everyspace planning defaults unless you enter your own.</div>
     <p class="small muted" id="session-note">Nothing is saved. If you reload or leave this page, everything you entered here is cleared and you start again.</p>
     ${err}
-    ${profileHtml(view)}
     ${oppsHtml(view)}
     ${comboHtml(view)}
   </div>`;
@@ -328,141 +409,119 @@ function renderResults() {
 
 // ---- profile -------------------------------------------------------------------------------------------------
 
-function valueText(key, v, unit) {
-  if (v === null || v === undefined) return '';
-  if (typeof v === 'boolean') return v ? 'Yes' : 'No';
-  if (key === 'property_type') return PROPERTY_TYPES.find(([k]) => k === v)?.[1] ?? cap(String(v).replace(/_/g, ' '));
-  if (key === 'location') return `${nf.format(v.lat)}, ${nf.format(v.lng)}`;
-  if (key === 'jurisdiction') return [v.city, v.state].filter(Boolean).join(', ') + (v.county ? ` (${v.county})` : '');
-  if (key === 'parcel_boundary') return 'Outline on file';
-  if (key === 'buildings') return `${v.length} building${v.length === 1 ? '' : 's'} mapped`;
-  if (key === 'demand_generators') return `${v.length} nearby`;
-  if (key === 'equipment_owned') return v.length ? v.map((x) => EQUIPMENT.find(([k]) => k === x)?.[1] ?? x).join(', ') : 'None';
-  if (typeof v === 'number') {
-    const u = unit ?? UNIT_OF[key];
-    return `${key === 'year_built' ? String(v) : nf.format(v)}${u === 'sqft' ? ' sq ft' : u === 'm' ? ' m' : ''}`;
+const hasValue = (a) => Boolean(a) && a.tag !== 'unavailable' && a.value !== null && a.value !== undefined;
+/** The keys listed, in order: the fixed list, then the extras that have something, then any other owner fact. */
+function factKeys() {
+  const attrs = S.profile.attributes;
+  const keys = [...FACT_ORDER];
+  const extra = (k) => !keys.includes(k) && !HIDDEN.has(k) && !HIDDEN_RE.test(k) && (hasValue(attrs[k]) || k in S.owner || S.loading.has(k)) && kindOf(k, attrs[k]?.value) !== null && kindOf(k, attrs[k]?.value) !== 'equipment';
+  for (const k of MORE_ORDER) if (extra(k)) keys.push(k);
+  for (const k of Object.keys(attrs)) if (extra(k)) keys.push(k);
+  return keys;
+}
+
+/** What the input shows for a stored value. */
+function shownText(key, a) {
+  if (!hasValue(a)) return '';
+  const v = a.value;
+  if (typeof v !== 'number') return String(v);
+  if (key === 'year_built') return String(v);
+  const u = unitOf(key);
+  const shown = v * u.factor;
+  return u.factor === 1 ? nf.format(shown) : new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(shown);
+}
+
+function factRow(key) {
+  const a = S.profile.attributes[key];
+  const kind = kindOf(key, a?.value) ?? 'number';
+  const has = hasValue(a);
+  const mine = key in S.owner;
+  const loading = !has && !mine && S.loading.has(key);
+  const est = has && !mine && a.tag === 'estimated';
+  const id = `f-${safeId(key)}`;
+  const label = factLabel(key);
+  const approx = `<span class="approx"${est ? ` title="${esc(ESTIMATE_TIP)}"` : ' aria-hidden="true"'}>${est ? `<span aria-hidden="true">≈</span><span class="sr-only">Estimated:</span>` : ''}</span>`;
+  const hint = S.hints[key] ? `<p class="fact-hint" id="hint-${safeId(key)}" role="alert">${esc(S.hints[key])}</p>` : '';
+  const describe = S.hints[key] ? ` aria-describedby="hint-${safeId(key)}" aria-invalid="true"` : '';
+  let labelHtml, ctl;
+  if (kind === 'bool') {
+    labelHtml = `<span class="flabel" id="${id}-l">${esc(label)}</span>`;
+    ctl = `${approx}<span class="yn${loading ? ' loading' : ''}" role="group" aria-labelledby="${id}-l"${loading ? ' aria-busy="true"' : ''}>${['yes', 'no'].map((v) => `<button type="button" class="yn-b" id="${id}-${v}" data-act="fact-bool" data-key="${esc(key)}" data-v="${v}" aria-pressed="${has && a.value === (v === 'yes') ? 'true' : 'false'}"${est ? ` title="${esc(ESTIMATE_TIP)}"` : ''}>${v === 'yes' ? 'Yes' : 'No'}</button>`).join('')}</span>`;
+  } else if (kind === 'type') {
+    labelHtml = `<label class="flabel" for="${id}">${esc(label)}</label>`;
+    ctl = `${approx}<select id="${id}" data-fact="${esc(key)}"${est ? ` title="${esc(ESTIMATE_TIP)}"` : ''}><option value="">Add</option>${PROPERTY_TYPES.map(([k, l]) => `<option value="${k}"${has && a.value === k ? ' selected' : ''}>${l}</option>`).join('')}</select>`;
+  } else {
+    const u = kind === 'number' ? unitOf(key) : { label: '' };
+    labelHtml = `<label class="flabel" for="${id}">${esc(label)}</label>`;
+    ctl = `${approx}<input id="${id}" type="text" ${kind === 'number' ? 'inputmode="decimal" ' : ''}autocomplete="off" spellcheck="false" data-fact="${esc(key)}" data-kind="${kind}" value="${esc(shownText(key, a))}" placeholder="Add"${loading ? ' class="loading" aria-busy="true"' : ''}${est ? ` title="${esc(ESTIMATE_TIP)}"` : ''}${describe}>${u.label ? `<span class="unit">${esc(u.label)}</span>` : ''}`;
   }
-  return String(v);
+  const meta = mine ? `<span class="edited">Edited by you</span><button type="button" class="linkbtn" id="undo-${safeId(key)}" data-act="undo" data-key="${esc(key)}" aria-label="Undo your change to ${esc(label)}">Undo</button>` : '';
+  return `<div class="fact${kind === 'number' ? ' num' : ''}" data-key="${esc(key)}" data-state="${mine ? 'edited' : loading ? 'loading' : has ? (est ? 'estimated' : 'value') : 'empty'}">
+    ${labelHtml}<div class="fact-ctl">${ctl}</div><div class="fact-meta">${meta}</div>${hint}</div>`;
 }
 
-function badge(tag) {
-  return `<span class="chip ${TAG_CLASS[tag] ?? ''}" title="${esc(TAG_HELP[tag] ?? '')}">${esc(TAG_WORDS[tag] ?? tag)}</span>`;
-}
-const confText = (label) => `${CONF_WORDS[label] ?? label} confidence`;
-
-function editorHtml(key, current) {
-  const kind = kindOf(key);
-  const id = `ed-${safeId(key)}`;
-  const v = current?.value;
-  let control = '';
-  if (kind === 'number') control = `<input id="${id}" type="number" min="0" step="any" inputmode="decimal" value="${esc(v ?? '')}" aria-label="${esc(attrLabel(key))}">${UNIT_OF[key] === 'sqft' ? '<span class="small muted">sq ft</span>' : UNIT_OF[key] === 'm' ? '<span class="small muted">m</span>' : ''}`;
-  else if (kind === 'text') control = `<input id="${id}" type="text" value="${esc(v ?? '')}" aria-label="${esc(attrLabel(key))}">`;
-  else if (kind === 'bool') control = `<select id="${id}" aria-label="${esc(attrLabel(key))}"><option value="yes"${v === true ? ' selected' : ''}>Yes</option><option value="no"${v === false ? ' selected' : ''}>No</option></select>`;
-  else if (kind === 'type') control = `<select id="${id}" aria-label="Property type"><option value="">Choose&hellip;</option>${PROPERTY_TYPES.map(([k, l]) => `<option value="${k}"${v === k ? ' selected' : ''}>${l}</option>`).join('')}</select>`;
-  else if (kind === 'jurisdiction') control = `<input id="${id}-state" type="text" maxlength="2" value="${esc(v?.state ?? '')}" aria-label="State (2 letters)" placeholder="State, e.g. CA" style="width:7em"><input id="${id}-city" type="text" value="${esc(v?.city ?? '')}" aria-label="City" placeholder="City">`;
-  else if (kind === 'equipment') control = EQUIPMENT.map(([k, l]) => `<label class="check"><input type="checkbox" id="${id}-${k}" value="${k}"${Array.isArray(v) && v.includes(k) ? ' checked' : ''}>${l}</label>`).join('');
-  return `<div class="edit-inline">${control}<button class="btn sm primary" id="save-${safeId(key)}" type="button" data-act="save-attr" data-key="${esc(key)}">Apply</button><button class="btn sm" id="cancel-${safeId(key)}" type="button" data-act="cancel-attr">Cancel</button></div>`;
+function sourcesHtml(keys) {
+  const rows = [];
+  const attrs = S.profile.attributes;
+  for (const k of ['address', 'parcel_id', ...keys]) {
+    const a = attrs[k];
+    if (!hasValue(a) && !(k in S.owner)) continue;
+    const src = a.tag === 'owner-confirmed' ? 'You' : a.source;
+    rows.push(`<tr data-src="${esc(k)}"><th scope="row">${esc(factLabel(k))}</th><td>${esc(src)}</td><td>${esc(dateText(a.retrievedAt))}</td></tr>`);
+  }
+  if (!rows.length) return '';
+  return dKey('sources', 'Where these numbers come from', `<div class="tablewrap"><table class="sources" id="sources-table"><caption class="sr-only">Where each number came from</caption>
+    <thead><tr><th scope="col">Fact</th><th scope="col">Source</th><th scope="col">Date</th></tr></thead><tbody>${rows.join('')}</tbody></table></div>`, false, 'panel sources');
 }
 
-/** A short note under the source: a second source that disagrees, a field warning, or why an estimate is only an estimate. */
-function rowNote(r) {
-  if (S.path !== 'county' || r.tag === 'owner-confirmed') return '';
-  const parts = [S.notes[r.key], r.tag === 'estimated' ? S.profile.attributes[r.key]?.note : ''].filter(Boolean);
-  return parts.length ? `<div class="tiny muted row-note" data-note-for="${esc(r.key)}">${esc([...new Set(parts)].join(' '))}</div>` : '';
-}
-
-function profileHtml(view) {
-  const rows = summarizeProfile(S.profile);
-  const have = rows.filter((r) => r.tag !== 'unavailable');
-  const none = rows.filter((r) => r.tag === 'unavailable');
-  const attr = (k) => S.profile.attributes[k];
-  const editBtn = (r, label) => (kindOf(r.key) === 'readonly'
-    ? '<span class="small muted">Not editable here</span>'
-    : `<button class="btn sm" id="edit-${safeId(r.key)}" type="button" data-act="edit-attr" data-key="${esc(r.key)}" aria-label="${esc(label)} ${esc(attrLabel(r.key))}">${label}</button>`);
-  const haveRows = have.map((r) => `<tr data-key="${esc(r.key)}">
-      <th scope="row">${esc(attrLabel(r.key))}</th>
-      <td data-label="Value">${S.editAttr === r.key ? editorHtml(r.key, attr(r.key)) : `<span class="val">${esc(valueText(r.key, r.value, r.unit))}</span>`}</td>
-      <td data-label="Where it came from">${badge(r.tag)}</td>
-      <td data-label="Source and date">${esc(r.source)}${r.retrievedAt ? `<div class="tiny muted">${esc(dateText(r.retrievedAt))}</div>` : ''}${rowNote(r)}</td>
-      <td data-label="Confidence">${esc(confText(r.confidenceLabel))}</td>
-      <td data-label="Change">${editBtn(r, 'Edit')}</td></tr>`).join('');
-  const noneRows = none.map((r) => `<tr data-key="${esc(r.key)}">
-      <th scope="row">${esc(attrLabel(r.key))}</th>
-      <td data-label="Where it came from">${badge('unavailable')}</td>
-      <td data-label="Why">${esc(attr(r.key)?.note ?? 'not recorded')}</td>
-      <td data-label="Fill in">${S.editAttr === r.key ? editorHtml(r.key, attr(r.key)) : editBtn(r, 'Fill in')}</td></tr>`).join('');
-
-  const profileTable = `<div class="tablewrap"><table class="stack-sm" id="profile-table"><caption class="sr-only">What we know about your property</caption>
-    <thead><tr><th scope="col">Attribute</th><th scope="col">Value</th><th scope="col">Where it came from</th><th scope="col">Source and date</th><th scope="col">Confidence</th><th scope="col">Change</th></tr></thead>
-    <tbody>${haveRows || '<tr><td colspan="6" class="muted">Nothing was found yet. Fill in the basics.</td></tr>'}</tbody></table></div>`;
-  const noneTable = none.length ? dKey('missing-attrs', `Not available (${none.length}). Add what you know`, `<div class="tablewrap"><table class="stack-sm" id="unavailable-table"><caption class="sr-only">Details we could not find</caption>
-    <thead><tr><th scope="col">Attribute</th><th scope="col">Where it came from</th><th scope="col">Why</th><th scope="col">Fill in</th></tr></thead><tbody>${noneRows}</tbody></table></div>`) : '';
-
-  return `<section class="card" aria-labelledby="h-profile">
-    <div class="section-title"><h2 id="h-profile" tabindex="-1">Your property</h2><span class="small muted">Correct anything that is wrong. Everything below updates at once.</span></div>
-    ${S.manual ? manualHtml() : ''}
-    ${profileTable}
-    <div style="margin-top:12px">${noneTable}</div>
-    <div style="margin-top:12px">${questionsHtml()}</div>
+function profileHtml() {
+  const attrs = S.profile.attributes;
+  const addr = hasValue(attrs.address) ? String(attrs.address.value) : S.address;
+  const apn = hasValue(attrs.parcel_id) ? String(attrs.parcel_id.value) : '';
+  const keys = factKeys();
+  const typeHint = hasValue(attrs.property_type) ? '' : '<p class="small muted" id="type-hint">Choose a property type to see more ideas.</p>';
+  return `<section class="card" aria-labelledby="h-profile" id="property">
+    <div class="prop-head"><h2 id="h-profile" tabindex="-1">${addr ? esc(addr) : 'Your property'}</h2>
+      ${apn ? `<p class="small muted" id="prop-parcel">Parcel ${esc(apn)}</p>` : ''}</div>
+    ${S.notFound ? `<p class="callout" id="not-found">We couldn't find that address automatically. Add your property details below.</p>` : ''}
+    <p class="small muted" id="facts-help">Type over any number that is not right. Everything below updates at once.</p>
+    <div class="facts" id="facts">${keys.map(factRow).join('')}</div>
+    ${typeHint}
+    <div style="margin-top:12px">${questionsHtml(new Set(keys))}</div>
+    <div style="margin-top:12px">${sourcesHtml(keys)}</div>
   </section>`;
 }
 
-function ownerVal(key) { const a = S.profile.attributes[key]; return a && a.tag === 'owner-confirmed' ? a.value : undefined; }
-function yesNoSelect(id, key, ariaLabel) {
-  const v = ownerVal(key);
-  return `<select id="${id}" data-change="bool" data-key="${esc(key)}" aria-label="${esc(ariaLabel)}"><option value="">Not sure</option><option value="yes"${v === true ? ' selected' : ''}>Yes</option><option value="no"${v === false ? ' selected' : ''}>No</option></select>`;
-}
-function manualHtml() {
-  const yard = ownerVal('yard_area_sqft');
-  const yardChoice = yard > 0 ? 'yes' : yard === 0 ? 'no' : S.yardYes ? 'yes' : '';
-  return `<div class="callout" id="manual-basics" style="margin-bottom:14px"><h3>Tell us the basics</h3>
-    <p class="small muted" style="margin:4px 0 10px">We could not look up this property, so the estimate uses what you tell us. Leave anything blank that you do not know.</p>
-    <div class="fields">
-      <label class="f" for="basic-property_type">Property type<select id="basic-property_type" data-change="type" data-key="property_type"><option value="">Choose&hellip;</option>${PROPERTY_TYPES.map(([k, l]) => `<option value="${k}"${ownerVal('property_type') === k ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
-      <label class="f" for="basic-bedrooms">Bedrooms<input id="basic-bedrooms" type="number" min="0" step="1" inputmode="numeric" data-change="number" data-key="bedrooms" value="${ownerVal('bedrooms') ?? ''}"></label>
-      <label class="f" for="basic-lot_area_sqft">Lot size in sq ft (optional)<input id="basic-lot_area_sqft" type="number" min="0" step="any" inputmode="decimal" data-change="number" data-key="lot_area_sqft" value="${ownerVal('lot_area_sqft') ?? ''}"></label>
-      <label class="f" for="basic-yard">Do you have a yard?<select id="basic-yard" data-change="yard"><option value="">Not sure</option><option value="yes"${yardChoice === 'yes' ? ' selected' : ''}>Yes</option><option value="no"${yardChoice === 'no' ? ' selected' : ''}>No</option></select></label>
-      <label class="f" for="basic-yard_area_sqft">Rough yard size in sq ft (optional)<input id="basic-yard_area_sqft" type="number" min="0" step="any" inputmode="decimal" data-change="number" data-key="yard_area_sqft" value="${yard > 0 ? yard : ''}"></label>
-      <label class="f" for="basic-pool_present">Pool?${yesNoSelect('basic-pool_present', 'pool_present', 'Pool')}</label>
-      <label class="f" for="basic-parking_spaces">Driveway or parking spaces<input id="basic-parking_spaces" type="number" min="0" step="1" inputmode="numeric" data-change="number" data-key="parking_spaces" value="${ownerVal('parking_spaces') ?? ''}"></label>
-      <label class="f" for="basic-garage_present">Garage?${yesNoSelect('basic-garage_present', 'garage_present', 'Garage')}</label>
-    </div>
-    ${yardChoice === 'yes' && !(yard > 0) ? '<p class="small muted" style="margin-top:8px">Add a rough yard size to see yard ideas.</p>' : ''}
-    ${ownerVal('property_type') ? '' : '<p class="small muted" style="margin-top:8px">Choose a property type to see ideas.</p>'}</div>`;
-}
-
-function questionList() {
+function questionList(shown) {
   const items = missingEvidence(S.profile);
   const seen = new Set();
-  const basics = S.manual ? new Set(['property_type', 'bedrooms', 'lot_area_sqft', 'yard_area_sqft', 'pool_present', 'parking_spaces', 'garage_present']) : new Set();
   const out = [];
   for (const it of items) {
-    const keys = it.needs.filter((k) => !seen.has(k) && !basics.has(k));
+    const keys = it.needs.filter((k) => !seen.has(k) && !shown.has(k));
     if (!keys.length) continue;
     keys.forEach((k) => seen.add(k));
-    const question = keys.length === 1 && keys[0] === 'equipment_owned' ? ATTRIBUTE_QUESTIONS.equipment_owned : it.question;
+    const question = keys.length === 1 ? (ATTRIBUTE_QUESTIONS[keys[0]] ?? it.question) : it.question;
     out.push({ ...it, keys, question });
   }
   return out;
 }
 
-function questionControl(key, qid) {
-  const kind = kindOf(key);
+function questionControl(key, q) {
+  const kind = kindOf(key, undefined);
   const id = `q-${safeId(key)}`;
-  if (kind === 'bool') return `<select id="${id}" data-change="bool" data-key="${esc(key)}" aria-label="${esc(qid)}"><option value="">Not answered</option><option value="yes">Yes</option><option value="no">No</option></select>`;
-  if (kind === 'type') return `<select id="${id}" data-change="type" data-key="${esc(key)}" aria-label="${esc(qid)}"><option value="">Choose&hellip;</option>${PROPERTY_TYPES.map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select>`;
+  if (kind === 'bool') return `<span class="yn" role="group" aria-label="${esc(q)}">${['yes', 'no'].map((v) => `<button type="button" class="yn-b" id="${id}-${v}" data-act="fact-bool" data-key="${esc(key)}" data-v="${v}" aria-pressed="false">${v === 'yes' ? 'Yes' : 'No'}</button>`).join('')}</span>`;
+  if (kind === 'type') return `<select id="${id}" data-fact="${esc(key)}" aria-label="${esc(q)}"><option value="">Choose&hellip;</option>${PROPERTY_TYPES.map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select>`;
   if (kind === 'equipment') return `<div class="stack" id="${id}">${EQUIPMENT.map(([k, l]) => `<label class="check"><input type="checkbox" id="${id}-${k}" data-change="equip" data-key="${esc(key)}" value="${k}">${l}</label>`).join('')}
     <button class="btn sm" id="${id}-none" type="button" data-act="equip-none">I do not own any of these</button></div>`;
-  if (kind === 'text') return `<input id="${id}" type="text" data-change="text" data-key="${esc(key)}" aria-label="${esc(qid)}">`;
-  const label = `${attrLabel(key)}${UNIT_OF[key] === 'sqft' ? ' (sq ft)' : ''}`;
-  return `<label class="small muted" for="${id}">${esc(label)}</label><input id="${id}" type="number" min="0" step="any" inputmode="decimal" data-change="number" data-key="${esc(key)}" style="max-width:12em">`;
+  const u = kind === 'number' ? unitOf(key) : { label: '' };
+  return `<span class="fact-ctl"><input id="${id}" type="text" ${kind === 'number' ? 'inputmode="decimal" ' : ''}autocomplete="off" data-fact="${esc(key)}" data-kind="${kind ?? 'text'}" placeholder="Add" aria-label="${esc(factLabel(key))}${u.label ? ` (${u.label})` : ''}">${u.label ? `<span class="unit">${esc(u.label)}</span>` : ''}</span>${S.hints[key] ? `<p class="fact-hint" role="alert">${esc(S.hints[key])}</p>` : ''}`;
 }
 
-function questionsHtml() {
-  const qs = questionList();
-  if (!qs.length) return '<p class="small muted">We have no more questions. Anything else you know can be added with the Edit buttons above.</p>';
+function questionsHtml(shown) {
+  const qs = questionList(shown);
+  if (!qs.length) return '';
   const body = qs.map((q) => `<div class="q"><div class="qtext">${esc(q.question)}</div>${q.keys.map((k) => questionControl(k, q.question)).join('<div style="height:6px"></div>')}</div>`).join('');
-  return dKey('questions', `More things you could rent (${qs.length} question${qs.length === 1 ? '' : 's'})`, `<p class="small muted" style="margin-bottom:6px">Answer any you know. A yes adds that idea to the list below. You can skip the rest.</p>${body}`);
+  return dKey('questions', `More things you could rent (${qs.length} question${qs.length === 1 ? '' : 's'})`, `<p class="small muted" style="margin-bottom:6px">Answer any you know. A yes adds that idea to the list below.</p>${body}`);
 }
 
 // ---- opportunities ---------------------------------------------------------------------------------------------
@@ -521,7 +580,7 @@ function scenarioTable(o, e) {
 }
 
 function inputValueText(key, s) {
-  if (s.tag === 'unavailable') return 'Not available';
+  if (s.tag === 'unavailable') return 'Not set';
   if (key === 'seasonality') return s.value.every((x) => x === s.value[0]) ? 'Flat across the year (no seasonal data)' : '12 monthly multipliers';
   if (CENTS_KEYS.has(key)) return money2(s.value);
   if (RATE_KEYS.has(key)) return pct.format(s.value);
@@ -553,7 +612,7 @@ function assumptionsHtml(o, e) {
   }).join('');
   const assumptions = e.assumptions.filter((a) => !a.text.startsWith('Not included')).map((a) => `<li>${esc(a.text)} <span class="muted">(${esc(a.source)})</span></li>`).join('');
   const notIncluded = e.missing.filter((k) => !NEEDED_KEYS.includes(k) && k !== 'seasonality');
-  const notInc = notIncluded.length ? `<h4 style="margin-top:12px">Not included</h4><ul class="plain">${notIncluded.map((k) => `<li>${esc(INPUT_LABEL(k, o.unit))}: ${esc(String(e.inputs[k].note ?? 'not available').replace(/\.?$/, '.'))}${k === 'upfrontCents' ? '' : ' Not subtracted from the estimate; enter it to include it.'}</li>`).join('')}</ul>` : '';
+  const notInc = notIncluded.length ? `<h4 style="margin-top:12px">Not included</h4><ul class="plain">${notIncluded.map((k) => `<li>${esc(INPUT_LABEL(k, o.unit))}: not set.${k === 'upfrontCents' ? '' : ' Not subtracted from the estimate; enter it to include it.'}</li>`).join('')}</ul>` : '';
   return dKey(`as-${o.id}`, 'Assumptions and sources', `<div class="tablewrap"><table class="stack-sm" data-assumptions="${esc(o.id)}"><caption class="sr-only">Inputs for ${esc(o.label)}</caption>
     <thead><tr><th scope="col">Input</th><th scope="col">Value</th><th scope="col">Where it came from</th><th scope="col">Source</th><th scope="col">Confidence</th><th scope="col">Change</th></tr></thead><tbody>${rows}</tbody></table></div>
     ${assumptions ? `<h4 style="margin-top:12px">Assumptions</h4><ul class="plain">${assumptions}</ul>` : ''}${notInc}`);
@@ -662,39 +721,124 @@ function comboHtml(view) {
     <p style="margin-top:14px"><a href="../host/">Already renting? Manage your spaces in the Host Console</a></p></section>`;
 }
 
+
 // ---------------------------------------------------------------------------------------------------------------
 // events
 // ---------------------------------------------------------------------------------------------------------------
-function readEditor(key) {
-  const kind = kindOf(key), id = `ed-${safeId(key)}`;
-  const el = document.getElementById(id);
-  if (kind === 'jurisdiction') {
-    const state = (document.getElementById(`${id}-state`)?.value ?? '').trim().toUpperCase();
-    const city = (document.getElementById(`${id}-city`)?.value ?? '').trim();
-    if (!/^[A-Z]{2}$/.test(state)) return { error: 'Enter the two-letter state, for example CA.' };
-    const prev = S.profile.attributes.jurisdiction?.value;
-    const keep = prev && prev.state === state && (prev.city ?? '').toLowerCase() === city.toLowerCase() ? { county: prev.county, countyFips: prev.countyFips } : {};
-    return { value: { country: 'US', state, ...(city ? { city } : {}), ...Object.fromEntries(Object.entries(keep).filter(([, x]) => x)) } };
-  }
-  if (kind === 'equipment') return { value: EQUIPMENT.map(([k]) => k).filter((k) => document.getElementById(`${id}-${k}`)?.checked) };
-  if (!el) return { error: 'Nothing to save.' };
-  const raw = el.value.trim();
-  if (kind === 'bool') return { value: raw === 'yes' };
-  if (kind === 'type') return raw ? { value: raw } : { error: 'Choose a property type.' };
-  if (kind === 'text') return raw ? { value: raw } : { error: 'Type a value first.' };
-  return checkNumber(key, raw);
-}
-
-const INT_KEYS = new Set(['year_built', 'bedrooms', 'units', 'parking_spaces', 'floors']);
-/** One place that decides whether a number typed for a property attribute is acceptable. */
-function checkNumber(key, raw) {
-  const n = Number(raw);
-  if (String(raw).trim() === '' || !Number.isFinite(n) || n < 0) return { error: 'Enter a number that is zero or more.' };
-  if (n > 1e9) return { error: 'That number is too large. Check it and try again.' };
+/** One place that decides whether a number typed for a property fact is acceptable. Short, plain hints. */
+function checkNumber(key, n) {
+  if (!Number.isFinite(n) || n < 0) return { error: 'Enter a number, like 6,500.' };
+  if (n > 1e9) return { error: 'That number looks too large.' };
   if (INT_KEYS.has(key) && !Number.isInteger(n)) return { error: 'Enter a whole number.' };
   if (key === 'year_built' && (n < 1600 || n > new Date().getUTCFullYear() + 2)) return { error: `Enter a year between 1600 and ${new Date().getUTCFullYear() + 2}.` };
-  if (key === 'units' && n < 1) return { error: 'A property has at least one unit.' };
-  if (key === 'floors' && n < 1) return { error: 'A building has at least one floor.' };
+  if (key === 'units' && n < 1) return { error: 'Enter at least 1.' };
+  if (key === 'floors' && n < 1) return { error: 'Enter at least 1.' };
+  return { value: n };
+}
+/** Typed text -> stored value, or {error}. Commas and spaces are fine; feet are converted back to metres where stored so. */
+function parseFact(key, kind, raw) {
+  if (kind === 'text') return { value: raw };
+  const cleaned = raw.replace(/[,\s]/g, '').replace(/^[≈~]/, '');
+  if (!/^\d*\.?\d+$|^\d+\.$/.test(cleaned)) return { error: key === 'year_built' ? 'Enter a year, like 1962.' : 'Enter a number, like 6,500.' };
+  const u = unitOf(key);
+  const r = checkNumber(key, Number(cleaned));
+  if (r.error) return r;
+  return { value: u.factor === 1 ? r.value : Math.round((r.value / u.factor) * 100) / 100 };
+}
+
+function setOwner(key, value) {
+  S.dirty = true;
+  S.owner = { ...S.owner, [key]: { value, at: nowIso(), unit: unitOf(key).store } };
+  delete S.hints[key];
+  recompute();
+}
+
+function showHint(input, key, msg) {
+  S.hints[key] = msg;
+  const row = input.closest('.fact, .q');
+  row?.querySelectorAll('.fact-hint').forEach((n) => n.remove());
+  const p = document.createElement('p');
+  p.className = 'fact-hint'; p.id = `hint-${safeId(key)}`; p.setAttribute('role', 'alert'); p.textContent = msg;
+  const fact = input.closest('.fact');
+  if (fact) fact.append(p); else (input.closest('.fact-ctl') ?? input).after(p);
+  input.setAttribute('aria-invalid', 'true');
+  input.setAttribute('aria-describedby', p.id);
+}
+function clearHint(input, key) {
+  if (!S.hints[key]) return;
+  delete S.hints[key];
+  input.closest('.fact, .q')?.querySelectorAll('.fact-hint').forEach((n) => n.remove());
+  input.removeAttribute('aria-invalid'); input.removeAttribute('aria-describedby');
+}
+
+/** Apply what the owner typed into a fact input (Enter or leaving the field). Returns true when something changed. */
+function applyFact(input, { keepFocus }) {
+  const key = input.dataset.fact;
+  const kind = input.dataset.kind ?? 'number';
+  if (!key || !S.profile) return false;
+  const cur = S.profile.attributes[key];
+  const before = shownText(key, cur);
+  const raw = input.value.trim();
+  if (raw === before) { clearHint(input, key); return false; }
+  if (raw === '') { input.value = before; clearHint(input, key); return false; }
+  const r = parseFact(key, kind, raw);
+  if (r.error) { input.value = before; showHint(input, key, r.error); announce(r.error, true); return false; }
+  if (hasValue(cur) && cur.value === r.value) { input.value = before; clearHint(input, key); return false; }
+  setOwner(key, r.value);
+  if (keepFocus) S.focusId = input.id;
+  renderAll();
+  return true;
+}
+
+document.addEventListener('click', (ev) => {
+  const b = ev.target.closest('[data-act]');
+  if (!b) return;
+  const act = b.dataset.act;
+  if (act === 'confirm-yes') { S.confirmed = true; lookup({ confirmMatchedAddress: true }); return; }
+  if (act === 'confirm-no') { S.phase = 'address'; S.result = null; announce('Edit the address and search again.'); renderAll(); els.input.focus(); els.input.select(); return; }
+  if (act === 'pick') { lookup({ confirmMatchedAddress: S.confirmed, parcelApn: b.dataset.apn }); return; }
+  if (act === 'cand-none') {
+    S.phase = 'results'; S.notFound = false; S.base = S.result?.profile ?? createProfile(); S.extra = {}; recompute();
+    announce('Add what you know about your property below.'); S.keepStatus = true; S.focusId = 'h-profile'; renderAll(); return;
+  }
+  if (act === 'fact-bool') {
+    const key = b.dataset.key, v = b.dataset.v === 'yes';
+    const cur = S.profile?.attributes[key];
+    if (!(key in S.owner) && hasValue(cur) && cur.value === v && cur.tag !== 'estimated') return; // already says so
+    setOwner(key, v);
+    const rowId = `f-${safeId(key)}-${b.dataset.v}`;
+    S.focusId = document.getElementById(rowId) || b.id === rowId ? rowId : b.id;
+    renderAll();
+    // a question that was answered becomes a line in the list: keep focus on that answer
+    if (!document.getElementById(b.id)) (document.getElementById(rowId) ?? $('details[data-dk="questions"] > summary'))?.focus();
+    return;
+  }
+  if (act === 'undo') {
+    const key = b.dataset.key;
+    const { [key]: _gone, ...rest } = S.owner;
+    S.owner = rest; delete S.hints[key];
+    recompute();
+    const k = kindOf(key, S.profile.attributes[key]?.value);
+    S.focusId = k === 'bool' ? `f-${safeId(key)}-yes` : `f-${safeId(key)}`;
+    renderAll();
+    announce(`${factLabel(key)} is back to the looked-up value.`);
+    return;
+  }
+  if (act === 'equip-none') { setOwner('equipment_owned', []); renderAll(); return; }
+  if (act === 'edit-input') { S.editInput = { oppId: b.dataset.oid, key: b.dataset.key }; S.open.add(`as-${b.dataset.oid}`); S.focusId = `ei-${safeId(b.dataset.oid)}-${b.dataset.key}`; renderAll(); return; }
+  if (act === 'cancel-input') { const e = S.editInput; S.editInput = null; if (e) S.focusId = `ei-edit-${safeId(e.oppId)}-${e.key}`; renderAll(); return; }
+  if (act === 'save-input') { saveInput(b.dataset.oid, b.dataset.key, b.dataset.field); return; }
+  if (act === 'reset-input') {
+    const ov = S.overrides[b.dataset.oid]; if (ov) { delete ov[b.dataset.key]; if (!Object.keys(ov).length) delete S.overrides[b.dataset.oid]; }
+    S.focusId = `ei-edit-${safeId(b.dataset.oid)}-${b.dataset.key}`; renderAll();
+  }
+});
+
+function parseInputRaw(key, raw) {
+  const n = Number(String(raw).replace(/[,\s$%]/g, ''));
+  if (String(raw).trim() === '' || !Number.isFinite(n) || n < 0) return { error: 'Enter a number that is zero or more.' };
+  if (CENTS_KEYS.has(key)) return { value: Math.round(n * 100) }; // dollars typed by the owner -> integer cents
+  if (RATE_KEYS.has(key)) return n > 100 ? { error: 'A percentage cannot be more than 100.' } : { value: n / 100 };
   return { value: n };
 }
 /** Show a rejected value next to the control as well as in the status line, so it is seen where the person is looking. */
@@ -707,51 +851,6 @@ function inlineError(el, msg) {
   host?.append(p);
   el.setAttribute('aria-invalid', 'true');
 }
-
-function setOwner(key, value) {
-  S.dirty = true;
-  S.profile = applyOwnerCorrection(S.profile, key, value, nowIso(), UNIT_OF[key]);
-}
-
-function parseInputRaw(key, raw) {
-  const n = Number(raw);
-  if (String(raw).trim() === '' || !Number.isFinite(n) || n < 0) return { error: 'Enter a number that is zero or more.' };
-  if (CENTS_KEYS.has(key)) return { value: Math.round(n * 100) }; // dollars typed by the owner -> integer cents
-  if (RATE_KEYS.has(key)) return n > 100 ? { error: 'A percentage cannot be more than 100.' } : { value: n / 100 };
-  return { value: n };
-}
-
-document.addEventListener('click', (ev) => {
-  const b = ev.target.closest('[data-act]');
-  if (!b) return;
-  const act = b.dataset.act;
-  if (act === 'confirm-yes') { S.confirmed = true; lookup({ confirmMatchedAddress: true }); return; }
-  if (act === 'confirm-no') { S.phase = 'address'; S.result = null; S.steps = []; announce('Edit the address and search again.'); renderAll(); els.input.focus(); els.input.select(); return; }
-  if (act === 'pick') { lookup({ confirmMatchedAddress: S.confirmed, parcelApn: b.dataset.apn }); return; }
-  if (act === 'cand-none') {
-    S.phase = 'results'; S.manual = true; S.profile = S.result?.profile ?? createProfile(); S.open.add('missing-attrs');
-    announce('Enter the basics about your property below.'); S.keepStatus = true; S.focusId = 'h-profile'; renderAll(); return;
-  }
-  if (act === 'edit-attr') { S.editAttr = b.dataset.key; if (S.profile.attributes[S.editAttr]?.tag === 'unavailable') S.open.add('missing-attrs'); S.focusId = `ed-${safeId(b.dataset.key)}${b.dataset.key === 'jurisdiction' ? '-state' : ''}`; S.selectOnFocus = S.focusId; renderAll(); return; }
-  if (act === 'cancel-attr') { const k = S.editAttr; S.editAttr = null; S.focusId = `edit-${safeId(k)}`; renderAll(); return; }
-  if (act === 'save-attr') { saveAttr(b.dataset.key); return; }
-  if (act === 'equip-none') { setOwner('equipment_owned', []); renderAll(); return; }
-  if (act === 'edit-input') { S.editInput = { oppId: b.dataset.oid, key: b.dataset.key }; S.open.add(`as-${b.dataset.oid}`); S.focusId = `ei-${safeId(b.dataset.oid)}-${b.dataset.key}`; S.selectOnFocus = S.focusId; renderAll(); return; }
-  if (act === 'cancel-input') { const e = S.editInput; S.editInput = null; if (e) S.focusId = `ei-edit-${safeId(e.oppId)}-${e.key}`; renderAll(); return; }
-  if (act === 'save-input') { saveInput(b.dataset.oid, b.dataset.key, b.dataset.field); return; }
-  if (act === 'reset-input') {
-    const ov = S.overrides[b.dataset.oid]; if (ov) { delete ov[b.dataset.key]; if (!Object.keys(ov).length) delete S.overrides[b.dataset.oid]; }
-    S.focusId = `ei-edit-${safeId(b.dataset.oid)}-${b.dataset.key}`; renderAll();
-  }
-});
-
-function saveAttr(key) {
-  const r = readEditor(key);
-  if (r.error) { announce(r.error, true); inlineError(document.getElementById(`ed-${safeId(key)}${key === 'jurisdiction' ? '-state' : ''}`), r.error); return; }
-  setOwner(key, r.value);
-  S.editAttr = null; S.focusId = `edit-${safeId(key)}`;
-  renderAll();
-}
 function saveInput(oppId, key, fieldId) {
   const el = document.getElementById(fieldId);
   const r = parseInputRaw(key, el?.value ?? '');
@@ -762,39 +861,53 @@ function saveInput(oppId, key, fieldId) {
 }
 
 document.addEventListener('keydown', (ev) => {
-  if (ev.key !== 'Enter') return;
   const t = ev.target;
   if (!(t instanceof HTMLInputElement) || t.type === 'checkbox') return;
-  if (t.id.startsWith('ed-')) { ev.preventDefault(); const key = S.editAttr; if (key) saveAttr(key); }
-  else if (t.dataset.inputEdit) { ev.preventDefault(); const [oppId, key] = t.dataset.inputEdit.split('|'); saveInput(oppId, key, t.id); }
+  if (t.dataset.fact) {
+    if (ev.key === 'Enter') { ev.preventDefault(); applyFact(t, { keepFocus: true }); }
+    else if (ev.key === 'Escape') {
+      ev.preventDefault();
+      t.value = shownText(t.dataset.fact, S.profile?.attributes[t.dataset.fact]);
+      clearHint(t, t.dataset.fact);
+      t.select();
+    }
+    return;
+  }
+  if (ev.key !== 'Enter') return;
+  if (t.dataset.inputEdit) { ev.preventDefault(); const [oppId, key] = t.dataset.inputEdit.split('|'); saveInput(oppId, key, t.id); }
+});
+// Leaving a fact input applies it; wait one tick so the next focused control is known and keeps its focus.
+document.addEventListener('focusout', (ev) => {
+  const t = ev.target;
+  if (!(t instanceof HTMLInputElement) || !t.dataset.fact) return;
+  setTimeout(() => { if (document.body.contains(t)) applyFact(t, { keepFocus: false }); }, 0);
+});
+document.addEventListener('input', (ev) => {
+  const t = ev.target;
+  if (t instanceof HTMLInputElement && t.dataset.fact && S.hints[t.dataset.fact]) clearHint(t, t.dataset.fact);
 });
 
 document.addEventListener('change', (ev) => {
   const t = ev.target;
-  if (!(t instanceof HTMLElement) || !t.dataset.change) return;
-  const kind = t.dataset.change, key = t.dataset.key;
+  if (!(t instanceof HTMLElement)) return;
+  if (t instanceof HTMLSelectElement && t.dataset.fact) {
+    const key = t.dataset.fact;
+    setTimeout(() => {
+      if (t.value) { setOwner(key, t.value); if (document.activeElement === t || document.activeElement === document.body) S.focusId = t.id; renderAll(); }
+    }, 0);
+    return;
+  }
+  if (!t.dataset.change) return;
+  const kind = t.dataset.change;
   // let focus settle on the next control (Tab) before the view is rebuilt
   setTimeout(() => {
-    if (kind === 'bool') { if (t.value) setOwner(key, t.value === 'yes'); }
-    else if (kind === 'type') { if (t.value) setOwner(key, t.value); }
-    else if (kind === 'text') { if (t.value.trim()) setOwner(key, t.value.trim()); }
-    else if (kind === 'number') {
-      const raw = t.value.trim();
-      if (raw !== '') {
-        const r = checkNumber(key, raw);
-        if (r.error) { announce(r.error, true); inlineError(t, r.error); return; } // keep the field as typed, do not rebuild the page over the message
-        setOwner(key, r.value);
-      }
-    } else if (kind === 'yard') {
-      S.yardYes = t.value === 'yes';
-      if (t.value === 'no') setOwner('yard_area_sqft', 0);
-    } else if (kind === 'equip') {
+    if (kind === 'equip') {
       const checked = [...document.querySelectorAll('[data-change="equip"]')].filter((c) => c.checked).map((c) => c.value);
       setOwner('equipment_owned', checked);
     } else if (kind === 'investments') S.includeInvestments = t.checked;
     else if (kind === 'goal') S.goal = t.value;
     else if (kind === 'maxUpfront') {
-      S.maxUpfront = t.value.trim();
+      S.maxUpfront = t.value.trim().replace(/[,$\s]/g, '');
       const mu = Number(S.maxUpfront);
       if (S.maxUpfront !== '' && (!Number.isFinite(mu) || mu < 0)) { S.maxUpfront = ''; S.error = 'Enter the most you would spend as a number that is zero or more, or leave it empty for no limit. No limit is applied for now.'; }
     }

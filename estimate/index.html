@@ -16,25 +16,28 @@
     <a class="console" href="../">Start over</a>
     <a href="../host/">Host Console</a>
   </div>
+  <div id="progress" class="progress" hidden>
+    <div class="progress-track" role="progressbar" aria-label="Loading your property" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i></i></div>
+    <p class="progress-label" aria-hidden="true"></p>
+  </div>
 </header>
 
 <main class="wrap" id="main">
   <noscript><div class="card"><p><strong>This estimator needs JavaScript.</strong> Turn it on to look up an address, or <a href="../">go back to the home page</a>.</p></div></noscript>
   <section class="card" aria-labelledby="h-address">
     <div class="section-title"><h1 id="h-address">What could your property earn?</h1></div>
-    <p class="muted">Type your address and we will look up your parcel in public records, list the ways the property could earn, and show a range for each. Free, no sign-up. Nothing you enter here is saved.</p>
-    <form id="address-form" class="stack" autocomplete="off" novalidate>
+    <p class="muted">Type your address to see what is on your property and the ways it could earn. Free, no sign-up. Nothing you enter here is saved.</p>
+    <form id="address-form" class="stack" novalidate>
       <div>
         <label class="f" for="address">Property address</label>
         <div class="suggest-wrap">
-          <input id="address" name="q" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="300" placeholder="123 Main St, Los Angeles, CA 90001" aria-describedby="address-help address-suggest-note">
+          <input id="address" name="address" type="text" autocomplete="street-address" autocapitalize="off" spellcheck="false" maxlength="300" placeholder="123 Main St, Los Angeles, CA 90001" aria-describedby="address-help">
         </div>
-        <p id="address-suggest-note" class="tiny muted">Suggestions come from Los Angeles County's public address service and cover Los Angeles County only. They appear after you type 5 characters, and what you have typed so far is sent to that service to get them.</p>
+        <p id="address-help" class="tiny muted">Start typing and pick your address</p>
       </div>
-      <p id="address-help" class="tiny muted">We search only when you press the button. Your address is sent first to Los Angeles County's public address, parcel and building-outline services. Only if those cannot answer (for example, the address is outside Los Angeles County) is it sent to OpenStreetMap Nominatim, and then, for the parcel, to that county's public parcel service. The property's map location is then sent to OpenStreetMap's Overpass service to find pools and transit stops (on the older path, buildings too).</p>
       <div class="row">
         <button class="btn primary" id="address-submit" type="submit">Find my property</button>
-        <button class="btn ghost" id="manual-start" type="button">Skip the lookup and enter details myself</button>
+        <button class="btn ghost" id="manual-start" type="button">Skip and enter details myself</button>
       </div>
     </form>
     <p id="status" class="status" role="status" aria-live="polite" aria-atomic="true"></p>
@@ -46,8 +49,8 @@
 
 <footer>
   <div class="wrap">
-    <p>Address search and suggestions, parcel records and building outlines: Los Angeles County public services (address locator, assessor parcel layer, LARIAC). Outside Los Angeles County: address search © OpenStreetMap contributors (ODbL) via Nominatim, with parcel data from the county assessor's public service. Pools and transit stops: © OpenStreetMap contributors.</p>
-    <p>Nothing you enter here is saved.</p>
+    <p id="privacy-line">Nothing you enter here is saved. While you type an address, the text is sent to Los Angeles County's public address service to suggest matches. When you press "Find my property", the address is sent to Los Angeles County's public map services to look up the property; addresses they cannot find are sent to OpenStreetMap's public search, and the property's map location is sent to OpenStreetMap to check for a pool and nearby transit. The map location may also be sent to US government map services to identify the county, and building outlines may be read from Overture Maps' public files.</p>
+    <p id="attribution">Property data: Los Angeles County public GIS services (address locator, assessor parcels, LARIAC building outlines). Some building outlines: Overture Maps Foundation. Map data © OpenStreetMap contributors (ODbL).</p>
     <p><a href="../host/">Already renting? Manage your spaces in the Host Console</a></p>
   </div>
 </footer>

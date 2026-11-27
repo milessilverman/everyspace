@@ -1,0 +1,64 @@
+{
+ "input": {
+  "lat": 34.05389,
+  "lon": -118.24349,
+  "censusYear": "2020"
+ },
+ "results": [
+  {
+   "block_fips": "060372074001025",
+   "bbox": [
+    -118.244455,
+    34.052229,
+    -118.241654,
+    34.054897
+   ],
+   "county_fips": "06037",
+   "county_name": "Los Angeles County",
+   "state_fips": "06",
+   "state_code": "CA",
+   "state_name": "California",
+   "block_pop_2020": 24,
+   "amt": "AMT006",
+   "bea": "BEA160",
+   "bta": "BTA262",
+   "cma": "CMA002",
+   "eag": "EAG706",
+   "ivm": "IVM002",
+   "mea": "MEA044",
+   "mta": "MTA002",
+   "pea": "PEA002",
+   "rea": "REA006",
+   "rpc": "RPC005",
+   "vpc": "VPC006"
+  },
+  {
+   "block_fips": "060372074001018",
+   "bbox": [
+    -118.245518,
+    34.052939,
+    -118.242629,
+    34.055715
+   ],
+   "county_fips": "06037",
+   "county_name": "Los Angeles County",
+   "state_fips": "06",
+   "state_code": "CA",
+   "state_name": "California",
+   "block_pop_2020": 171,
+   "amt": "AMT006",
+   "bea": "BEA160",
+   "bta": "BTA262",
+   "cma": "CMA002",
+   "eag": "EAG706",
+   "ivm": "IVM002",
+   "mea": "MEA044",
+   "mta": "MTA002",
+   "pea": "PEA002",
+   "rea": "REA006",
+   "rpc": "RPC005",
+   "vpc": "VPC006"
+  }
+ ],
+ "_fixture_note": "recorded 2026-11-27 from the live FCC census-area API (geo.fcc.gov/api/census/area?lat=34.05389&lon=-118.24349) for a PUBLIC building (Los Angeles City Hall); the point lies in a street between two census blocks, so two results are listed (same county); answered access-control-allow-origin: * for Origin https://milessilverman.github.io"
+}

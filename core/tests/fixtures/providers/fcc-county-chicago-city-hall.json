@@ -1,0 +1,37 @@
+{
+ "input": {
+  "lat": 41.88388,
+  "lon": -87.63227,
+  "censusYear": "2020"
+ },
+ "results": [
+  {
+   "block_fips": "170318391001041",
+   "bbox": [
+    -87.632435,
+    41.883209,
+    -87.630907,
+    41.884477
+   ],
+   "county_fips": "17031",
+   "county_name": "Cook County",
+   "state_fips": "17",
+   "state_code": "IL",
+   "state_name": "Illinois",
+   "block_pop_2020": 7,
+   "amt": "AMT005",
+   "bea": "BEA064",
+   "bta": "BTA078",
+   "cma": "CMA003",
+   "eag": "EAG704",
+   "ivm": "IVM003",
+   "mea": "MEA018",
+   "mta": "MTA003",
+   "pea": "PEA003",
+   "rea": "REA003",
+   "rpc": "RPC003",
+   "vpc": "VPC005"
+  }
+ ],
+ "_fixture_note": "recorded 2026-11-27 from the live FCC census-area API for a PUBLIC building (Chicago City Hall, 121 N LaSalle St, point 41.88388,-87.63227)"
+}

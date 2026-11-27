@@ -23,6 +23,16 @@ const MAX_DEPTH = 4;
 /** Sanity cap on one decompressed tile or directory. */
 const MAX_BYTES = 64 * 1024 * 1024;
 
+/**
+ * Reject with a 'timeout' PmtilesError after `ms` even when the injected fetch ignores AbortSignal. @template T @param {Promise<T>} p @param {number} ms
+ * @param {()=>void} onTimeout
+ */
+export function raceTimeout(p, ms, onTimeout) {
+  /** @type {any} */ let timer;
+  const t = new Promise((_, rej) => { timer = setTimeout(() => { onTimeout(); rej(new PmtilesError('timeout', `timeout after ${ms} ms`)); }, ms); });
+  return Promise.race([p, t]).finally(() => clearTimeout(timer));
+}
+
 /** Little-endian unsigned 64-bit as a JS number (exact below 2^53, far beyond any real file). @param {Uint8Array} b @param {number} o */
 export function u64(b, o) {
   let v = 0;
@@ -104,7 +114,7 @@ export async function defaultGunzip(b) {
 /**
  * A PMTiles v3 reader over HTTP range requests.
  * @param {{url:string, fetch:(url:string, init?:any)=>Promise<any>, gunzip?:(b:Uint8Array)=>Promise<Uint8Array>, timeoutMs?:number,
- *   dirCache?:Map<string, any[]>, stats?:{requests:number, bytes:number}}} o
+ *   dirCache?:Map<string, any>, stats?:{requests:number, bytes:number}}} o
  */
 export function createPmtilesReader(o) {
   const gunzip = o.gunzip ?? defaultGunzip;
@@ -117,28 +127,28 @@ export function createPmtilesReader(o) {
   async function range(off, len) {
     if (typeof o.fetch !== 'function') throw new PmtilesError('network', 'no fetch provided');
     const ctl = new AbortController();
-    let timedOut = false;
-    const timer = setTimeout(() => { timedOut = true; ctl.abort(); }, timeoutMs);
     try {
       stats.requests++;
-      const res = await o.fetch(o.url, { headers: { Range: `bytes=${off}-${off + len - 1}` }, signal: ctl.signal, credentials: 'omit' });
+      const res = await raceTimeout(Promise.resolve(o.fetch(o.url, { headers: { Range: `bytes=${off}-${off + len - 1}` }, signal: ctl.signal, credentials: 'omit' })), timeoutMs, () => ctl.abort());
       if (!res) throw new PmtilesError('network', 'empty response');
       if (res.status === 200) { try { await res.body?.cancel?.(); } catch { /* ignore */ } throw new PmtilesError('unsupported', 'the server ignored the Range header (HTTP 200); refusing to read the whole file'); }
       if (res.status !== 206) throw new PmtilesError('http', `HTTP ${res.status}`);
-      const b = new Uint8Array(await res.arrayBuffer());
+      const b = new Uint8Array(await raceTimeout(Promise.resolve(res.arrayBuffer()), timeoutMs, () => ctl.abort()));
       stats.bytes += b.length;
       return b;
     } catch (e) {
       if (e instanceof PmtilesError) throw e;
-      if (timedOut) throw new PmtilesError('timeout', `timeout after ${timeoutMs} ms`);
+      if (e instanceof Error && e.name === 'AbortError') throw new PmtilesError('timeout', `timeout after ${timeoutMs} ms`);
       throw new PmtilesError('network', `network error: ${e instanceof Error ? e.message : String(e)}`);
-    } finally { clearTimeout(timer); }
+    }
   }
 
   /** @param {Uint8Array} b @param {number} compression */
   async function inflate(b, compression) {
     if (compression === 1 || compression === 0) return b;
-    if (compression === 2) return gunzip(b);
+    if (compression === 2) {
+      try { return await gunzip(b); } catch (e) { throw e instanceof PmtilesError ? e : new PmtilesError('decode', `gzip data could not be read: ${e instanceof Error ? e.message : String(e)}`); }
+    }
     throw new PmtilesError('unsupported', `compression type ${compression} is not supported (only none and gzip)`);
   }
 
@@ -147,6 +157,8 @@ export function createPmtilesReader(o) {
     /** Read the header and root directory. Safe to call twice. */
     async open() {
       if (F) return F;
+      const cached = dirCache.get(`${o.url}|header`);
+      if (cached) { F = cached; return F; }
       const h = await range(0, HEADER_FETCH_BYTES);
       if (h.length < 127 || String.fromCharCode(...h.subarray(0, 7)) !== 'PMTiles' || h[7] !== 3) throw new PmtilesError('not_pmtiles', 'not a PMTiles v3 file');
       const f = { url: o.url, leaf: u64(h, 40), data: u64(h, 56), ic: h[97], tc: h[98], maxz: h[101], root: /** @type {any} */ (null) };
@@ -161,6 +173,7 @@ export function createPmtilesReader(o) {
       }
       f.root = dir;
       F = f;
+      dirCache.set(`${o.url}|header`, /** @type {any} */ (f));
       return F;
     },
     get maxZoom() { return F?.maxz ?? null; },
