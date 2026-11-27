@@ -525,6 +525,26 @@ await scenario('late bundle: after it arrives the street side and both zones are
   } finally { lariacDelay = 0; }
 });
 
+await scenario('late bundle with a driveway: the picture was set up from the lot alone, then the house, the driveway and the zones are all drawn (regression: the picture kept only the lot outline)', async (page) => {
+  world = 'county'; photoMode = 'png'; lariacDelay = 2500;
+  try {
+    await open(page); await mapLotOnly(page);
+    await bundleArrived(page); await settled(page);
+    await page.waitForFunction(() => document.querySelector('#lot-map .lm-front-line'), null, { timeout: 10000 });
+    const g = await bundleOf(page);
+    assert.ok(g.driveway?.polygon, 'the bundle carries a driveway');
+    const legend = await page.locator('#lot-map .lm-legend').innerText();
+    assert.match(legend, /House/, 'the house outline has its legend line');
+    assert.match(legend, /Driveway\s*\n?\s*[\d,]+ sq ft/, 'the driveway has its legend line');
+    assert.match(legend, /Front yard\s*\n?\s*[\d,]+ sq ft/); assert.match(legend, /Back yard\s*\n?\s*[\d,]+ sq ft/);
+    assert.ok((await handles(page, 'bld')).length >= 3, 'the house outline is drawn with corners');
+    assert.ok((await handles(page, 'drv')).length >= 3, 'the driveway outline is drawn with corners');
+    const m = measureFromGeometry(g, { now: new Date().toISOString() });
+    assert.equal(await legendNum(page, 'Front yard'), m.front_yard_sqft); assert.equal(await legendNum(page, 'Back yard'), m.back_yard_sqft);
+    assert.match(legend, new RegExp(`Usable yard\\s*${m.usable_yard_sqft.toLocaleString('en-US')} sq ft`), 'usable yard leaves out the house and the driveway');
+  } finally { lariacDelay = 0; }
+}, { patch: { driveway: true } });
+
 await scenario('late bundle: a street side the owner marked before it arrived is kept', async (page) => {
   world = 'county'; photoMode = 'png'; lariacDelay = 3000;
   try {

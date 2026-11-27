@@ -361,7 +361,9 @@ export function initLotMap(opts) {
     if (M.edited && !M.drag) { // the owner already moved an outline: the lookup's street side now gives it front and back figures, so the list gets them too
       setTimeout(() => { if (M && !M.drag) { M.gestureBefore = snap(); commit('front'); } }, 0);
     } else M.lastMeasure = M.m;
-    if (D.body) { D.sub.textContent = subline(); paint(true); }
+    // the bundle can bring outlines the picture has no elements for yet (the driveway): build them before drawing,
+    // but never while a corner is being dragged (rebuilding would drop the drag) — then it is done when the drag ends
+    if (D.body) { D.sub.textContent = subline(); if (M.drag) M.needStructure = true; else { structure(); M.needStructure = false; } paint(true); }
   }
 
   function setup(src) {
@@ -623,6 +625,7 @@ export function initLotMap(opts) {
     for (const sh of shapes()) {
       const pts = sh.verts.map((v) => px(v.lng, v.lat));
       const e = D.els.shapes.get(sh.id);
+      if (!e) { M.needStructure = true; continue; } // an outline that arrived after the last structure(): drawn once the elements exist
       const d = pathOf(pts);
       e.casing.setAttribute('d', d); e.path.setAttribute('d', d);
       if (sh.kind === 'bld') D.els.mask.get(sh.id).setAttribute('d', d);
@@ -843,6 +846,7 @@ export function initLotMap(opts) {
     if (!M) return;
     if (M.drag && e.pointerId === M.drag.pid) {
       const d = M.drag; M.drag = null;
+      if (M.needStructure) { M.needStructure = false; try { structure(); } catch { /* keep the picture as it is */ } }
       const sh = shapeOf(d.shape);
       if (d.moved && sh) { M.edited = true; paint(true); commit(kindOf(sh)); } else { M.gestureBefore = null; }
       return;
