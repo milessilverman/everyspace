@@ -384,17 +384,18 @@ try {
     await page.click('[data-act=syncall]'); await page.waitForFunction(() => /isn.t switched on/i.test(document.querySelector('.toast')?.textContent ?? ''));
     check(true, 'a missing backend function is reported as not switched on, not as "no calendars"');
     delete b.fn['calendar-sync']; // unknown function -> aborted by the harness, i.e. a network failure
-    await page.click('[data-act=syncall]'); await page.waitForFunction(() => /couldn.t reach everyspace/i.test(document.querySelector('.toast')?.textContent ?? '')); expected(/Failed to load resource|ERR_FAILED/);
+    await page.click('[data-act=syncall]'); await page.waitForFunction(() => /couldn.t reach everyspace/i.test(document.querySelector('.toast')?.textContent ?? '')); expected(/Failed to load resource|ERR_FAILED/); b.unmocked.length = 0; // the abort above is the injected failure
     check(true, 'a network failure in a function call is reported plainly');
     // new request flow: hold + verdict, with an error answer
     b.fn['booking-guard'] = async (body) => body.action === 'hold' ? { body: { safe: true, step: 'accept', message: 'Dates locked.', hold_id: 'h9' } } : { status: 404, body: { error: 'Request not found' } };
     await goTab(page, 'requests'); await page.click('main [data-act=newreq]'); await page.waitForSelector('dialog[open]');
-    await page.fill('dialog input[name=end]', await page.inputValue('dialog input[name=start]')); await page.click('dialog button[type=submit]');
+    await page.evaluate(() => { document.querySelector('dialog form').noValidate = true; }); await page.fill('dialog input[name=end]', await page.inputValue('dialog input[name=start]')); await page.click('dialog button[type=submit]');
     check(/Check-out has to be after check-in/.test(await page.locator('#holdMsg').innerText()), 'a request that ends before it starts is refused with a message');
     await page.fill('dialog input[name=end]', new Date(now + 5 * DAY).toISOString().slice(0, 10)); await page.click('dialog button[type=submit]');
     await page.waitForSelector('#verdict'); check(/Safe to accept/.test(await page.locator('#verdict').innerText()), 'a held request shows the verdict');
-    page.once('dialog', (x) => x.accept()); await page.locator('[data-act=release]').first().click(); await page.waitForSelector('.toast.bad');
-    check(/request not found/i.test(await page.locator('.toast').innerText()), 'a failed release shows the error from the service');
+    await page.evaluate(() => document.querySelector('.toast')?.remove()); page.once('dialog', (x) => x.accept()); await page.locator('[data-act=release]').first().click(); await page.waitForSelector('.toast.bad');
+    const rel = await page.locator('.toast').innerText();
+    check(/request not found/i.test(rel), 'a failed release shows the error from the service');
     // the minute refresh does not wipe a half-typed form
     await context.close();
   }
@@ -411,6 +412,7 @@ try {
     await context.close();
   }
 
+  expected(/status of (404|500)/); // the 404s and 500s the test injects on purpose (a function that is not deployed, a failed release)
   check(errors.length === 0, `zero console errors and unhandled rejections${errors.length ? ': ' + errors.join(' | ') : ''}`);
   const unmocked = [...seen.other, ...Backend.all.flatMap((x) => x.unmocked)];
   check(unmocked.length === 0, `zero unmocked requests${unmocked.length ? ': ' + [...new Set(unmocked)].join(' | ') : ''}`);

@@ -43,7 +43,7 @@ See [`platform/README.md`](platform/README.md) and the game plan in [`platform/d
 
 ## Income estimator (`estimate/`)
 
-[`estimate/`](estimate/) is a free page where anyone can type an address and see what the property could earn. It looks up the parcel in public records, lists the ways the space could earn, and shows a conservative, baseline and optimistic range for each. It will be served at `/everyspace/estimate/` once merged. The home page does not link to it yet.
+[`estimate/`](estimate/) is a free page where anyone can type an address and see what the property could earn. It looks up the parcel in public records, lists the ways the space could earn, and shows a conservative, baseline and optimistic range for each. It will be served at `/everyspace/estimate/` once merged. The home page is the address field that starts it.
 
 - **Where the numbers come from:** prices and bookings are Everyspace planning defaults, labelled as such, with no market source yet, so every estimate is low confidence. Enter your own price, bookings or costs and your numbers replace the defaults. Local rules (for example Los Angeles home-sharing) are marked unverified, because the official pages could not be read.
 - **Nothing is saved.** No sign-in, no account, nothing stored by Everyspace. Your address is sent to OpenStreetMap's Nominatim to find it, and the parcel lookup goes to the county's public service, only when you press the button.
