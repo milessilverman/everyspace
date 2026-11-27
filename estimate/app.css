@@ -166,6 +166,9 @@ input.loading, .yn.loading { background: linear-gradient(90deg, var(--surface-2)
 @keyframes es-shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
 table.sources { font-size: 13px; }
 table.sources th, table.sources td { padding: 6px 8px; }
+table.sources th, table.sources td { overflow-wrap: break-word; word-break: normal; hyphens: auto; }
+table.sources td:last-child { white-space: nowrap; }
+table.sources th:first-child { width: 34%; }
 details.sources > summary { color: var(--muted); }
 #type-hint { margin-top: 8px; }
 @media (prefers-reduced-motion: reduce) {
@@ -200,5 +203,6 @@ footer p + p { margin-top: 6px; }
   .fact.num .fact-ctl input[type=text] { text-align: left; }
   .fact-ctl select { flex: 1 1 auto; min-width: 0; width: 100%; }
   .fact-meta { grid-column: 2; }
+  .approx:empty { display: none; }
   .fact:not([data-state="edited"]) .fact-meta { display: none; }
 }

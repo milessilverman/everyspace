@@ -29,6 +29,7 @@ function answer(urlStr) {
   if (u.hostname.endsWith('lacounty.gov') && dec.includes('CAMS_Locator')) return { json: dec.includes('/suggest') ? { suggestions: [] } : { candidates: [] } };
   if (u.hostname.endsWith('lacounty.gov')) return { json: fx('arcgis-la-parcel.json') };
   if (u.hostname.includes('overpass')) return { json: dec.includes('34.0516') ? fx('overpass-no-features.json') : fx('overpass-la.json') };
+  if (/(^|\.)(geo\.fcc\.gov|tigerweb\.geo\.census\.gov|stac\.overturemaps\.org|amazonaws\.com)$/.test(u.hostname)) return { json: {}, status: 404 }; // other data sources: "not here"
   return null;
 }
 // What the Host Console asks the outside world for: fonts and the Supabase script. Only its sign-in screen is asserted.
@@ -69,7 +70,7 @@ async function scenario(name, fn) {
   const page = await ctx.newPage();
   page.setDefaultTimeout(20000);
   const rec = { external: [], mocked: [], consoleErrors: [], pageErrors: [], blocked: [] };
-  page.on('console', (m) => { if (m.type() === 'error') rec.consoleErrors.push(m.text()); });
+  page.on('console', (m) => { if (m.type() === 'error' && !/status of 404/.test(m.text())) rec.consoleErrors.push(m.text()); });
   page.on('pageerror', (e) => rec.pageErrors.push(String(e)));
   await ctx.route('**/*', (route) => {
     const url = route.request().url();
@@ -82,7 +83,7 @@ async function scenario(name, fn) {
     const a = answer(url);
     if (!a) { rec.external.push(url); allExternal.push(url); return route.abort('failed'); }
     rec.mocked.push(url);
-    return route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(a.json) });
+    return route.fulfill({ status: a.status ?? 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(a.json) });
   });
   try {
     await fn(page, rec, ctx);
@@ -107,7 +108,7 @@ for (const { name, origin, base } of SITES) {
     await page.fill('#address', VENICE);
     await page.press('#address', 'Enter');
     await page.waitForURL(`${origin}${base}/estimate/`);
-    await page.waitForSelector('#profile-table');
+    await page.waitForSelector('#facts');
     assert.equal(await page.evaluate(() => location.hash + location.search), '');
     // Start over -> homepage with an empty box
     await page.click('a:text("Start over")');
@@ -152,7 +153,7 @@ for (const { name, origin, base } of SITES) {
     await page.goto(`${origin}${base}/estimate/`);
     await page.fill('#address', VENICE);
     await page.click('#address-submit');
-    await page.waitForSelector('#profile-table');
+    await page.waitForSelector('#facts');
     const hrefs = await page.locator('a[href]').evaluateAll((as) => as.map((a) => a.getAttribute('href')));
     assert.ok(hrefs.includes('../host/') && hrefs.includes('../'), 'internal links present');
     for (const h of hrefs) {

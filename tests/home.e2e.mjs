@@ -27,6 +27,7 @@ function answer(urlStr) {
   if (u.hostname.endsWith('lacounty.gov') && dec.includes('CAMS_Locator')) return { status: 200, body: dec.includes('/suggest') ? { suggestions: [] } : { candidates: [] } };
   if (u.hostname.endsWith('lacounty.gov')) return { status: 200, body: fx('arcgis-la-parcel.json') };
   if (u.hostname.includes('overpass')) return { status: 200, body: dec.includes('34.0516') ? fx('overpass-no-features.json') : fx('overpass-la.json') };
+  if (/(^|\.)(geo\.fcc\.gov|tigerweb\.geo\.census\.gov|stac\.overturemaps\.org|amazonaws\.com)$/.test(u.hostname)) return { status: 404, body: {} }; // other data sources: "not here"
   return null;
 }
 
@@ -52,7 +53,7 @@ async function scenario(name, fn, { viewport = { width: 1280, height: 900 }, jav
   const page = await ctx.newPage();
   page.setDefaultTimeout(20000);
   const rec = { external: [], mocked: [], consoleErrors: [], pageErrors: [], local: [] };
-  page.on('console', (m) => { if (m.type() === 'error') rec.consoleErrors.push(m.text()); });
+  page.on('console', (m) => { if (m.type() === 'error' && !/status of 404/.test(m.text())) rec.consoleErrors.push(m.text()); });
   page.on('pageerror', (e) => rec.pageErrors.push(String(e)));
   await ctx.route('**/*', (route) => {
     const url = route.request().url();
@@ -97,7 +98,7 @@ await scenario('footer links and attribution', async (page) => {
   await page.goto(`${ORIGIN}/`);
   assert.equal(await page.getAttribute('footer a:text("See the earlier demo")', 'href'), DEMO);
   assert.equal(await page.getAttribute('footer a:text("Manage your spaces")', 'href'), 'host/');
-  assert.match(await page.locator('footer').innerText(), /Address search, suggestions, parcel records and building outlines: Los Angeles County public services\. Outside Los Angeles County: address search © OpenStreetMap contributors \(ODbL\) via Nominatim, with parcel data from the county assessor's public service\. Pools and transit stops: © OpenStreetMap contributors\./);
+  assert.match(await page.locator('#attribution').innerText(), /Property data: Los Angeles County public GIS services\. Map data © OpenStreetMap contributors \(ODbL\)\./);
 });
 
 await scenario('submit goes to the estimator: lookup runs once, profile shows, address leaves the URL', async (page, rec) => {
@@ -105,7 +106,7 @@ await scenario('submit goes to the estimator: lookup runs once, profile shows, a
   await page.fill('#address', VENICE);
   await page.press('#address', 'Enter');
   await page.waitForURL(/\/estimate\//);
-  await page.waitForSelector('#profile-table');
+  await page.waitForSelector('#facts');
   assert.equal(await page.inputValue('#address'), VENICE);
   assert.equal(nominatimCalls(rec), 1, 'geocoded once');
   assert.ok(!page.url().includes('address') && !page.url().includes('Venice'), `address removed from URL: ${page.url()}`);
@@ -136,7 +137,7 @@ await scenario('without JavaScript the form is a GET to estimate/?address=, whic
     return route.fulfill({ status: a.status, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(a.body) });
   });
   await p2.goto(url);
-  await p2.waitForSelector('#profile-table');
+  await p2.waitForSelector('#facts');
   assert.equal(r2.mocked.filter((u) => u.includes('nominatim')).length, 1, 'lookup ran once');
   assert.deepEqual(r2.external, []);
   assert.equal(await p2.evaluate(() => location.search + location.hash), '');
@@ -160,8 +161,8 @@ await scenario('form semantics: labelled, native GET fallback, required, capped,
 await scenario('homepage says where the address goes and promises nothing it does not do', async (page) => {
   await page.goto(`${ORIGIN}/`);
   const t = (await page.locator('body').innerText()).replace(/\s+/g, ' ');
-  assert.match(t, /Suggestions come from Los Angeles County's public address service and cover Los Angeles County only\. They appear after you type 5 characters, and what you have typed so far is sent to that service to get them\. No property lookup happens until you press the button\./);
-  assert.match(t, /When you press the button, your address is sent to Los Angeles County's public address, parcel and building-outline services\. Only if those cannot answer \(for example, the address is outside Los Angeles County\) is it sent to OpenStreetMap Nominatim\. Nothing you enter is saved\./);
+  assert.match(t, /Start typing and pick your address/);
+  assert.match(t, /Nothing you enter is saved\. While you type, the text is sent to Los Angeles County's public address service to suggest matches\. Your property is looked up only when you press the button: the address goes to Los Angeles County's public map services, and addresses they cannot find go to OpenStreetMap's public search\./);
   assert.match(t, /Free, no sign-up/);
   assert.doesNotMatch(t, /sign in|log in|your account|save your|we will email|subscribe/i, 'no account or save promise');
   const demoMentions = t.match(/demo/gi) ?? [];
@@ -175,7 +176,7 @@ await scenario('typed markup reaches the estimator as text', async (page, rec) =
   await page.fill('#address', '<img src=x onerror=window.__pwn=1>');
   await page.press('#address', 'Enter');
   await page.waitForURL(/\/estimate\//);
-  await page.waitForSelector('#profile-table, #manual-basics, #confirm-yes, #cand-none');
+  await page.waitForSelector('#facts, #confirm-yes, #cand-none');
   assert.equal(await page.evaluate(() => window.__pwn), undefined);
   assert.equal(await page.locator('img[src="x"]').count(), 0);
 });

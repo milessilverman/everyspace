@@ -15,7 +15,7 @@ try { pw = require('playwright'); } catch { pw = createRequire(path.join(execSyn
 const { chromium } = pw;
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const SHOTS = '/tmp/claude-0/-home-user/bbdf9db1-6a70-50d8-8c4a-2fe889e65e9c/scratchpad/wire';
+const SHOTS = '/tmp/claude-0/-home-user/bbdf9db1-6a70-50d8-8c4a-2fe889e65e9c/scratchpad/ux';
 fs.mkdirSync(SHOTS, { recursive: true });
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json' };
 const server = http.createServer((req, res) => {
@@ -90,7 +90,7 @@ const typeSlow = (page, s, delay = 20) => page.locator('#address').pressSequenti
 console.log('address suggest e2e');
 
 for (const [label, url] of PAGES) {
-  await scenario(`${label}: markup is a combobox with a listbox, and says where suggestions come from`, url, async (page, rec) => {
+  await scenario(`${label}: markup is a combobox with a listbox, a short neutral hint, and browser autofill kept`, url, async (page, rec) => {
     const a = page.locator('#address');
     assert.equal(await a.getAttribute('role'), 'combobox');
     assert.equal(await a.getAttribute('aria-expanded'), 'false');
@@ -99,9 +99,10 @@ for (const [label, url] of PAGES) {
     assert.ok(listId);
     assert.equal(await page.locator(`#${listId}`).getAttribute('role'), 'listbox');
     assert.equal(await page.locator(`#${listId}`).isHidden(), true);
-    const note = (await page.locator('#address-suggest-note').innerText()).replace(/\s+/g, ' ');
-    assert.match(note, /Suggestions come from Los Angeles County's public address service and cover Los Angeles County only\./);
-    assert.match(await a.getAttribute('aria-describedby'), /address-suggest-note/);
+    assert.equal((await page.locator('#address-help').innerText()).trim(), 'Start typing and pick your address');
+    assert.match(await a.getAttribute('aria-describedby'), /address-help/);
+    assert.equal(await a.getAttribute('autocomplete'), 'street-address', 'the browser can still fill the address');
+    assert.equal(await page.locator('#address-suggest-note').count(), 0, 'no note naming the service');
     assert.equal(rec.suggests.length + rec.external.length, 0, 'nothing is sent on load');
     await typeSlow(page, '200 N Sp');
     await page.waitForSelector('[role="option"]');
@@ -111,35 +112,94 @@ for (const [label, url] of PAGES) {
     assert.equal(await opts(page).first().getAttribute('role'), 'option');
   });
 
-  await scenario(`${label}: nothing is sent before 5 characters; the 5th starts one debounced request asking for at most 5`, url, async (page, rec) => {
-    await typeSlow(page, 'abcd', 30);
-    await page.waitForTimeout(700);
-    assert.equal(rec.suggests.length, 0, 'four characters: no request');
-    await page.locator('#address').pressSequentially('e');
+  await scenario(`${label}: nothing is sent before 3 characters; the 3rd starts one debounced request asking for at most 6`, url, async (page, rec) => {
+    await typeSlow(page, 'ab', 30);
+    await page.waitForTimeout(500);
+    assert.equal(rec.suggests.length, 0, 'two characters: no request');
+    await page.locator('#address').pressSequentially('c');
     await page.waitForSelector('[role="option"]');
     assert.equal(rec.suggests.length, 1);
-    assert.equal(rec.suggests[0].q, 'abcde');
-    assert.equal(rec.suggests[0].max, '5');
-    await page.fill('#address', 'ab c');
-    await page.waitForTimeout(700);
-    assert.equal(rec.suggests.length, 1, 'back under 5 characters: no new request');
+    assert.equal(rec.suggests[0].q, 'abc');
+    assert.equal(rec.suggests[0].max, '6');
+    await page.fill('#address', 'ab');
+    await page.waitForTimeout(500);
+    assert.equal(rec.suggests.length, 1, 'back under 3 characters: no new request');
     assert.equal(await opts(page).count(), 0, 'and the list is closed');
     await page.fill('#address', '   ab ');
     await page.waitForTimeout(700);
     assert.equal(rec.suggests.length, 1, 'spaces do not count as characters');
   });
 
-  await scenario(`${label}: requests are debounced (300 ms): typing quickly sends one request with the final text`, url, async (page, rec) => {
-    const t0 = Date.now();
-    await typeSlow(page, '1234 Main St', 90); // 12 keys, gaps well under 300 ms
+  await scenario(`${label}: requests are debounced (150 ms): typing quickly sends one request with the final text, soon after the last key`, url, async (page, rec) => {
+    await typeSlow(page, '1234 Main St', 60); // 12 keys, gaps well under 150 ms
     const lastKey = Date.now();
     await page.waitForSelector('[role="option"]');
     assert.equal(rec.suggests.length, 1, `one request, got ${rec.suggests.map((s) => s.q)}`);
     assert.equal(rec.suggests[0].q, '1234 Main St');
-    // pressSequentially returns one key delay (90 ms) after the last key went down, so 300 ms after the key is about 210 ms here
-    assert.ok(rec.suggests[0].at - lastKey >= 180, `request left ${rec.suggests[0].at - lastKey} ms after the last key`);
-    assert.ok(rec.suggests[0].at - t0 > 800);
+    // pressSequentially returns one key delay (60 ms) after the last key went down, so 150 ms after the key is about 90 ms here
+    const gap = rec.suggests[0].at - lastKey;
+    assert.ok(gap >= 40 && gap < 400, `request left ${gap} ms after the last key`);
   });
+
+  await scenario(`${label}: answers are cached per typed text for the session: the same text twice sends one request`, url, async (page, rec) => {
+    await typeSlow(page, '200 N Spring');
+    await page.waitForSelector('[role="option"]');
+    assert.equal(rec.suggests.length, 1);
+    await page.fill('#address', '');
+    await page.waitForTimeout(300);
+    assert.equal(await opts(page).count(), 0);
+    await typeSlow(page, '200 N Spring');
+    await page.waitForSelector('[role="option"]');
+    await page.waitForTimeout(400);
+    assert.equal(rec.suggests.filter((x) => x.q === '200 N Spring').length, 1, 'same text: answered from the cache');
+    await page.locator('#address').press('Backspace');
+    await page.waitForSelector('[role="option"]');
+    await page.locator('#address').pressSequentially('g');
+    await page.waitForTimeout(400);
+    assert.equal(rec.suggests.filter((x) => x.q === '200 N Spring').length, 1, 'typing back to it: still one request');
+    assert.equal(await page.evaluate(() => localStorage.length + sessionStorage.length), 0, 'cache is in memory only');
+  });
+
+  await scenario(`${label}: the typed part is highlighted; the previous list stays visible while the next one loads`, url, async (page, rec) => {
+    await typeSlow(page, 'abcde');
+    await page.waitForSelector('[role="option"]');
+    assert.equal(await opts(page).first().locator('mark').innerText(), 'abcde', 'typed part highlighted');
+    assert.equal(await opts(page).first().innerText(), 'abcde #1, Los Angeles, CA', 'text unchanged by the highlight');
+    await page.locator('#address').pressSequentially('f');
+    await page.waitForTimeout(300); // the next answer takes 700 ms
+    assert.ok(await opts(page).count() >= 1, 'old list still shown while loading');
+    assert.match(await opts(page).first().innerText(), /^abcde #1/);
+    await page.waitForFunction(() => /^abcdef #1/.test(document.querySelector('[role="option"]')?.textContent ?? ''));
+    assert.equal(rec.suggests.length, 2);
+  }, { mode: ({ q, n }) => ({ status: 200, delay: n === 1 ? 0 : 700, body: { suggestions: [1, 2].map((i) => ({ text: `${q} #${i}, Los Angeles, CA`, magicKey: `k${i}` })) } }) });
+
+  await scenario(`${label}: Tab chooses the highlighted suggestion and moves on`, url, async (page) => {
+    const a = page.locator('#address');
+    await typeSlow(page, '300 S Main');
+    await page.waitForSelector('[role="option"]');
+    await a.press('ArrowDown');
+    await a.press('ArrowDown');
+    await a.press('Tab');
+    assert.equal(await a.inputValue(), '300 S Main #2, Los Angeles, CA');
+    assert.notEqual(await page.evaluate(() => document.activeElement.id), 'address', 'focus moved on');
+    assert.equal(await opts(page).count(), 0);
+  });
+
+  await scenario(`${label}: sources are pluggable and asked in order until one has suggestions`, url, async (page, rec) => {
+    await page.evaluate(async () => {
+      const m = await import('/estimate/address-suggest.js');
+      window.__asked = [];
+      m.registerSuggestionSource({ id: 'test-other-us', appliesTo: (t) => /Phoenix/i.test(t), suggest: async (t) => { window.__asked.push(t); return [`${t} (other source)`]; } });
+    });
+    await typeSlow(page, '1 Main Phoenix');
+    await page.waitForSelector('[role="option"]');
+    assert.equal(await opts(page).first().innerText(), '1 Main Phoenix (other source)', 'the county had nothing, the next source answered');
+    assert.equal(rec.suggests.length, 1, 'the county was asked first');
+    await page.fill('#address', '');
+    await typeSlow(page, '9 Elm Pasadena');
+    await page.waitForTimeout(500);
+    assert.deepEqual(await page.evaluate(() => window.__asked), ['1 Main Phoenix'], 'appliesTo keeps a source out of addresses it does not cover');
+  }, { mode: ({ q }) => ({ status: 200, delay: 0, body: { suggestions: /Phoenix|Pasadena/.test(q) ? [] : [{ text: `${q} #1`, magicKey: 'k' }] } }) });
 
   await scenario(`${label}: at most one request in flight; a new keystroke cancels the old request and only the newest answer is shown`, url, async (page, rec) => {
     await typeSlow(page, 'abcde');
@@ -159,10 +219,10 @@ for (const [label, url] of PAGES) {
     assert.match(first, /^abcdefg #1/, 'only the newest text is answered');
   }, { mode: ({ q }) => ({ status: 200, delay: 1500, body: { suggestions: [1, 2].map((i) => ({ text: `${q} #${i}, Los Angeles, CA`, magicKey: `k${i}` })) } }) });
 
-  await scenario(`${label}: at most 5 suggestions are shown`, url, async (page) => {
+  await scenario(`${label}: at most 6 suggestions are shown`, url, async (page) => {
     await typeSlow(page, 'abcde');
     await page.waitForSelector('[role="option"]');
-    assert.equal(await opts(page).count(), 5);
+    assert.equal(await opts(page).count(), 6);
   }, { mode: ({ q }) => ({ status: 200, delay: 0, body: { suggestions: Array.from({ length: 9 }, (_, i) => ({ text: `${q} #${i}, Los Angeles, CA`, magicKey: `k${i}` })) } }) });
 
   await scenario(`${label}: keyboard: arrows move, Enter fills the field only, Escape closes`, url, async (page, rec) => {
@@ -194,7 +254,7 @@ for (const [label, url] of PAGES) {
     assert.equal(await opts(page).count(), 0);
     assert.equal(await a.getAttribute('aria-expanded'), 'false');
     assert.equal(await a.inputValue(), '300 S Broadway');
-    assert.equal(await page.locator('#h-confirm, #profile-table, #manual-basics').count(), 0, 'Escape starts nothing');
+    assert.equal(await page.locator('#h-confirm, #facts').count(), 0, 'Escape starts nothing');
   });
 
   await scenario(`${label}: choosing a suggestion with the pointer fills the field and does not start a lookup`, url, async (page, rec) => {

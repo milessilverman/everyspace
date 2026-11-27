@@ -150,7 +150,7 @@ await scenario('county path: screen < 2.5 s, building lines < 4 s, settled < 8 s
   assert.equal(await page.locator('#address-submit').isDisabled(), false, 'the button is free again');
   assert.equal(await page.locator('#progress').isVisible(), true, 'still loading the rest');
   assert.ok(await page.locator('.fact[data-state="loading"]').count() >= 1, 'late lines show a loading state');
-  assert.equal(await page.locator('.fact[data-state="loading"] input').first().getAttribute('aria-busy'), 'true');
+  assert.ok(await page.locator('.fact[data-state="loading"] [aria-busy="true"]').count() >= 1, 'loading lines are marked busy');
   const buildings = await waitFilled(page, BUILDING_ROWS);
   assert.ok(buildings < 4000, `building lines filled after ${Math.round(buildings)} ms`);
   await page.screenshot({ path: `${SHOTS}/property-desktop-loaded.png`, fullPage: true });

@@ -414,7 +414,7 @@ const hasValue = (a) => Boolean(a) && a.tag !== 'unavailable' && a.value !== nul
 function factKeys() {
   const attrs = S.profile.attributes;
   const keys = [...FACT_ORDER];
-  const extra = (k) => !keys.includes(k) && !HIDDEN.has(k) && !HIDDEN_RE.test(k) && (hasValue(attrs[k]) || k in S.owner || S.loading.has(k)) && kindOf(k, attrs[k]?.value) !== null && kindOf(k, attrs[k]?.value) !== 'equipment';
+  const extra = (k) => !keys.includes(k) && !HIDDEN.has(k) && !HIDDEN_RE.test(k) && (hasValue(attrs[k]) || k in S.owner) && kindOf(k, attrs[k]?.value) !== null && kindOf(k, attrs[k]?.value) !== 'equipment';
   for (const k of MORE_ORDER) if (extra(k)) keys.push(k);
   for (const k of Object.keys(attrs)) if (extra(k)) keys.push(k);
   return keys;
@@ -453,7 +453,7 @@ function factRow(key) {
   } else {
     const u = kind === 'number' ? unitOf(key) : { label: '' };
     labelHtml = `<label class="flabel" for="${id}">${esc(label)}</label>`;
-    ctl = `${approx}<input id="${id}" type="text" ${kind === 'number' ? 'inputmode="decimal" ' : ''}autocomplete="off" spellcheck="false" data-fact="${esc(key)}" data-kind="${kind}" value="${esc(shownText(key, a))}" placeholder="Add"${loading ? ' class="loading" aria-busy="true"' : ''}${est ? ` title="${esc(ESTIMATE_TIP)}"` : ''}${describe}>${u.label ? `<span class="unit">${esc(u.label)}</span>` : ''}`;
+    ctl = `${approx}<input id="${id}" type="text" ${kind === 'number' ? 'inputmode="decimal" ' : ''}autocomplete="off" spellcheck="false" data-fact="${esc(key)}" data-kind="${kind}" value="${esc(shownText(key, a))}" placeholder="Add"${loading ? ' class="loading" aria-busy="true"' : ''}${est ? ` title="${esc(ESTIMATE_TIP)}"` : ''}${describe}>${kind === 'number' ? `<span class="unit"${u.label ? '' : ' aria-hidden="true"'}>${esc(u.label)}</span>` : ''}`;
   }
   const meta = mine ? `<span class="edited">Edited by you</span><button type="button" class="linkbtn" id="undo-${safeId(key)}" data-act="undo" data-key="${esc(key)}" aria-label="Undo your change to ${esc(label)}">Undo</button>` : '';
   return `<div class="fact${kind === 'number' ? ' num' : ''}" data-key="${esc(key)}" data-state="${mine ? 'edited' : loading ? 'loading' : has ? (est ? 'estimated' : 'value') : 'empty'}">
@@ -656,7 +656,7 @@ function oppsHtml(view) {
   return `<section aria-labelledby="h-opps">
     <div class="section-title"><h2 id="h-opps">Ways your property could earn</h2><span class="small muted">${opps.length} found</span></div>
     ${toggle}
-    ${opps.length ? '' : '<div class="callout" style="margin-top:12px">We have not found a way to earn yet. Add or confirm details above, or answer the questions to see more.</div>'}
+    ${opps.length ? '' : '<div class="callout" style="margin-top:12px">No ways to earn yet. Add or correct the details above, or answer the questions, to see ideas.</div>'}
     ${group('What you have now', 'g-now', now, 'Each range shows conservative, baseline and optimistic planning figures after costs we could count.')}
     ${group('Needs a permit or investment first', 'g-later', later, 'These need a permit, registration or building work before they can start. Start-up costs are unknown unless you enter them.')}
   </section>`;
