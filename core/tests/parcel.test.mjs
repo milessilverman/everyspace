@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { geocode, parcelAt, buildingsNear, poolNear, transitNear, resolveAddress, classifyPropertyType, servicesFor, addressMismatch, situsMatchesAddress,
+import { geocode, parcelAt, buildingsNear, poolNear, transitNear, overpassNear, resolveAddress, classifyPropertyType, servicesFor, addressMismatch, situsMatchesAddress,
   BROWSER_GEOCODERS, GEOCODERS_SERVER, CONFIDENCE } from '../parcel.js';
 import { PARCEL_SERVICES } from '../data/parcel-services.js';
 import { setAttribute, applyOwnerCorrection } from '../profile.js';
@@ -593,4 +593,25 @@ test("the geocoder's matched address is surfaced in steps[0] (recorded response)
   assert.equal(r.steps[0].step, 'geocode');
   assert.equal(r.steps[0].matchedAddress, '200 S SPRING ST, LOS ANGELES, CA, 90012');
   assert.equal(r.profile.attributes.parcel_id.tag, 'unavailable');
+});
+
+test('overpassNear: a missing, NaN or negative radius falls back to the default and never reaches the query', async () => {
+  for (const bad of [NaN, undefined, -5, Infinity, 'x']) {
+    const seen = [];
+    const f = async (url) => { seen.push(decodeURIComponent(String(url))); return new Response(JSON.stringify({ elements: [] }), { status: 200 }); };
+    const r = await overpassNear({ lat: 34.05, lng: -118.24 }, { buildingRadiusM: /** @type {any} */ (bad) }, { fetch: f, now: '2026-11-27T00:00:00Z' });
+    assert.equal(r.ok, true);
+    assert.match(seen[0], /\(around:60,34\.05,-118\.24\)/);
+    assert.doesNotMatch(seen[0], /NaN|undefined|Infinity/);
+  }
+});
+
+test('overpassNear: no valid map location means no request at all', async () => {
+  let calls = 0;
+  const f = async () => { calls++; return new Response('{}'); };
+  for (const point of [null, { lat: NaN, lng: -118 }, { lat: 34 }]) {
+    const r = await overpassNear(/** @type {any} */ (point), {}, { fetch: f, now: '2026-11-27T00:00:00Z' });
+    assert.equal(r.ok, false);
+  }
+  assert.equal(calls, 0);
 });

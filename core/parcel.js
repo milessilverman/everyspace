@@ -478,7 +478,10 @@ const osmSource = (/** @type {string} */ url) => ({ name: 'OpenStreetMap via Ove
  */
 export async function overpassNear(point, opts, deps) {
   const at = isoNow(deps?.now);
-  const rb = Math.round(opts.buildingRadiusM ?? 60), rt = Math.round(opts.transitRadiusM ?? TRANSIT_RADIUS_M);
+  // A radius that is missing or not a finite number falls back to the default, so a bad caller can never send "around:NaN".
+  const radius = (/** @type {unknown} */ v, /** @type {number} */ d) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.round(v) : d);
+  const rb = radius(opts?.buildingRadiusM, 60), rt = radius(opts?.transitRadiusM, TRANSIT_RADIUS_M);
+  if (!point || !Number.isFinite(point.lat) || !Number.isFinite(point.lng)) return { ok: false, reason: 'Overpass query skipped: no valid map location' };
   const b = `(around:${rb},${point.lat},${point.lng})`, t = `(around:${rt},${point.lat},${point.lng})`;
   const query = `[out:json][timeout:25];(way["building"]${b};node["leisure"="swimming_pool"]${b};way["leisure"="swimming_pool"]${b};` +
     `node["railway"="station"]${t};node["public_transport"="platform"]${t};node["highway"="bus_stop"]${t};);out geom tags;`;
