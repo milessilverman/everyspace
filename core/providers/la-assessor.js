@@ -11,7 +11,7 @@
 import { parseStreet, situsMatchesAddress, ringsToGeoJSON, classifyPropertyType, parcelAt, CONFIDENCE } from '../parcel.js';
 import { polygonAreaSqft, pointInPolygon } from '../geometry.js';
 import { PARCEL_SERVICES } from '../data/parcel-services.js';
-import { callJson, fail, isoNow, pos, text, sourced, unavailable, withCrossCheck, compareValues, round } from './util.js';
+import { callJson, qs, fail, isoNow, pos, text, sourced, unavailable, withCrossCheck, compareValues, round } from './util.js';
 
 const SERVICE = PARCEL_SERVICES.find((s) => s.id === 'la-county-assessor');
 if (!SERVICE) throw new Error('la-county-assessor missing from core/data/parcel-services.js');
@@ -157,7 +157,7 @@ async function lookup(/** @type {{address:string, lat?:number, lng?:number, apn?
   const reasons = [];
 
   // 1. direct situs query
-  const url = `${QUERY_URL}?` + new URLSearchParams({ where: buildSitusWhere(s), outFields: '*', returnGeometry: 'true', outSR: '4326', f: 'json' });
+  const url = `${QUERY_URL}?` + qs({ where: buildSitusWhere(s), outFields: '*', returnGeometry: 'true', outSR: '4326', f: 'json' });
   const r = await callJson(url, deps);
   if (r.ok) {
     if (r.json?.error) reasons.push(`situs query: service error: ${r.json.error.message ?? r.json.error.code ?? 'unknown'}`);
@@ -184,7 +184,7 @@ async function lookup(/** @type {{address:string, lat?:number, lng?:number, apn?
   if (Number.isFinite(query.lat) && Number.isFinite(query.lng)) {
     const p = await parcelAt({ lat: /** @type {number} */ (query.lat), lng: /** @type {number} */ (query.lng), jurisdiction: LA_JURISDICTION }, { ...deps, services: [SERVICE] }, { matchedAddress: typed });
     if (p.ok && p.apn && /^\d{6,12}$/.test(p.apn)) {
-      const full = await callJson(`${QUERY_URL}?` + new URLSearchParams({ where: `AIN='${p.apn}'`, outFields: '*', returnGeometry: 'false', f: 'json' }), deps);
+      const full = await callJson(`${QUERY_URL}?` + qs({ where: `AIN='${p.apn}'`, outFields: '*', returnGeometry: 'false', f: 'json' }), deps);
       const a = full.ok ? full.json?.features?.[0]?.attributes : null;
       if (a) return done(a, p.boundary, CONFIDENCE.parcelBySitus, `${p.method} (fallback after the direct situs query failed)`, p.matchedBy ?? 'point');
       reasons.push(`full record for AIN ${p.apn}: ${full.ok ? 'not returned' : full.reason}`);

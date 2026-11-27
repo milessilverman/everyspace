@@ -1,0 +1,17 @@
+[
+ {
+  "_fixture_note": "SYNTHETIC: invented address and geometry shaped like the live LA County response; not a real property; field names are from memory of RentCast documentation (unverified)",
+  "id": "synthetic-1",
+  "formattedAddress": "4321 Example Ave, Los Angeles, CA 90099",
+  "propertyType": "Single Family",
+  "bedrooms": 3,
+  "bathrooms": 2,
+  "squareFootage": 2750,
+  "lotSize": 6400,
+  "yearBuilt": 1952,
+  "assessorID": "9999-999-999",
+  "features": {
+   "floorCount": 2
+  }
+ }
+]

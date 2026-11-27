@@ -38,6 +38,9 @@ export async function callJson(url, deps, init = {}, secrets = []) {
   return { ok: false, reason: redact(r.reason, secrets), code, ...(r.status ? { status: r.status } : {}) };
 }
 
+/** Query string with %20 for spaces (ArcGIS-safe; URLSearchParams would write '+'). @param {Record<string,string>} params */
+export const qs = (params) => new URLSearchParams(params).toString().replace(/\+/g, '%20');
+
 /** @param {string} reason @param {string} code @param {any} [extra] @returns {{ok:false, reason:string, code:string}} */
 export const fail = (reason, code, extra = {}) => ({ ok: false, reason, code, ...extra });
 

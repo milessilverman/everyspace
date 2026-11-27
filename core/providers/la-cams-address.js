@@ -4,7 +4,7 @@
 // ("200 North Spring St") and, unlike the Census geocoder, matched 200 N Spring correctly where Census returned 200 S.
 // The returned point is address-range based (Addr_type StreetAddress); it is NOT claimed to be a street-side point.
 
-import { callJson, fail, isoNow, num, text } from './util.js';
+import { callJson, qs, fail, isoNow, num, text } from './util.js';
 
 const BASE = 'https://public.gis.lacounty.gov/public/rest/services/CAMS_Locator/GeocodeServer';
 const MIN_SCORE = 85;
@@ -18,7 +18,7 @@ export const laCamsAddress = {
   async suggest(textIn, deps) {
     const t = typeof textIn === 'string' ? textIn.trim().slice(0, 200) : '';
     if (!t) return fail('empty text', 'bad_query');
-    const r = await callJson(`${BASE}/suggest?` + new URLSearchParams({ text: t, maxSuggestions: '5', f: 'json' }), deps);
+    const r = await callJson(`${BASE}/suggest?` + qs({ text: t, maxSuggestions: '5', f: 'json' }), deps);
     if (!r.ok) return fail(r.reason, r.code);
     if (r.json?.error) return fail(`service error: ${r.json.error.message ?? r.json.error.code ?? 'unknown'}`, 'http_error');
     if (!Array.isArray(r.json?.suggestions)) return fail('malformed response', 'malformed_json');
@@ -31,7 +31,7 @@ export const laCamsAddress = {
     if (!t) return fail('empty address', 'bad_query');
     const params = new URLSearchParams({ 'Single Line Input': t, outSR: '4326', outFields: '*', maxLocations: '3', f: 'json' });
     if (typeof input === 'object' && input && text(input.magicKey)) params.set('magicKey', /** @type {string} */ (input.magicKey));
-    const r = await callJson(`${BASE}/findAddressCandidates?` + params, deps);
+    const r = await callJson(`${BASE}/findAddressCandidates?` + qs(Object.fromEntries(params)), deps);
     if (!r.ok) return fail(r.reason, r.code);
     if (r.json?.error) return fail(`service error: ${r.json.error.message ?? r.json.error.code ?? 'unknown'}`, 'http_error');
     if (!Array.isArray(r.json?.candidates)) return fail('malformed response', 'malformed_json');

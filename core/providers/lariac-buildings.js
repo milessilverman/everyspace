@@ -24,6 +24,12 @@ function mainCentroid(g) {
   return centroid({ type: 'Polygon', coordinates: best });
 }
 
+/** GeoJSON (outer CCW, holes CW) -> Esri rings (outer CW, holes CCW): every ring reversed. @param {any} g */
+export function toEsriRings(g) {
+  const polys = g.type === 'Polygon' ? [g.coordinates] : g.coordinates;
+  return polys.flatMap((/** @type {number[][][]} */ rings) => rings.map((r) => [...r].reverse()));
+}
+
 const yearOf = (/** @type {any} */ d) => { const n = pos(d); return n !== null ? n : 0; };
 
 /** @param {{lat:number, lng:number, parcel?:any}} q @param {any} deps */
@@ -33,7 +39,7 @@ async function lookup(q, deps) {
   const base = { outFields: '*', returnGeometry: 'true', outSR: '4326', f: 'json' };
   const body = q.parcel
     ? new URLSearchParams({ ...base, geometryType: 'esriGeometryPolygon', inSR: '4326', spatialRel: 'esriSpatialRelIntersects',
-      geometry: JSON.stringify({ rings: (q.parcel.type === 'Polygon' ? [q.parcel.coordinates] : q.parcel.coordinates).flat(), spatialReference: { wkid: 4326 } }) })
+      geometry: JSON.stringify({ rings: toEsriRings(q.parcel), spatialReference: { wkid: 4326 } }) })
     : new URLSearchParams({ ...base, geometryType: 'esriGeometryPoint', inSR: '4326', spatialRel: 'esriSpatialRelIntersects', geometry: `${q.lng},${q.lat}`, distance: String(DEFAULT_RADIUS_M), units: 'esriSRUnit_Meter' });
   const r = await callJson(URL_, deps, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body.toString() });
   if (!r.ok) return fail(r.reason, r.code);
