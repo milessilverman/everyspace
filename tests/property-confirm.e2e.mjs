@@ -181,7 +181,7 @@ await scenario('parcel picker: several matches -> pick yours; "None of these" gi
 await scenario('the list: plain lines in the owner order, values are inputs, internals hidden, address and parcel once in the heading', async (page) => {
   await happy(page);
   const keys = await page.locator('#facts .fact').evaluateAll((els) => els.map((e) => e.dataset.key));
-  const ORDER = ['lot_area_sqft', 'living_area_sqft', 'bedrooms', 'bathrooms', 'floors', 'year_built', 'remodeled_year', 'roof_area_sqft', 'front_yard_sqft', 'back_yard_sqft', 'side_yard_sqft', 'yard_area_sqft', 'building_footprint_sqft', 'pool_present', 'parking_spaces', 'garage_present'];
+  const ORDER = ['lot_area_sqft', 'living_area_sqft', 'bedrooms', 'bathrooms', 'floors', 'year_built', 'remodeled_year', 'roof_area_sqft', 'front_yard_sqft', 'back_yard_sqft', 'yard_area_sqft', 'building_footprint_sqft', 'pool_present', 'parking_spaces', 'garage_present'];
   assert.deepEqual(keys.slice(0, ORDER.length), ORDER, 'owner order');
   for (const k of ['address', 'location', 'parcel_boundary', 'use_code', 'use_type', 'buildings', 'parcel_id', 'jurisdiction']) assert.ok(!keys.includes(k), `${k} hidden`);
   assert.match(await text(page, '#h-profile'), /Venice/);

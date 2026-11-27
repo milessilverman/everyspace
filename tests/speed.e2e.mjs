@@ -33,7 +33,7 @@ const nominatimChicago = [{ _fixture_note: 'synthetic, shaped like the recorded 
   display_name: '121, North LaSalle Street, Chicago, Cook County, Illinois, 60602, United States', address: { house_number: '121', road: 'North LaSalle Street', city: 'Chicago', county: 'Cook County', state: 'Illinois', 'ISO3166-2-lvl4': 'US-IL', postcode: '60602', country_code: 'us' } }];
 const VENICE = '99999 Venice Blvd, Los Angeles, CA 90034';
 const DELAY = 400;
-const BUILDING_ROWS = ['floors', 'roof_area_sqft', 'building_footprint_sqft', 'front_yard_sqft', 'back_yard_sqft', 'side_yard_sqft', 'yard_area_sqft'];
+const BUILDING_ROWS = ['floors', 'roof_area_sqft', 'building_footprint_sqft', 'front_yard_sqft', 'back_yard_sqft', 'yard_area_sqft'];
 /** Hosts other data sources may ask (county lookup, Overture): mocked with a delayed "not here" answer. */
 const OTHER_SOURCES = /(^|\.)(geo\.fcc\.gov|tigerweb\.geo\.census\.gov|stac\.overturemaps\.org|amazonaws\.com|imagery\.nationalmap\.gov|planetarycomputer\.microsoft\.com)$/;
 

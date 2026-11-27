@@ -40,7 +40,7 @@ import { streetReference } from './street-ref.js';
 /** Los Angeles County (the first jurisdiction with richer providers). Kept as an export; the assembler no longer assumes it. */
 export const LA_COUNTY = { state: 'CA', countyFips: '06037', county: 'Los Angeles County' };
 const ASSEMBLER = 'Everyspace property-profile assembler';
-const RECORD_KEYS = ['apn', 'lot_sqft', 'house_sqft', 'floors', 'beds', 'baths', 'year_built', 'property_type', 'use_code', 'units'];
+const RECORD_KEYS = ['apn', 'lot_sqft', 'house_sqft', 'floors', 'beds', 'baths', 'year_built', 'remodeled_year', 'property_type', 'use_code', 'units'];
 /** Top-level flat fields of the profile, in output order. */
 export const PROFILE_FIELDS = ['address', 'lat', 'lng', 'place_id', 'apn', 'lot_sqft', 'house_sqft', 'floors', 'beds', 'baths', 'roof_sqft',
   'front_yard_sqft', 'back_yard_sqft', 'side_yard_sqft', 'year_built', 'property_type'];

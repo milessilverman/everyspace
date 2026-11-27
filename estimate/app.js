@@ -73,19 +73,19 @@ const EQUIPMENT = [['atv', 'ATV'], ['snowmobile', 'Snowmobile'], ['kayak', 'Kaya
 // ---- the owner's property list --------------------------------------------------------------------------------------
 /** Always listed, in this order (an empty input when nothing was found). */
 const FACT_ORDER = ['lot_area_sqft', 'living_area_sqft', 'bedrooms', 'bathrooms', 'floors', 'year_built', 'remodeled_year', 'roof_area_sqft', 'front_yard_sqft',
-  'back_yard_sqft', 'side_yard_sqft', 'yard_area_sqft', 'building_footprint_sqft', 'pool_present', 'parking_spaces', 'garage_present', 'property_type'];
+  'back_yard_sqft', 'yard_area_sqft', 'building_footprint_sqft', 'pool_present', 'parking_spaces', 'garage_present', 'property_type'];
 /** Listed right after the yard lines, only when the lookup supplied a value (or the owner typed one). */
 const AFTER_YARD = ['green_area_sqft', 'paved_area_sqft', 'pool_area_sqft', 'tree_cover_sqft'];
 /** Listed after those when the profile has a value for them, in this order; any other owner-meaningful attribute follows. */
 const MORE_ORDER = ['units', 'driveway_area_sqft', 'adu_present', 'zoning', 'transit_distance_m'];
 /** Never listed: map and record internals. Address and parcel number appear once in the heading. */
-const HIDDEN = new Set(['address', 'location', 'jurisdiction', 'parcel_id', 'parcel_boundary', 'use_code', 'use_type', 'buildings', 'place_id',
+const HIDDEN = new Set(['side_yard_sqft', 'address', 'location', 'jurisdiction', 'parcel_id', 'parcel_boundary', 'use_code', 'use_type', 'buildings', 'place_id',
   'demand_generators', 'equipment_owned', 'lat', 'lng', 'apn']);
 const HIDDEN_RE = /(^|_)(id|ids|code|codes|boundary|polygon|geometry|location|lat|lng|source|sources|url|count|counts|mapped|raw|fips|method)$/;
 const LABELS = {
   lot_area_sqft: 'Lot size', living_area_sqft: 'Home size', bedrooms: 'Bedrooms', bathrooms: 'Bathrooms', floors: 'Floors', year_built: 'Year built', remodeled_year: 'Remodeled (year)',
   green_area_sqft: 'Lawn and planting', paved_area_sqft: 'Paved area (driveway, patio)', pool_area_sqft: 'Pool size', tree_cover_sqft: 'Tree cover',
-  roof_area_sqft: 'Roof area', front_yard_sqft: 'Front yard', back_yard_sqft: 'Back yard', side_yard_sqft: 'Side yard', yard_area_sqft: 'Yard (total open ground)',
+  roof_area_sqft: 'Roof area', front_yard_sqft: 'Front yard', back_yard_sqft: 'Back yard', usable_yard_sqft: 'Usable yard', usable_front_yard_sqft: 'Usable front yard', usable_back_yard_sqft: 'Usable back yard', yard_area_sqft: 'Yard (total open ground)',
   building_footprint_sqft: 'Building footprint', pool_present: 'Pool', parking_spaces: 'Parking spaces', garage_present: 'Garage', property_type: 'Property type',
   units: 'Units', driveway_area_sqft: 'Driveway area', adu_present: 'Guest house or ADU', zoning: 'Zoning', transit_distance_m: 'Nearest bus or train stop',
   address: 'Address', parcel_id: 'Parcel number',
@@ -394,11 +394,16 @@ function renderResults() {
   const ready = S.phase === 'results' && Boolean(S.profile);
   els.nextBar.hidden = !(ready || S.busy);
   els.next.disabled = !ready;
+  const holder = document.getElementById('lot-map-holder'), mnt = document.getElementById('lot-map');
+  if (holder && mnt && !holder.contains(mnt)) holder.append(mnt); // keep the mount point alive across the re-render
   if (!ready) { els.results.innerHTML = ''; return; }
   els.results.innerHTML = `<div class="stack">
     ${profileHtml()}
     <p class="small muted" id="session-note">Nothing is saved. If you reload or leave this page, everything you entered here is cleared and you start again.</p>
   </div>`;
+  // the map agent's mount point lives in index.html (#lot-map); put it back between the heading and the list after each render
+  const slot = document.getElementById('lot-map-slot'), mount = document.getElementById('lot-map');
+  if (slot && mount) slot.append(mount);
   S.keepStatus = false;
 }
 
@@ -409,12 +414,14 @@ const hasValue = (a) => Boolean(a) && a.tag !== 'unavailable' && a.value !== nul
 function factKeys() {
   const attrs = S.profile.attributes;
   const keys = [...FACT_ORDER];
-  const at = keys.indexOf('yard_area_sqft') + 1;
-  keys.splice(at, 0, ...AFTER_YARD.filter((k) => hasValue(attrs[k]) || k in S.owner));
-  const extra = (k) => !keys.includes(k) && !HIDDEN.has(k) && !HIDDEN_RE.test(k) && (hasValue(attrs[k]) || k in S.owner) && kindOf(k, attrs[k]?.value) !== null && kindOf(k, attrs[k]?.value) !== 'equipment';
+  const present = (k) => (hasValue(attrs[k]) || k in S.owner) && !attrs[k]?.hidden;
+  // usable lines sit right after the line they refine; only when the lookup (or the owner) supplied them
+  const put = (after, ...ks) => { const w = ks.filter(present); keys.splice(keys.indexOf(after) + 1, 0, ...w); };
+  put('yard_area_sqft', ...AFTER_YARD); put('yard_area_sqft', 'usable_yard_sqft'); put('back_yard_sqft', 'usable_back_yard_sqft'); put('front_yard_sqft', 'usable_front_yard_sqft');
+  const extra = (k) => !keys.includes(k) && !HIDDEN.has(k) && !HIDDEN_RE.test(k) && !attrs[k]?.hidden && (hasValue(attrs[k]) || k in S.owner) && kindOf(k, attrs[k]?.value) !== null && kindOf(k, attrs[k]?.value) !== 'equipment';
   for (const k of MORE_ORDER) if (extra(k)) keys.push(k);
   for (const k of Object.keys(attrs)) if (extra(k)) keys.push(k);
-  return keys;
+  return keys.filter((k) => !attrs[k]?.hidden);
 }
 
 /** What the input shows for a stored value. */
@@ -471,6 +478,14 @@ function sourcesHtml(keys) {
     <thead><tr><th scope="col">Fact</th><th scope="col">Source</th><th scope="col">Date</th></tr></thead><tbody>${rows.join('')}</tbody></table></div>`, false, 'panel sources');
 }
 
+const YARD_GROUP = ['front_yard_sqft', 'usable_front_yard_sqft', 'back_yard_sqft', 'usable_back_yard_sqft', 'yard_area_sqft', 'usable_yard_sqft'];
+/** The fact lines; one short helper line closes the yard group when usable-yard lines are shown. */
+function factRowsHtml(keys) {
+  const usable = keys.some((k) => k.startsWith('usable_'));
+  const last = usable ? keys.filter((k) => YARD_GROUP.includes(k)).pop() : null;
+  return keys.map((k) => factRow(k) + (k === last ? '<p class="yard-note small muted" id="yard-note">Usable yard leaves out strips too narrow to use.</p>' : '')).join('');
+}
+
 function profileHtml() {
   const attrs = S.profile.attributes;
   const addr = hasValue(attrs.address) ? String(attrs.address.value) : S.address;
@@ -483,7 +498,8 @@ function profileHtml() {
       <button class="btn primary sm next-top" id="next-earn-top" type="button" data-act="next-earn">Next: see what it could earn</button></div>
     ${S.notFound ? `<p class="callout" id="not-found">We couldn't find that address automatically. Add your property details below.</p>` : ''}
     <p class="small muted" id="facts-help">Type over any number that is not right. Everything below updates at once.</p>
-    <div class="facts" id="facts">${keys.map(factRow).join('')}</div>
+    <div id="lot-map-slot"></div>
+    <div class="facts" id="facts">${factRowsHtml(keys)}</div>
     ${typeHint}
     <div style="margin-top:12px">${questionsHtml(new Set(keys))}</div>
     <div style="margin-top:12px">${sourcesHtml(keys)}</div>
@@ -1026,3 +1042,20 @@ attachAddressSuggest(els.input);
   }
   els.form.requestSubmit();
 })();
+
+// ---------------------------------------------------------------------------------------------------------------
+// What the satellite-map view (mounted in #lot-map, see index.html) needs from this page.
+// ---------------------------------------------------------------------------------------------------------------
+/** The current property profile (looked-up values with the owner's corrections applied), including `profile.geometry` when present; null before a property is shown. */
+export function getProfile() { return S.profile; }
+/**
+ * Apply a batch of owner corrections `{[attributeKey]: value}` through the same path as typing into the list: the lines show
+ * "Edited by you" (with Undo), page 2 recomputes, and nothing is stored. Values are stored as given (square feet for `_sqft`).
+ * @param {Record<string, any>} batch
+ */
+export function applyOwnerCorrections(batch) {
+  if (!S.profile || !batch || typeof batch !== 'object') return false;
+  for (const [k, v] of Object.entries(batch)) if (v !== undefined && v !== null) setOwner(k, v);
+  renderAll();
+  return true;
+}

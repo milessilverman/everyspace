@@ -725,7 +725,7 @@ await scenario('county path: an LA address uses the county services; floors, bat
   assert.equal(await page.inputValue('#f-bathrooms'), '2');
   assert.equal(await page.inputValue('#f-living_area_sqft'), '2,800');
   assert.match(await page.inputValue('#f-roof_area_sqft'), /^[\d,]+$/);
-  for (const k of ['front_yard_sqft', 'back_yard_sqft', 'side_yard_sqft', 'yard_area_sqft']) {
+  for (const k of ['front_yard_sqft', 'back_yard_sqft', 'yard_area_sqft']) {
     assert.match(await page.inputValue(`#f-${k}`), /^[\d,]+$/, k);
     assert.equal(await page.locator(row(k)).getAttribute('data-state'), 'estimated', k);
   }
@@ -754,7 +754,7 @@ await scenario('county path: an estimated value carries only "≈"; typing over 
 
 await scenario('county path: with no street-side reference the yard lines are simply empty to fill in; total open ground is still estimated', withCounty({ cams: (b) => { b.candidates[0].location = { x: -118.29992, y: 34.00018 }; return b; } }, async (page) => {
   await countyPage(page);
-  for (const k of ['front_yard_sqft', 'back_yard_sqft', 'side_yard_sqft']) {
+  for (const k of ['front_yard_sqft', 'back_yard_sqft']) {
     assert.equal(await page.inputValue(`#f-${k}`), '', k);
     assert.equal(await page.getAttribute(`#f-${k}`, 'placeholder'), 'Add');
   }
@@ -848,7 +848,7 @@ await scenario('non-LA address: county lookup + Overture fill footprint, roof an
   assert.match(await page.inputValue('#f-roof_area_sqft'), /^[\d,]+$/); assert.match(await page.inputValue('#f-floors'), /^\d+$/);
   assert.equal(await page.inputValue('#f-lot_area_sqft'), '', 'lot size: simply an empty input');
   assert.equal(await page.locator(row('lot_area_sqft')).getAttribute('data-state'), 'empty');
-  for (const k of ['front_yard_sqft', 'back_yard_sqft', 'side_yard_sqft']) assert.equal(await page.inputValue(`#f-${k}`), '', `${k}: no street reference, so no front is guessed`);
+  for (const k of ['front_yard_sqft', 'back_yard_sqft']) assert.equal(await page.inputValue(`#f-${k}`), '', `${k}: no street reference, so no front is guessed`);
   assert.doesNotMatch(await text(page, 'main'), FAILURE_WORDS);
   assert.doesNotMatch(await ownerText(page), FORBIDDEN);
   assert.equal(await page.getAttribute('#f-lot_area_sqft', 'placeholder'), 'Add', 'the owner can type the lot size');
@@ -930,7 +930,7 @@ async function supplyAttrs(page, attrs) {
   await page.route('**/estimate/county-path.js', async (route) => {
     const res = await route.fetch();
     const body = (await res.text()).replace('let p = base ?? createProfile();', `let p = base ?? createProfile();
-  for (const [k, v] of Object.entries(globalThis.__testAttrs ?? {})) p = setAttribute(p, k, sourced(v.value, { tag: v.tag, source: 'test fixture', confidence: v.tag === 'estimated' ? 0.2 : 0.9, retrievedAt: null }));`);
+  for (const [k, v] of Object.entries(globalThis.__testAttrs ?? {})) p = setAttribute(p, k, Object.assign(sourced(v.value, { tag: v.tag, source: 'test fixture', confidence: v.tag === 'estimated' ? 0.2 : 0.9, retrievedAt: null }), v.hidden ? { hidden: true } : {}));`);
     await route.fulfill({ response: res, body });
   });
 }
@@ -1162,6 +1162,66 @@ await scenario('two pages on a phone (390 px) and desktop, light and dark: no ho
       await page.screenshot({ path: `${out}/${tag}-${scheme}-page2-open.png`, fullPage: true });
     }
   }
+});
+
+await scenario('yard lines: no Side yard even when supplied; usable lines only when supplied, after Front/Back yard, with one helper line; "hidden" attributes skipped', async (page, rec) => {
+  await supplyAttrs(page, {
+    side_yard_sqft: { value: 700, tag: 'estimated' },
+    front_yard_sqft: { value: 900, tag: 'estimated' }, back_yard_sqft: { value: 2400, tag: 'estimated' }, yard_area_sqft: { value: 4000, tag: 'estimated' },
+    usable_front_yard_sqft: { value: 800, tag: 'estimated' }, usable_back_yard_sqft: { value: 2100, tag: 'measured' }, usable_yard_sqft: { value: 3200, tag: 'estimated' },
+    tree_cover_sqft: { value: 500, tag: 'estimated', hidden: true },
+  });
+  await happy(page, rec);
+  const keys = await page.locator('#facts .fact').evaluateAll((els) => els.map((e) => e.dataset.key));
+  assert.equal(keys.includes('side_yard_sqft'), false, 'no Side yard line');
+  assert.equal(keys.includes('tree_cover_sqft'), false, 'a hidden attribute is skipped');
+  assert.doesNotMatch(await text(page, '#facts'), /Side yard/);
+  const at = (k) => keys.indexOf(k);
+  assert.equal(at('usable_front_yard_sqft'), at('front_yard_sqft') + 1);
+  assert.equal(at('usable_back_yard_sqft'), at('back_yard_sqft') + 1);
+  assert.equal(at('usable_yard_sqft'), at('yard_area_sqft') + 1);
+  const labels = { usable_yard_sqft: 'Usable yard', usable_front_yard_sqft: 'Usable front yard', usable_back_yard_sqft: 'Usable back yard' };
+  for (const [k, l] of Object.entries(labels)) { assert.equal(await text(page, `${row(k)} .flabel`), l); assert.equal(await page.locator(`#f-${k}`).count(), 1); }
+  assert.match(await text(page, `${row('usable_front_yard_sqft')} .approx`), /≈/);
+  assert.equal((await text(page, `${row('usable_back_yard_sqft')} .approx`)).includes('≈'), false);
+  assert.equal(await page.locator('#yard-note').count(), 1, 'one helper line');
+  assert.equal(await text(page, '#yard-note'), 'Usable yard leaves out strips too narrow to use.');
+  assert.equal(keys.indexOf('usable_yard_sqft') < keys.length && await page.locator('#facts .fact + #yard-note, #facts #yard-note').count(), 1);
+  await typeFact(page, 'usable_yard_sqft', 3000);
+  await edited(page, 'usable_yard_sqft');
+  assert.equal(await page.inputValue('#f-usable_yard_sqft'), '3,000');
+  assert.doesNotMatch(await ownerText(page), FORBIDDEN);
+});
+
+await scenario('yard lines without usable attributes: no usable lines, no helper line, no Side yard', async (page, rec) => {
+  await happy(page, rec);
+  const keys = await page.locator('#facts .fact').evaluateAll((els) => els.map((e) => e.dataset.key));
+  assert.equal(keys.some((k) => k.startsWith('usable_') || k === 'side_yard_sqft'), false);
+  assert.equal(await page.locator('#yard-note').count(), 0);
+});
+
+await scenario('map mount point and exports: #lot-map sits between the heading and the list; getProfile and applyOwnerCorrections update the list and page 2', async (page, rec) => {
+  await happy(page, rec);
+  assert.equal(await page.locator('#lot-map').count(), 1);
+  assert.equal(await page.locator('#lot-map').isHidden(), true, 'empty and hidden for now');
+  const order = await page.evaluate(() => {
+    const m = document.getElementById('lot-map'), h = document.getElementById('h-profile'), f = document.getElementById('facts');
+    return { afterHeading: Boolean(h.compareDocumentPosition(m) & Node.DOCUMENT_POSITION_FOLLOWING), beforeFacts: Boolean(m.compareDocumentPosition(f) & Node.DOCUMENT_POSITION_FOLLOWING) };
+  });
+  assert.deepEqual(order, { afterHeading: true, beforeFacts: true });
+  const r = await coreProfile(VENICE);
+  const api = await page.evaluate(async () => {
+    const m = await import('/estimate/app.js');
+    const before = m.getProfile();
+    m.applyOwnerCorrections({ bedrooms: 6, parking_spaces: 3 });
+    return { names: Object.keys(m).sort(), hadProfile: Boolean(before && before.attributes), bedrooms: m.getProfile().attributes.bedrooms.value };
+  });
+  assert.deepEqual(api.names, ['applyOwnerCorrections', 'getProfile']);
+  assert.equal(api.hadProfile, true); assert.equal(api.bedrooms, 6);
+  assert.equal(await page.inputValue('#f-bedrooms'), '6');
+  assert.equal(await page.locator(`${row('bedrooms')}[data-state="edited"]`).count(), 1);
+  assert.equal(await page.locator('#lot-map').count(), 1, 'the mount point survives the re-render');
+  await assertMatchesCore(page, corePipeline(owner(r.profile, [['bedrooms', 6], ['parking_spaces', 3]])), 'after a batch of corrections');
 });
 
 // no lookup request may ever carry a broken number (regression: an outline of type Polygon produced "around:NaN")

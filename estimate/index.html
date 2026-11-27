@@ -46,6 +46,13 @@
 
   <div id="lookup"></div>
   <div id="results"></div>
+  <!-- MOUNT POINT for the satellite-image view with adjustable outlines (another agent builds it; empty and hidden until then).
+       app.js moves #lot-map after every render of the property list so that it sits between the property heading (address, parcel)
+       and the list of facts. It exports two functions (import { getProfile, applyOwnerCorrections } from './app.js'):
+         getProfile()                      -> the current profile (owner corrections applied; `profile.geometry` when present) or null
+         applyOwnerCorrections({key: val}) -> applies a batch of owner corrections through the same path as typing in the list;
+                                              the lines and page 2 update. Unhide #lot-map yourself when you have something to show. -->
+  <div id="lot-map-holder" hidden><div id="lot-map" hidden></div></div>
   <div class="next-bar" id="next-bar" hidden>
     <button class="btn primary lg" id="next-earn" type="button" data-act="next-earn" disabled>Next: see what it could earn</button>
   </div>
