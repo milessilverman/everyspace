@@ -1,0 +1,30 @@
+{
+ "_fixture_note": "recorded 2026-11-27 from the live public service for a PUBLIC building (200 N Spring St, Los Angeles, CA 90012); CAMS_Locator suggest",
+ "suggestions": [
+  {
+   "text": "200 North Spring St, Los Angeles, CA",
+   "magicKey": "GST7YMc0AM9UOsKtJSVZMh87HTkQMh87HToF",
+   "isCollection": false
+  },
+  {
+   "text": "200 Spring St, Los Angeles, CA",
+   "magicKey": "GST7YMc0AM9UOsKtJSVZMgEWSnxF",
+   "isCollection": false
+  },
+  {
+   "text": "200 South Spring St, Los Angeles, CA",
+   "magicKey": "GST7YMc0AM9UOsKtJSVZMh87HnxQMh87HSVQMh87HTkF",
+   "isCollection": false
+  },
+  {
+   "text": "200 North Los Angeles St, Los Angeles, CA",
+   "magicKey": "GST7YMc0AM9UOsKtJSVZMh87HTkF",
+   "isCollection": false
+  },
+  {
+   "text": "200 North Main St, Los Angeles, CA",
+   "magicKey": "GST7YMc0AM9UOsKtJSVZMh87HTkQMh87HToQMh87HTwF",
+   "isCollection": false
+  }
+ ]
+}

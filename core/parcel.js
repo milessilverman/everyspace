@@ -59,9 +59,9 @@ export const CONFIDENCE = { census: 0.8, nominatim: 0.65, mismatch: 0.3, parcelI
 /**
  * GET/POST JSON through the injected fetch with a timeout. Never throws.
  * @param {string} url @param {Deps} deps @param {any} [init]
- * @returns {Promise<{ok:true, json:any}|{ok:false, reason:string}>}
+ * @returns {Promise<{ok:true, json:any}|{ok:false, reason:string, status?:number, code?:string}>}  failures carry `status` (HTTP) and `code` ('http'|'timeout'|'network'|'malformed_json')
  */
-async function fetchJson(url, deps, init = {}) {
+export async function fetchJson(url, deps, init = {}) {
   if (typeof deps?.fetch !== 'function') return { ok: false, reason: 'no fetch provided' };
   const timeoutMs = deps.timeoutMs ?? 12000;
   const ctl = new AbortController();
@@ -72,32 +72,33 @@ async function fetchJson(url, deps, init = {}) {
       ...init, signal: ctl.signal,
       headers: { Accept: 'application/json', ...(deps.userAgent ? { 'User-Agent': deps.userAgent } : {}), ...(init.headers ?? {}) },
     });
-    if (!res || !res.ok) return { ok: false, reason: `HTTP ${res?.status ?? 'error'}` };
+    if (!res || !res.ok) return { ok: false, reason: `HTTP ${res?.status ?? 'error'}`, status: res?.status, code: 'http' };
     try {
       return { ok: true, json: await res.json() };
     } catch {
-      return timedOut ? { ok: false, reason: `timeout after ${timeoutMs} ms` } : { ok: false, reason: 'malformed JSON' };
+      return timedOut ? { ok: false, reason: `timeout after ${timeoutMs} ms`, code: 'timeout' } : { ok: false, reason: 'malformed JSON', code: 'malformed_json' };
     }
   } catch (e) {
-    return { ok: false, reason: timedOut ? `timeout after ${timeoutMs} ms` : `network error: ${e instanceof Error ? e.message : String(e)}` };
+    return timedOut ? { ok: false, reason: `timeout after ${timeoutMs} ms`, code: 'timeout' }
+      : { ok: false, reason: `network error: ${e instanceof Error ? e.message : String(e)}`, code: 'network' };
   } finally {
     clearTimeout(timer);
   }
 }
 
 /** @param {string|Date|undefined} now */
-function isoNow(now) {
+export function isoNow(now) {
   const iso = now instanceof Date ? now.toISOString() : now;
   if (typeof iso !== 'string' || Number.isNaN(Date.parse(iso))) throw new TypeError('`now` (ISO time) must be injected');
   return iso;
 }
 
-const num = (/** @type {any} */ v) => {
+export const num = (/** @type {any} */ v) => {
   const n = typeof v === 'string' && v.trim() !== '' ? Number(v) : v;
   return typeof n === 'number' && Number.isFinite(n) ? n : null;
 };
-const pos = (/** @type {any} */ v) => { const n = num(v); return n !== null && n > 0 ? n : null; };
-const text = (/** @type {any} */ v) => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null);
+export const pos = (/** @type {any} */ v) => { const n = num(v); return n !== null && n > 0 ? n : null; };
+export const text = (/** @type {any} */ v) => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null);
 
 // ---------------------------------------------------------------------------------------------------------------
 // Geocoding
@@ -115,7 +116,7 @@ const SUFFIXES = /** @type {Record<string,string>} */ ({ ST: 'ST', STREET: 'ST',
  * @param {string|null|undefined} line
  * @returns {{num:string, dir:string|null, core:string[], suffix:string|null}|null}
  */
-function parseStreet(line) {
+export function parseStreet(line) {
   const t = String(line ?? '').toUpperCase().replace(/[.,#]/g, ' ').split(/\s+/).filter(Boolean);
   if (!t.length || !/^\d/.test(t[0])) return null;
   let i = 1, dir = null;
@@ -312,7 +313,7 @@ export function servicesFor(services, j) {
 }
 
 /** Esri rings (outer = clockwise, holes = counter-clockwise) -> GeoJSON Polygon/MultiPolygon, or null. */
-function ringsToGeoJSON(/** @type {number[][][]} */ rings) {
+export function ringsToGeoJSON(/** @type {number[][][]} */ rings) {
   const signed = (/** @type {number[][]} */ r) => r.reduce((s, p, i) => { const q = r[(i + 1) % r.length]; return s + (p[0] * q[1] - q[0] * p[1]); }, 0) / 2;
   const closed = (/** @type {number[][]} */ r) => (r[0][0] === r[r.length - 1][0] && r[0][1] === r[r.length - 1][1] ? r : [...r, r[0]]);
   const valid = rings.filter((r) => Array.isArray(r) && r.length >= 3 && r.every((p) => Array.isArray(p) && Number.isFinite(p[0]) && Number.isFinite(p[1])));

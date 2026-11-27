@@ -1,0 +1,899 @@
+{
+ "_fixture_note": "recorded 2026-11-27 from the live public service for a PUBLIC building (200 N Spring St, Los Angeles, CA 90012); LA County Assessor parcel layer, direct situs query (SitusHouseNo='200' AND SitusStreet LIKE 'SPRING%' AND SitusCity LIKE 'LOS ANGELES%'); Roll_* values blanked; Shape.STArea() is square feet",
+ "displayFieldName": "AIN",
+ "fieldAliases": {
+  "OBJECTID": "OBJECTID",
+  "AIN": "AIN",
+  "APN": "APN",
+  "SitusHouseNo": "SitusHouseNo",
+  "SitusFraction": "SitusFraction",
+  "SitusDirection": "SitusDirection",
+  "SitusUnit": "SitusUnit",
+  "SitusStreet": "SitusStreet",
+  "SitusAddress": "SADDR",
+  "SitusCity": "CITY",
+  "SitusZIP": "ZIP",
+  "SitusFullAddress": "SitusFullAddress",
+  "TaxRateArea": "TaxRateArea",
+  "TaxRateCity": "TaxRateCity",
+  "AgencyClassNo": "AgencyClassNo",
+  "AgencyName": "AgencyName",
+  "AgencyType": "AgencyType",
+  "UseCode": "UseCode",
+  "UseCode_2": "UseCode_2",
+  "UseType": "UseType",
+  "UseDescription": "UseDescription",
+  "DesignType1": "DesignType1",
+  "YearBuilt1": "YearBuilt1",
+  "EffectiveYear1": "EffectiveYear1",
+  "Units1": "Units1",
+  "Bedrooms1": "Bedrooms1",
+  "Bathrooms1": "Bathrooms1",
+  "SQFTmain1": "SQFTmain1",
+  "DesignType2": "DesignType2",
+  "YearBuilt2": "YearBuilt2",
+  "EffectiveYear2": "EffectiveYear2",
+  "Units2": "Units2",
+  "Bedrooms2": "Bedrooms2",
+  "Bathrooms2": "Bathrooms2",
+  "SQFTmain2": "SQFTmain2",
+  "DesignType3": "DesignType3",
+  "YearBuilt3": "YearBuilt3",
+  "EffectiveYear3": "EffectiveYear3",
+  "Units3": "Units3",
+  "Bedrooms3": "Bedrooms3",
+  "Bathrooms3": "Bathrooms3",
+  "SQFTmain3": "SQFTmain3",
+  "DesignType4": "DesignType4",
+  "YearBuilt4": "YearBuilt4",
+  "EffectiveYear4": "EffectiveYear4",
+  "Units4": "Units4",
+  "Bedrooms4": "Bedrooms4",
+  "Bathrooms4": "Bathrooms4",
+  "SQFTmain4": "SQFTmain4",
+  "DesignType5": "DesignType5",
+  "YearBuilt5": "YearBuilt5",
+  "EffectiveYear5": "EffectiveYear5",
+  "Units5": "Units5",
+  "Bedrooms5": "Bedrooms5",
+  "Bathrooms5": "Bathrooms5",
+  "SQFTmain5": "SQFTmain5",
+  "Roll_Year": "Roll_Year",
+  "Roll_LandValue": "Roll_LandValue",
+  "Roll_ImpValue": "Roll_ImpValue",
+  "Roll_PersPropValue": "Roll_PersPropValue",
+  "Roll_FixtureValue": "Roll_FixtureValue",
+  "Roll_HomeOwnersExemp": "Roll_HomeOwnersExemp",
+  "Roll_RealEstateExemp": "Roll_RealEstateExemp",
+  "Roll_PersPropExemp": "Roll_PersPropExemp",
+  "Roll_FixtureExemp": "Roll_FixtureExemp",
+  "Roll_LandBaseYear": "Roll_LandBaseYear",
+  "Roll_ImpBaseYear": "Roll_ImpBaseYear",
+  "SpatialChangeDate": "SpatialChangeDate",
+  "ParcelCreateDate": "ParcelCreateDate",
+  "ParcelTypeCode": "ParcelTypeCode",
+  "Assr_Map": "Assr_Map",
+  "Assr_Index_Map": "Assr_Index_Map",
+  "QualityClass1": "QualityClass1",
+  "QualityClass2": "QualityClass2",
+  "QualityClass3": "QualityClass3",
+  "QualityClass4": "QualityClass4",
+  "QualityClass5": "QualityClass5",
+  "LegalDescLine1": "LegalDescLine1",
+  "LegalDescLine2": "LegalDescLine2",
+  "LegalDescLine3": "LegalDescLine3",
+  "LegalDescLine4": "LegalDescLine4",
+  "LegalDescLine5": "LegalDescLine5",
+  "LegalDescLineLast": "LegalDescLineLast",
+  "LegalDescription": "LegalDescription",
+  "CENTER_LAT": "CENTER_LAT",
+  "CENTER_LON": "CENTER_LON",
+  "CENTER_X": "CENTER_X",
+  "CENTER_Y": "CENTER_Y",
+  "LAT_LON": "LAT_LON",
+  "Shape.STArea()": "Shape.STArea()",
+  "Shape.STLength()": "Shape.STLength()"
+ },
+ "geometryType": "esriGeometryPolygon",
+ "spatialReference": {
+  "wkid": 4326,
+  "latestWkid": 4326
+ },
+ "fields": [
+  {
+   "name": "OBJECTID",
+   "type": "esriFieldTypeOID",
+   "alias": "OBJECTID"
+  },
+  {
+   "name": "AIN",
+   "type": "esriFieldTypeString",
+   "alias": "AIN",
+   "length": 10
+  },
+  {
+   "name": "APN",
+   "type": "esriFieldTypeString",
+   "alias": "APN",
+   "length": 12
+  },
+  {
+   "name": "SitusHouseNo",
+   "type": "esriFieldTypeString",
+   "alias": "SitusHouseNo",
+   "length": 5
+  },
+  {
+   "name": "SitusFraction",
+   "type": "esriFieldTypeString",
+   "alias": "SitusFraction",
+   "length": 3
+  },
+  {
+   "name": "SitusDirection",
+   "type": "esriFieldTypeString",
+   "alias": "SitusDirection",
+   "length": 1
+  },
+  {
+   "name": "SitusUnit",
+   "type": "esriFieldTypeString",
+   "alias": "SitusUnit",
+   "length": 8
+  },
+  {
+   "name": "SitusStreet",
+   "type": "esriFieldTypeString",
+   "alias": "SitusStreet",
+   "length": 32
+  },
+  {
+   "name": "SitusAddress",
+   "type": "esriFieldTypeString",
+   "alias": "SADDR",
+   "length": 55
+  },
+  {
+   "name": "SitusCity",
+   "type": "esriFieldTypeString",
+   "alias": "CITY",
+   "length": 24
+  },
+  {
+   "name": "SitusZIP",
+   "type": "esriFieldTypeString",
+   "alias": "ZIP",
+   "length": 10
+  },
+  {
+   "name": "SitusFullAddress",
+   "type": "esriFieldTypeString",
+   "alias": "SitusFullAddress",
+   "length": 84
+  },
+  {
+   "name": "TaxRateArea",
+   "type": "esriFieldTypeString",
+   "alias": "TaxRateArea",
+   "length": 5
+  },
+  {
+   "name": "TaxRateCity",
+   "type": "esriFieldTypeString",
+   "alias": "TaxRateCity",
+   "length": 21
+  },
+  {
+   "name": "AgencyClassNo",
+   "type": "esriFieldTypeInteger",
+   "alias": "AgencyClassNo"
+  },
+  {
+   "name": "AgencyName",
+   "type": "esriFieldTypeString",
+   "alias": "AgencyName",
+   "length": 255
+  },
+  {
+   "name": "AgencyType",
+   "type": "esriFieldTypeString",
+   "alias": "AgencyType",
+   "length": 255
+  },
+  {
+   "name": "UseCode",
+   "type": "esriFieldTypeString",
+   "alias": "UseCode",
+   "length": 4
+  },
+  {
+   "name": "UseCode_2",
+   "type": "esriFieldTypeString",
+   "alias": "UseCode_2",
+   "length": 2
+  },
+  {
+   "name": "UseType",
+   "type": "esriFieldTypeString",
+   "alias": "UseType",
+   "length": 14
+  },
+  {
+   "name": "UseDescription",
+   "type": "esriFieldTypeString",
+   "alias": "UseDescription",
+   "length": 61
+  },
+  {
+   "name": "DesignType1",
+   "type": "esriFieldTypeString",
+   "alias": "DesignType1",
+   "length": 4
+  },
+  {
+   "name": "YearBuilt1",
+   "type": "esriFieldTypeString",
+   "alias": "YearBuilt1",
+   "length": 4
+  },
+  {
+   "name": "EffectiveYear1",
+   "type": "esriFieldTypeString",
+   "alias": "EffectiveYear1",
+   "length": 4
+  },
+  {
+   "name": "Units1",
+   "type": "esriFieldTypeSmallInteger",
+   "alias": "Units1"
+  },
+  {
+   "name": "Bedrooms1",
+   "type": "esriFieldTypeSmallInteger",
+   "alias": "Bedrooms1"
+  },
+  {
+   "name": "Bathrooms1",
+   "type": "esriFieldTypeSmallInteger",
+   "alias": "Bathrooms1"
+  },
+  {
+   "name": "SQFTmain1",
+   "type": "esriFieldTypeInteger",
+   "alias": "SQFTmain1"
+  },
+  {
+   "name": "DesignType2",
+   "type": "esriFieldTypeString",
+   "alias": "DesignType2",
+   "length": 4
+  },
+  {
+   "name": "YearBuilt2",
+   "type": "esriFieldTypeString",
+   "alias": "YearBuilt2",
+   "length": 4
+  },
+  {
+   "name": "EffectiveYear2",
+   "type": "esriFieldTypeString",
+   "alias": "EffectiveYear2",
+   "length": 4
+  },
+  {
+   "name": "Units2",
+   "type": "esriFieldTypeSmallInteger",
+   "alias": "Units2"
+  },
+  {
+   "name": "Bedrooms2",
+   "type": "esriFieldTypeSmallInteger",
+   "alias": "Bedrooms2"
+  },
+  {
+   "name": "Bathrooms2",
+   "type": "esriFieldTypeSmallInteger",
+   "alias": "Bathrooms2"
+  },
+  {
+   "name": "SQFTmain2",
+   "type": "esriFieldTypeInteger",
+   "alias": "SQFTmain2"
+  },
+  {
+   "name": "DesignType3",
+   "type": "esriFieldTypeString",
+   "alias": "DesignType3",
+   "length": 4
+  },
+  {
+   "name": "YearBuilt3",
+   "type": "esriFieldTypeString",
+   "alias": "YearBuilt3",
+   "length": 4
+  },
+  {
+   "name": "EffectiveYear3",
+   "type": "esriFieldTypeString",
+   "alias": "EffectiveYear3",
+   "length": 4
+  },
+  {
+   "name": "Units3",
+   "type": "esriFieldTypeSmallInteger",
+   "alias": "Units3"
+  },
+  {
+   "name": "Bedrooms3",
+   "type": "esriFieldTypeSmallInteger",
+   "alias": "Bedrooms3"
+  },
+  {
+   "name": "Bathrooms3",
+   "type": "esriFieldTypeSmallInteger",
+   "alias": "Bathrooms3"
+  },
+  {
+   "name": "SQFTmain3",
+   "type": "esriFieldTypeInteger",
+   "alias": "SQFTmain3"
+  },
+  {
+   "name": "DesignType4",
+   "type": "esriFieldTypeString",
+   "alias": "DesignType4",
+   "length": 4
+  },
+  {
+   "name": "YearBuilt4",
+   "type": "esriFieldTypeString",
+   "alias": "YearBuilt4",
+   "length": 4
+  },
+  {
+   "name": "EffectiveYear4",
+   "type": "esriFieldTypeString",
+   "alias": "EffectiveYear4",
+   "length": 4
+  },
+  {
+   "name": "Units4",
+   "type": "esriFieldTypeSmallInteger",
+   "alias": "Units4"
+  },
+  {
+   "name": "Bedrooms4",
+   "type": "esriFieldTypeSmallInteger",
+   "alias": "Bedrooms4"
+  },
+  {
+   "name": "Bathrooms4",
+   "type": "esriFieldTypeSmallInteger",
+   "alias": "Bathrooms4"
+  },
+  {
+   "name": "SQFTmain4",
+   "type": "esriFieldTypeInteger",
+   "alias": "SQFTmain4"
+  },
+  {
+   "name": "DesignType5",
+   "type": "esriFieldTypeString",
+   "alias": "DesignType5",
+   "length": 4
+  },
+  {
+   "name": "YearBuilt5",
+   "type": "esriFieldTypeString",
+   "alias": "YearBuilt5",
+   "length": 4
+  },
+  {
+   "name": "EffectiveYear5",
+   "type": "esriFieldTypeString",
+   "alias": "EffectiveYear5",
+   "length": 4
+  },
+  {
+   "name": "Units5",
+   "type": "esriFieldTypeSmallInteger",
+   "alias": "Units5"
+  },
+  {
+   "name": "Bedrooms5",
+   "type": "esriFieldTypeSmallInteger",
+   "alias": "Bedrooms5"
+  },
+  {
+   "name": "Bathrooms5",
+   "type": "esriFieldTypeSmallInteger",
+   "alias": "Bathrooms5"
+  },
+  {
+   "name": "SQFTmain5",
+   "type": "esriFieldTypeInteger",
+   "alias": "SQFTmain5"
+  },
+  {
+   "name": "Roll_Year",
+   "type": "esriFieldTypeString",
+   "alias": "Roll_Year",
+   "length": 4
+  },
+  {
+   "name": "Roll_LandValue",
+   "type": "esriFieldTypeInteger",
+   "alias": "Roll_LandValue"
+  },
+  {
+   "name": "Roll_ImpValue",
+   "type": "esriFieldTypeInteger",
+   "alias": "Roll_ImpValue"
+  },
+  {
+   "name": "Roll_PersPropValue",
+   "type": "esriFieldTypeInteger",
+   "alias": "Roll_PersPropValue"
+  },
+  {
+   "name": "Roll_FixtureValue",
+   "type": "esriFieldTypeInteger",
+   "alias": "Roll_FixtureValue"
+  },
+  {
+   "name": "Roll_HomeOwnersExemp",
+   "type": "esriFieldTypeInteger",
+   "alias": "Roll_HomeOwnersExemp"
+  },
+  {
+   "name": "Roll_RealEstateExemp",
+   "type": "esriFieldTypeInteger",
+   "alias": "Roll_RealEstateExemp"
+  },
+  {
+   "name": "Roll_PersPropExemp",
+   "type": "esriFieldTypeInteger",
+   "alias": "Roll_PersPropExemp"
+  },
+  {
+   "name": "Roll_FixtureExemp",
+   "type": "esriFieldTypeInteger",
+   "alias": "Roll_FixtureExemp"
+  },
+  {
+   "name": "Roll_LandBaseYear",
+   "type": "esriFieldTypeString",
+   "alias": "Roll_LandBaseYear",
+   "length": 4
+  },
+  {
+   "name": "Roll_ImpBaseYear",
+   "type": "esriFieldTypeString",
+   "alias": "Roll_ImpBaseYear",
+   "length": 4
+  },
+  {
+   "name": "SpatialChangeDate",
+   "type": "esriFieldTypeDate",
+   "alias": "SpatialChangeDate",
+   "length": 8
+  },
+  {
+   "name": "ParcelCreateDate",
+   "type": "esriFieldTypeInteger",
+   "alias": "ParcelCreateDate"
+  },
+  {
+   "name": "ParcelTypeCode",
+   "type": "esriFieldTypeInteger",
+   "alias": "ParcelTypeCode"
+  },
+  {
+   "name": "Assr_Map",
+   "type": "esriFieldTypeString",
+   "alias": "Assr_Map",
+   "length": 8
+  },
+  {
+   "name": "Assr_Index_Map",
+   "type": "esriFieldTypeString",
+   "alias": "Assr_Index_Map",
+   "length": 8
+  },
+  {
+   "name": "QualityClass1",
+   "type": "esriFieldTypeString",
+   "alias": "QualityClass1",
+   "length": 5
+  },
+  {
+   "name": "QualityClass2",
+   "type": "esriFieldTypeString",
+   "alias": "QualityClass2",
+   "length": 5
+  },
+  {
+   "name": "QualityClass3",
+   "type": "esriFieldTypeString",
+   "alias": "QualityClass3",
+   "length": 5
+  },
+  {
+   "name": "QualityClass4",
+   "type": "esriFieldTypeString",
+   "alias": "QualityClass4",
+   "length": 5
+  },
+  {
+   "name": "QualityClass5",
+   "type": "esriFieldTypeString",
+   "alias": "QualityClass5",
+   "length": 5
+  },
+  {
+   "name": "LegalDescLine1",
+   "type": "esriFieldTypeString",
+   "alias": "LegalDescLine1",
+   "length": 40
+  },
+  {
+   "name": "LegalDescLine2",
+   "type": "esriFieldTypeString",
+   "alias": "LegalDescLine2",
+   "length": 40
+  },
+  {
+   "name": "LegalDescLine3",
+   "type": "esriFieldTypeString",
+   "alias": "LegalDescLine3",
+   "length": 40
+  },
+  {
+   "name": "LegalDescLine4",
+   "type": "esriFieldTypeString",
+   "alias": "LegalDescLine4",
+   "length": 40
+  },
+  {
+   "name": "LegalDescLine5",
+   "type": "esriFieldTypeString",
+   "alias": "LegalDescLine5",
+   "length": 40
+  },
+  {
+   "name": "LegalDescLineLast",
+   "type": "esriFieldTypeString",
+   "alias": "LegalDescLineLast",
+   "length": 40
+  },
+  {
+   "name": "LegalDescription",
+   "type": "esriFieldTypeString",
+   "alias": "LegalDescription",
+   "length": 500
+  },
+  {
+   "name": "CENTER_LAT",
+   "type": "esriFieldTypeDouble",
+   "alias": "CENTER_LAT"
+  },
+  {
+   "name": "CENTER_LON",
+   "type": "esriFieldTypeDouble",
+   "alias": "CENTER_LON"
+  },
+  {
+   "name": "CENTER_X",
+   "type": "esriFieldTypeDouble",
+   "alias": "CENTER_X"
+  },
+  {
+   "name": "CENTER_Y",
+   "type": "esriFieldTypeDouble",
+   "alias": "CENTER_Y"
+  },
+  {
+   "name": "LAT_LON",
+   "type": "esriFieldTypeString",
+   "alias": "LAT_LON",
+   "length": 62
+  },
+  {
+   "name": "Shape.STArea()",
+   "type": "esriFieldTypeDouble",
+   "alias": "Shape.STArea()"
+  },
+  {
+   "name": "Shape.STLength()",
+   "type": "esriFieldTypeDouble",
+   "alias": "Shape.STLength()"
+  }
+ ],
+ "features": [
+  {
+   "attributes": {
+    "OBJECTID": 1105291,
+    "AIN": "5161005906",
+    "APN": "5161-005-906",
+    "SitusHouseNo": "200",
+    "SitusFraction": " ",
+    "SitusDirection": "N",
+    "SitusUnit": " ",
+    "SitusStreet": "SPRING ST",
+    "SitusAddress": "200 N SPRING ST",
+    "SitusCity": "LOS ANGELES CA",
+    "SitusZIP": "90012-4801",
+    "SitusFullAddress": "200 N SPRING ST LOS ANGELES CA 90012",
+    "TaxRateArea": "00211",
+    "TaxRateCity": "LOS ANGELES",
+    "AgencyClassNo": 0,
+    "AgencyName": null,
+    "AgencyType": null,
+    "UseCode": "8821",
+    "UseCode_2": "88",
+    "UseType": "Government",
+    "UseDescription": "Government Parcel",
+    "DesignType1": null,
+    "YearBuilt1": null,
+    "EffectiveYear1": null,
+    "Units1": null,
+    "Bedrooms1": null,
+    "Bathrooms1": null,
+    "SQFTmain1": null,
+    "DesignType2": null,
+    "YearBuilt2": null,
+    "EffectiveYear2": null,
+    "Units2": null,
+    "Bedrooms2": null,
+    "Bathrooms2": null,
+    "SQFTmain2": null,
+    "DesignType3": null,
+    "YearBuilt3": null,
+    "EffectiveYear3": null,
+    "Units3": null,
+    "Bedrooms3": null,
+    "Bathrooms3": null,
+    "SQFTmain3": null,
+    "DesignType4": null,
+    "YearBuilt4": null,
+    "EffectiveYear4": null,
+    "Units4": null,
+    "Bedrooms4": null,
+    "Bathrooms4": null,
+    "SQFTmain4": null,
+    "DesignType5": null,
+    "YearBuilt5": null,
+    "EffectiveYear5": null,
+    "Units5": null,
+    "Bedrooms5": null,
+    "Bathrooms5": null,
+    "SQFTmain5": null,
+    "Roll_Year": null,
+    "Roll_LandValue": null,
+    "Roll_ImpValue": null,
+    "Roll_PersPropValue": null,
+    "Roll_FixtureValue": null,
+    "Roll_HomeOwnersExemp": null,
+    "Roll_RealEstateExemp": null,
+    "Roll_PersPropExemp": null,
+    "Roll_FixtureExemp": null,
+    "Roll_LandBaseYear": null,
+    "Roll_ImpBaseYear": null,
+    "SpatialChangeDate": null,
+    "ParcelCreateDate": 0,
+    "ParcelTypeCode": 0,
+    "Assr_Map": "5161-005",
+    "Assr_Index_Map": "5161-NDX",
+    "QualityClass1": null,
+    "QualityClass2": null,
+    "QualityClass3": null,
+    "QualityClass4": null,
+    "QualityClass5": null,
+    "LegalDescLine1": "L A CO ASSESSOR MAP NO 94 LOT    7",
+    "LegalDescLine2": null,
+    "LegalDescLine3": null,
+    "LegalDescLine4": null,
+    "LegalDescLine5": null,
+    "LegalDescLineLast": null,
+    "LegalDescription": "L A CO ASSESSOR MAP NO 94 LOT    7",
+    "CENTER_LAT": 34.05357137,
+    "CENTER_LON": -118.24299341,
+    "CENTER_X": 6488062.24371386,
+    "CENTER_Y": 1841966.80245598,
+    "LAT_LON": "34.053571, -118.242993",
+    "Shape.STArea()": 255337.97542910156,
+    "Shape.STLength()": 2212.373589084873
+   },
+   "geometry": {
+    "rings": [
+     [
+      [
+       -118.24252963947757,
+       34.05472197257126
+      ],
+      [
+       -118.24184925481894,
+       34.05415084598492
+      ],
+      [
+       -118.24184467985322,
+       34.054146719481885
+      ],
+      [
+       -118.24184086951823,
+       34.05414187802694
+      ],
+      [
+       -118.24183793381424,
+       34.05413646138769
+      ],
+      [
+       -118.24183595749186,
+       34.05413062593667
+      ],
+      [
+       -118.24183499760541,
+       34.05412454013708
+      ],
+      [
+       -118.24183508186574,
+       34.054118379679394
+      ],
+      [
+       -118.2418362078404,
+       34.054112322409395
+      ],
+      [
+       -118.24183834302366,
+       34.05410654319395
+      ],
+      [
+       -118.24184142577509,
+       34.054101208872794
+      ],
+      [
+       -118.241845367099,
+       34.05409647344202
+      ],
+      [
+       -118.24209727271088,
+       34.0538264851982
+      ],
+      [
+       -118.24286295172745,
+       34.05300580807111
+      ],
+      [
+       -118.24337219835002,
+       34.05246686005121
+      ],
+      [
+       -118.2433789139704,
+       34.05246212177586
+      ],
+      [
+       -118.24338622448194,
+       34.05245836581638
+      ],
+      [
+       -118.24339398715658,
+       34.05245566550289
+      ],
+      [
+       -118.2434020504384,
+       34.052454073555445
+      ],
+      [
+       -118.24341025690254,
+       34.052453621054696
+      ],
+      [
+       -118.24341879586551,
+       34.0524542120705
+      ],
+      [
+       -118.24342716300339,
+       34.05245601600846
+      ],
+      [
+       -118.2434351869259,
+       34.05245899591719
+      ],
+      [
+       -118.2434427032731,
+       34.05246309075701
+      ],
+      [
+       -118.24418742057489,
+       34.052952494017745
+      ],
+      [
+       -118.24419251451674,
+       34.052956639000314
+      ],
+      [
+       -118.24419685395156,
+       34.05296156834404
+      ],
+      [
+       -118.2442003197006,
+       34.05296714666885
+      ],
+      [
+       -118.24420281658013,
+       34.05297322077099
+      ],
+      [
+       -118.24420427601554,
+       34.0529796238306
+      ],
+      [
+       -118.24420465792473,
+       34.05298617999331
+      ],
+      [
+       -118.24420395181892,
+       34.052992709199906
+      ],
+      [
+       -118.24420217709067,
+       34.05299903213148
+      ],
+      [
+       -118.24419938248131,
+       34.053004975134314
+      ],
+      [
+       -118.24419564474235,
+       34.053010374989086
+      ],
+      [
+       -118.24343409511806,
+       34.05382750751743
+      ],
+      [
+       -118.2426036796074,
+       34.054718471457676
+      ],
+      [
+       -118.24259672993377,
+       34.054724158048856
+      ],
+      [
+       -118.24258896471613,
+       34.054728667669494
+      ],
+      [
+       -118.24258058140634,
+       34.05473188565019
+      ],
+      [
+       -118.24257179317284,
+       34.05473373016504
+      ],
+      [
+       -118.24256282348043,
+       34.054734154312214
+      ],
+      [
+       -118.24255390040794,
+       34.05473314730663
+      ],
+      [
+       -118.24254525084879,
+       34.05473073475413
+      ],
+      [
+       -118.24253709474159,
+       34.054726978000446
+      ],
+      [
+       -118.24252963947757,
+       34.05472197257126
+      ]
+     ]
+    ]
+   }
+  }
+ ]
+}

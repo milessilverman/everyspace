@@ -1,0 +1,32 @@
+{
+ "_fixture_note": "recorded 2026-11-27: returnDistinctValues query on CODE (building kinds)",
+ "displayFieldName": "CODE",
+ "fieldAliases": {
+  "CODE": "CODE"
+ },
+ "fields": [
+  {
+   "name": "CODE",
+   "type": "esriFieldTypeString",
+   "alias": "CODE",
+   "length": 50
+  }
+ ],
+ "features": [
+  {
+   "attributes": {
+    "CODE": "Building"
+   }
+  },
+  {
+   "attributes": {
+    "CODE": "Free Standing Solar Structure"
+   }
+  },
+  {
+   "attributes": {
+    "CODE": "Courtyard"
+   }
+  }
+ ]
+}
