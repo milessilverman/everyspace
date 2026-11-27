@@ -41,6 +41,9 @@ import { classifyLot } from './aerial.js';
 import { estimateLot, METHOD as LOT_ESTIMATE_METHOD } from './lot-estimate.js';
 import { yardZoneAt } from './yard.js';
 import { displayImage } from './providers/naip-aerial.js';
+import { detectDriveway, drivewayAreaSqft } from './driveway.js';
+import { kindFromSource } from './building-kind.js';
+import { footprintAreaSqft } from './measure.js';
 
 /** Los Angeles County (the first jurisdiction with richer providers). Kept as an export; the assembler no longer assumes it. */
 export const LA_COUNTY = { state: 'CA', countyFips: '06037', county: 'Los Angeles County' };
@@ -471,14 +474,41 @@ export async function buildPropertyProfile(query, ctx) {
     // a mostly paved front band lowers the yard confidence (a check, never shown to the owner as text)
     if (aerOk && aer.frontPavingWarning) for (const k of ['front_yard_sqft', 'back_yard_sqft']) if (fields[k].value !== null) fields[k] = { ...fields[k], confidence: conf(fields[k].confidence * 0.8), confidence_label: confidenceLabel(conf(fields[k].confidence * 0.8)) };
 
-    // ---- usable yard (core/usable-yard.js): open ground at least minWidthFt wide, minus a detected pool ----
+    // ---- driveway (core/driveway.js): a mapped driveway line and/or the paving the photo shows from the street side to a building ----
+    /** @type {any} */ let drive = null; let driveWhy = 'driveway detection is switched off (ctx.detectDriveway: false)';
+    if (ctx.detectDriveway !== false) {
+      if (!lotPoly || !main) driveWhy = lotPoly ? 'no building outline on the lot' : 'no lot outline';
+      else if (!yard) driveWhy = 'the front of the lot is not known, so a driveway cannot be followed from the street side';
+      else if (!aerOk && !(S.driveways ?? []).length) driveWhy = aerWhy ?? aer?.why ?? 'no aerial photo reading';
+      else {
+        const m = S.driveMemo;
+        if (m && m.lot === lotPoly && m.yard === yard && m.aer === aer && m.dv === S.driveways && m.n === buildings.length) drive = m.drive;
+        else { drive = detectDriveway({ parcel: lotPoly, buildings: buildings.map((b) => b.polygon), mainBuildingIndex: mainIdx, yard, image: aerOk ? S.aerial.image : null, classes: aerOk ? aer.classes : null, driveways: S.driveways ?? [] }); S.driveMemo = { lot: lotPoly, yard, aer, dv: S.driveways, n: buildings.length, drive }; }
+        if (!drive.ok) { driveWhy = drive.reason; drive = null; }
+      }
+    }
+    const driveArea = drive ? drivewayAreaSqft(drive.polygon, lotPoly, buildings.map((b) => b.polygon)) : null;
+    if (drive && driveArea !== null) {
+      fields.driveway_area_sqft = entry(sourced(driveArea, { tag: 'estimated', source: drive.source === 'map+photo' ? `OpenStreetMap driveway line (via Overture) and ${S.aerial?.source ?? 'USDA NAIP'}` : `${S.aerial?.source ?? 'USDA NAIP'}${S.aerial?.image?.date ? `, photo of ${S.aerial.image.date}` : ''}`,
+        confidence: drive.confidence, retrievedAt: at, unit: 'sqft', method: drive.method,
+        note: joinNotes(`About ${drive.widthFt} ft wide and ${drive.lengthFt} ft long; the part on the lot, not under a building. Drawn on the map so you can correct it.`, drive.warnings.length ? `Warnings: ${drive.warnings.join('; ')}.` : undefined) }));
+    } else fields.driveway_area_sqft = gone(drive ? 'the driveway outline lies off the lot' : driveWhy, 'Everyspace driveway reading');
+
+    // ---- other buildings: what a data source says they are (never inferred) ----
+    const kinds = buildings.map((b, i) => (i === mainIdx ? { kind: 'house', source: 'main (largest) building on the lot', value: null } : kindFromSource(b)));
+    const garageIdx = kinds.findIndex((k, i) => i !== mainIdx && k.kind === 'garage');
+    fields.garage_present = garageIdx >= 0 ? entry(sourced(true, { tag: 'estimated', source: /** @type {string} */ (kinds[garageIdx].source), confidence: 0.4, retrievedAt: at, method: `a building on the lot is mapped as "${kinds[garageIdx].value}"`, note: 'From map data; the owner should confirm.' }))
+      : gone('no data source says a building on the lot is a garage (ask the owner)', 'Everyspace building kinds');
+    fields.adu_present = gone('no data source says a building on the lot is an ADU (ask the owner)', 'Everyspace building kinds');
+
+    // ---- usable yard (core/usable-yard.js): open ground at least minWidthFt wide, minus a detected pool and the driveway ----
     const minW = isNum(ctx.minWidthFt) ? /** @type {number} */ (ctx.minWidthFt) : USABLE_DEFAULTS.MIN_WIDTH_FT;
     /** @type {any} */ let usable = null;
     const USE_KEYS = ['usable_yard_sqft', 'usable_front_yard_sqft', 'usable_back_yard_sqft'];
     if (lotPoly && main) {
       const m = S.useMemo;
-      if (m && m.lot === lotPoly && m.yard === yard && m.n === buildings.length) usable = m.u;
-      else { usable = usableYard({ parcel: lotPoly, buildings: buildings.map((b) => b.polygon), yard, minWidthFt: minW }); S.useMemo = { lot: lotPoly, yard, n: buildings.length, u: usable }; }
+      if (m && m.lot === lotPoly && m.yard === yard && m.n === buildings.length && m.drive === drive) usable = m.u;
+      else { usable = usableYard({ parcel: lotPoly, buildings: buildings.map((b) => b.polygon), yard, minWidthFt: minW, exclude: drive && driveArea !== null ? [drive.polygon] : [] }); S.useMemo = { lot: lotPoly, yard, n: buildings.length, u: usable, drive }; }
     }
     if (usable && usable.ok) {
       const uc = conf(Math.min(CONFIDENCE.yard, yard ? (typeof yard.confidence === 'number' ? yard.confidence : 0.3) : 0.3));
@@ -506,7 +536,8 @@ export async function buildPropertyProfile(query, ctx) {
     const yardRefArgs = yardRef === 'centreline' && sref ? { streets: sref.streets, streetName: sref.streetName } : null;
     geometry = {
       parcel: lotPoly, parcelSource: boundary ? 'record' : estLot ? 'estimated' : null,
-      buildings: buildings.map((b, i) => ({ polygon: b.polygon, main: i === mainIdx })),
+      buildings: buildings.map((b, i) => ({ polygon: b.polygon, main: i === mainIdx, kind: kinds[i].kind, kindSource: kinds[i].source, areaSqft: Math.round(footprintAreaSqft(b.polygon)) })),
+      driveway: drive && driveArea !== null ? { polygon: drive.polygon, areaSqft: driveArea, source: drive.source, confidence: drive.confidence } : null,
       frontEdge: Array.isArray(yard?.frontEdge?.edges) && yard.frontEdge.edges.length ? { coordinates: yard.frontEdge.edges.reduce((/** @type {number[][]} */ acc, /** @type {any} */ e, /** @type {number} */ k) => { if (k === 0) acc.push([e.from.lng, e.from.lat]); acc.push([e.to.lng, e.to.lat]); return acc; }, []) } : null,
       reference: yardRef,
       streets: yardRefArgs ? yardRefArgs.streets.map((/** @type {any} */ x) => ({ name: x.name, geometry: x.geometry })) : [],
@@ -546,11 +577,11 @@ export async function buildPropertyProfile(query, ctx) {
     /** @type {Record<string, any>} */ const out = { address: fields.address.value, lat: fields.lat.value, lng: fields.lng.value, place_id: fields.place_id.value };
     const ordered = /** @type {Record<string, any>} */ ({});
     for (const k of PROFILE_FIELDS) ordered[k] = fields[k];
-    for (const k of ['building_footprint_sqft', 'use_code', 'units', 'remodeled_year', 'usable_yard_sqft', 'usable_front_yard_sqft', 'usable_back_yard_sqft', 'green_area_sqft', 'paved_area_sqft', 'tree_cover_sqft', 'pool_area_sqft', 'transit_distance_m', 'transit_stops_nearby', 'rail_station_nearby']) ordered[k] = fields[k];
+    for (const k of ['building_footprint_sqft', 'use_code', 'units', 'remodeled_year', 'usable_yard_sqft', 'usable_front_yard_sqft', 'usable_back_yard_sqft', 'green_area_sqft', 'paved_area_sqft', 'tree_cover_sqft', 'pool_area_sqft', 'driveway_area_sqft', 'garage_present', 'adu_present', 'transit_distance_m', 'transit_stops_nearby', 'rail_station_nearby']) ordered[k] = fields[k];
     for (const k of PROFILE_FIELDS.slice(4)) out[k] = fields[k].value;
     out.building_footprint_sqft = fields.building_footprint_sqft.value;
     out.transit_distance_m = fields.transit_distance_m.value;
-    for (const k of ['remodeled_year', 'usable_yard_sqft', 'usable_front_yard_sqft', 'usable_back_yard_sqft', 'green_area_sqft', 'paved_area_sqft']) out[k] = fields[k].value;
+    for (const k of ['remodeled_year', 'usable_yard_sqft', 'usable_front_yard_sqft', 'usable_back_yard_sqft', 'green_area_sqft', 'paved_area_sqft', 'driveway_area_sqft']) out[k] = fields[k].value;
     if (typeof ctx.splitYard === 'function' || yard) details.yard_used = Boolean(yard);
     if (J && J.state !== '??') details.county = { state: J.state, ...(J.countyFips ? { countyFips: J.countyFips } : {}), ...(J.county ? { county: J.county } : {}) };
     if (parcelSrc) {
@@ -644,7 +675,7 @@ export async function buildPropertyProfile(query, ctx) {
       const list = Array.isArray(r.streets) ? r.streets.filter((/** @type {any} */ s) => s && s.geometry) : [];
       if (!list.length) { mark(p.id, 'used', 'no street line near the address'); continue; }
       // every street near the address is kept: the address's own street is the front, the others tell a corner or a through lot (core/street-ref.js)
-      S.streets = list; S.streetSource = { id: p.id, label: p.label ?? p.id, attribution: r.attribution ?? null };
+      S.driveways = Array.isArray(r.driveways) ? r.driveways : []; S.streets = list; S.streetSource = { id: p.id, label: p.label ?? p.id, attribution: r.attribution ?? null };
       mark(p.id, 'used', streetReference({ streets: list, address: typed })?.matched ? undefined : 'no street with a matching name; the nearest street is used');
       break;
     }
@@ -699,10 +730,12 @@ export function toSourcedProfile(pj) {
   const map = /** @type {Array<[string,string]>} */ ([['address', 'address'], ['apn', 'parcel_id'], ['lot_sqft', 'lot_area_sqft'], ['house_sqft', 'living_area_sqft'], ['floors', 'floors'],
     ['beds', 'bedrooms'], ['baths', 'bathrooms'], ['roof_sqft', 'roof_area_sqft'], ['front_yard_sqft', 'front_yard_sqft'], ['back_yard_sqft', 'back_yard_sqft'],
     ['year_built', 'year_built'], ['remodeled_year', 'remodeled_year'], ['usable_yard_sqft', 'usable_yard_sqft'], ['usable_front_yard_sqft', 'usable_front_yard_sqft'],
-    ['usable_back_yard_sqft', 'usable_back_yard_sqft'], ['green_area_sqft', 'green_area_sqft'], ['paved_area_sqft', 'paved_area_sqft'], ['tree_cover_sqft', 'tree_cover_sqft'], ['pool_area_sqft', 'pool_area_sqft'], ['property_type', 'property_type'], ['place_id', 'place_id'], ['use_code', 'use_code'], ['units', 'units'],
+    ['usable_back_yard_sqft', 'usable_back_yard_sqft'], ['green_area_sqft', 'green_area_sqft'], ['paved_area_sqft', 'paved_area_sqft'], ['tree_cover_sqft', 'tree_cover_sqft'], ['pool_area_sqft', 'pool_area_sqft'], ['driveway_area_sqft', 'driveway_area_sqft'], ['property_type', 'property_type'], ['place_id', 'place_id'], ['use_code', 'use_code'], ['units', 'units'],
     ['building_footprint_sqft', 'building_footprint_sqft'], ['transit_distance_m', 'transit_distance_m'], ['transit_stops_nearby', 'transit_stops_nearby'], ['rail_station_nearby', 'rail_station_nearby']]);
   // side_yard_sqft is left out on purpose: the owner does not trust it (it stays in pj.fields with hidden: true and in the yard total)
   for (const [from, to] of map) if (f[from]) put(to, toSourced(f[from]));
+  // garage / ADU only when a source says so (absent otherwise, as before, so the page asks the owner)
+  for (const k of ['garage_present', 'adu_present']) if (f[k] && f[k].value !== null && f[k].tag !== 'unavailable') put(k, toSourced(f[k]));
   if (f.lat && f.lng) {
     const ok = f.lat.value !== null && f.lng.value !== null;
     put('location', ok ? sourced({ lat: f.lat.value, lng: f.lng.value }, { tag: f.lat.tag, source: f.lat.source, confidence: Math.min(f.lat.confidence, f.lng.confidence), retrievedAt: f.lat.retrieved_at ?? null, unit: 'degrees (WGS84)', ...(f.lat.method ? { method: f.lat.method } : {}) })

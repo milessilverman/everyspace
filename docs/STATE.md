@@ -28,7 +28,7 @@ Live backend functions (checked read-only 2026-11-27): `calendar-feed`, `calenda
 ## Test commands and last results
 | command | result |
 |---|---|
-| `npm test` (core unit tests) | 484 pass |
+| `npm test` (core unit tests) | 489 pass |
 | `npm run e2e` (every `tests/*.e2e.mjs`) | 10 files pass (adds the satellite view) |
 | `cd platform && npm test` | 264 pass |
 | `cd platform && npm run test:staging` | 16 pass |
@@ -100,6 +100,8 @@ All three need an account with the provider (and a billing account for Google), 
 | A8 | Go-ahead for the Spacavia rename and the repository rename | brand change; the public address changes and Supabase's allowed redirect addresses must be updated |
 
 ## Known limits
+- Driveway detection (paved strip from the street on the aerial photo) is on: checked by eye on ten lots (3 right, 5 partly right, 2 missed under trees, no false alarm), tuned on those same lots, no ground truth. The outline is draggable; a paved front yard can read as a wide driveway.
+- Building kinds (garage, ADU, shed, carport, pool house, other) are pre-filled only where the map data states them; LA County outlines state none, so the owner chooses on the satellite view.
 - Side yard is computed but not shown (owner's call). Usable yard = open ground at least 10 ft wide (a stated assumption, adjustable); slope is not known.
 - From the aerial photo: lawn vs paving is on but not validated; pool detection and tree cover are off (one false pool and one miss in ten lots); the estimated lot is off (median error 14% but one lot off by 274%). Where no parcel record answers, the owner draws the lot on the satellite view.
 - The satellite backdrop is the free government photo (about 60 cm per pixel, soft). Mapbox was rejected: its terms require a paid commercial licence for production use in a real-estate-related application. LA County's public aerial tiles are sharp but dated 2008.

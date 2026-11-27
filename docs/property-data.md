@@ -66,6 +66,7 @@ outlines date from 2008-2020.
 - `green_area_sqft`, `paved_area_sqft` from one NAIP photo (`core/aerial.js`); `tree_cover_sqft` and `pool_area_sqft` stay unavailable
   (not reliable at 60 cm; pools: `ctx.aerialPools: true`). The photo is asked only when building outlines are; `ctx.aerial: false` skips it.
 - `remodeled_year` from the LA assessor's effective year.
+- `driveway_area_sqft` + `geometry.driveway` (`core/driveway.js`: mapped driveway line and/or photo paving from the street to a building; on by default, `detectDriveway: false` turns it off; excluded from the usable yard); building `kind` only from source data (`core/building-kind.js`), `garage_present` when a source maps a garage.
 - Estimated lot without a parcel record: `ctx.estimateLotWithoutParcel: true` only (failed its accuracy rule; off by default).
 - `result.geometry` (WGS84): `{parcel, parcelSource, buildings:[{polygon, main}], frontEdge:{coordinates}, reference, streets, streetName, frontPoint,
   zones:{bands, usable:{mask, width, height, bbox, cellM, rowOrder}}, roof, minWidthFt, image:{url, bbox, crs, width, height, date, credit, corsForImg}}`.
