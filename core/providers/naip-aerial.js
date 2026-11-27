@@ -113,6 +113,19 @@ export function itemImageUrl(item, box, W, H) {
   for (const [k, v] of Object.entries({ collection: 'naip', item, assets: 'image', asset_bidx: 'image|1,2,3,4', resampling: 'nearest' })) u.searchParams.set(k, v);
   return u.href;
 }
+/**
+ * How a page can SHOW the photo the reading used: a PNG of bands 1-3 for the same box and size from the same item (Planetary Computer), or the
+ * USGS mosaic for the fallback. An <img> needs no CORS (the page only reads pixels through core/aerial.js, never from the <img>); both hosts
+ * also answer `access-control-allow-origin: *`. The box is in WGS84 degrees with equal steps of longitude and latitude per pixel: on a Web
+ * Mercator map, stretch it over [west, south, east, north] (the error over a 100 m lot is far below a pixel).
+ * @param {any} r a successful lookup result
+ */
+export function displayImage(r) {
+  const im = r?.image;
+  if (!im) return null;
+  const url = r.itemId ? itemImageUrl(r.itemId, im.bbox, im.width, im.height).replace('.npy?', '.png?').replace('image%7C1%2C2%2C3%2C4', 'image%7C1%2C2%2C3') : usgsImageUrl(im.bbox, im.width, im.height);
+  return { url, bbox: im.bbox, crs: 'EPSG:4326', width: im.width, height: im.height, date: im.date, credit: ATTRIBUTION_TEXT, corsForImg: 'not needed; host sends access-control-allow-origin: *' };
+}
 /** USGS exportImage url (PNG of bands 1-3, WGS84). @param {number[]} box @param {number} W @param {number} H */
 export function usgsImageUrl(box, W, H) {
   const u = new URL(USGS_EXPORT);
@@ -158,7 +171,7 @@ async function lookup(q, deps) {
       if (coverageOf(img) >= 0.999) break;
     }
     if (!img || coverageOf(img) < 0.5) throw Object.assign(new Error('the newest photo flight covers under half of the box'), { code: 'no_match' });
-    return { ok: /** @type {const} */ (true), image: img, source: SOURCE_NAME, retrievedAt: at, date: img.date, flight: F.key, items: F.items.length, counts, attribution: ATTRIBUTION_TEXT,
+    return { ok: /** @type {const} */ (true), image: img, source: SOURCE_NAME, retrievedAt: at, date: img.date, flight: F.key, itemId: F.items[0].id, items: F.items.length, counts, attribution: ATTRIBUTION_TEXT,
       license: 'US Government work (USDA Farm Production and Conservation Business Center); public domain, credit requested', nir: true };
   } catch (e) { tried.push(`Planetary Computer: ${e instanceof Error ? e.message : String(e)}`); if (!deps.decodeImage) return fail(`${tried[0]}; the USGS fallback needs an image decoder`, /** @type {any} */ (e)?.code ?? 'network'); }
 

@@ -36,6 +36,11 @@ import { estimateFloors } from './building-size.js';
 import { overpassNear } from './parcel.js';
 import { summarizeTransit, transitAttributes } from './transit.js';
 import { streetReference } from './street-ref.js';
+import { usableYard, USABLE_DEFAULTS } from './usable-yard.js';
+import { classifyLot } from './aerial.js';
+import { estimateLot, METHOD as LOT_ESTIMATE_METHOD } from './lot-estimate.js';
+import { yardZoneAt } from './yard.js';
+import { displayImage } from './providers/naip-aerial.js';
 
 /** Los Angeles County (the first jurisdiction with richer providers). Kept as an export; the assembler no longer assumes it. */
 export const LA_COUNTY = { state: 'CA', countyFips: '06037', county: 'Los Angeles County' };
@@ -45,6 +50,10 @@ const RECORD_KEYS = ['apn', 'lot_sqft', 'house_sqft', 'floors', 'beds', 'baths',
 export const PROFILE_FIELDS = ['address', 'lat', 'lng', 'place_id', 'apn', 'lot_sqft', 'house_sqft', 'floors', 'beds', 'baths', 'roof_sqft',
   'front_yard_sqft', 'back_yard_sqft', 'side_yard_sqft', 'year_built', 'property_type'];
 const MAX_STREET_SIDE_DISTANCE_M = 150;
+/** The aerial photo is first asked around the point with this radius (in parallel with everything else); a lot it does not cover is asked again by its own box. */
+export const AERIAL_RADIUS_M = 50;
+/** Share of the lot's open ground that must have photo data before anything is read from the photo. */
+const AERIAL_MIN_COVERAGE = 0.95;
 const MAX_GEOCODE_TO_PARCEL_M = 150;
 /** A rooftop point that found no parcel is retried from a building centroid only when the centroid is at least this far away. */
 const RETRY_MIN_M = 2;
@@ -181,7 +190,9 @@ export async function buildPropertyProfile(query, ctx) {
   const fpProviders = forKind('footprint');
   const recProviders = typed ? forKind('records') : (forKind('records'), []);
   const streetProviders = S.addr ? forKind('street') : (forKind('street'), []);
-  for (const p of [...recProviders, ...fpProviders, ...streetProviders]) mark(p.id, 'pending');
+  // the aerial photo is read over the lot minus its building outlines, so it is only asked when building outlines are
+  const aerialProviders = ctx.aerial !== false && fpProviders.length ? forKind('aerial') : [];
+  for (const p of [...recProviders, ...fpProviders, ...streetProviders, ...aerialProviders]) mark(p.id, 'pending');
   const point = S.addr ? { lat: S.addr.lat, lng: S.addr.lng } : null;
   const rooftop = S.addr?.precision === 'rooftop';
   const recAddress = S.addr && !addressMismatch(typed, S.addr.address) && !S.addr.mismatch && typed.split(',').length < 2 ? S.addr.address : typed;
@@ -192,6 +203,7 @@ export async function buildPropertyProfile(query, ctx) {
     const a = S.addr;
     const recsLoaded = S.recs !== null, fpsLoaded = S.fps !== null;
     /** @type {string[]} */ const warnings = [];
+    /** @type {any} */ let geometry = null;
     /** @type {Record<string, any>} */ const fields = {};
     /** @type {any} */ const details = {};
     /** @type {string[]} */ const attributions = [];
@@ -345,32 +357,51 @@ export async function buildPropertyProfile(query, ctx) {
       } else fields.floors = gone(!fpsLoaded && !recsLoaded ? 'still loading' : s.note ?? 'floors cannot be estimated');
     }
 
+    /** @type {any} */ let roofIn = null;
     if (roof) {
       fields.roof_sqft = entry(sourced(Math.round(roof.areaSqft), { tag: 'measured', source: roofP.label, confidence: 0.8, retrievedAt: at, unit: 'sqft', method: 'solarPotential.wholeRoofStats.areaMeters2 converted to sq ft', note: `${roof.segments?.length ?? 0} roof segments returned.` }));
     } else if (main) {
       // City Pretty's roof-area method (core/roof.js): footprint x pitch. The pitch is a typical value unless an owner supplies one.
       const yb = fields.year_built.value, pt = fields.property_type.value;
-      const rr = estimateRoof({ footprintSqft: main.areaSqft, yearBuilt: isNum(yb) ? yb : null, propertyType: typeof pt === 'string' ? pt : null, stories: isNum(fields.floors.value) ? fields.floors.value : null,
-        ...(stateCode && stateCode !== '??' ? { stateCode } : {}), ...(q.roofPitchRise !== undefined ? { pitchRise: q.roofPitchRise } : {}), ...(q.roofType ? { roofType: q.roofType } : {}) }, { now: at });
+      roofIn = { yearBuilt: isNum(yb) ? yb : null, propertyType: typeof pt === 'string' ? pt : null, stories: isNum(fields.floors.value) ? fields.floors.value : null,
+        state: stateCode && stateCode !== '??' ? stateCode : null, ...(q.roofPitchRise !== undefined ? { pitchRise: q.roofPitchRise } : {}), ...(q.roofType ? { roofType: q.roofType } : {}) };
+      const rr = estimateRoof({ footprintSqft: main.areaSqft, yearBuilt: roofIn.yearBuilt, propertyType: roofIn.propertyType, stories: roofIn.stories,
+        ...(roofIn.state ? { stateCode: roofIn.state } : {}), ...(q.roofPitchRise !== undefined ? { pitchRise: q.roofPitchRise } : {}), ...(q.roofType ? { roofType: q.roofType } : {}) }, { now: at });
       fields.roof_sqft = rr.ok ? entry({ ...rr.roof, source: `${rr.roof.source} on ${fp?.source ?? fpSrc} footprint` }) : gone(rr.roof.note ?? 'roof not estimated');
       if (rr.ok) details.roof = { planAreaSqft: rr.planAreaSqft, footprintSqft: rr.footprintSqft, pitchRise: rr.pitchRise, pitchDegrees: rr.pitchDegrees, pitchSource: rr.pitchSource, slopeFactor: rr.slopeFactor, roofShape: rr.roofShape, shapeMultiplier: rr.shapeMultiplier, overhangInches: rr.overhangInches };
     } else fields.roof_sqft = gone(fpsLoaded ? 'no roof area provider answered and no building footprint is available' : 'roof still loading');
 
     if (isNum(fields.house_sqft.value) && main && fields.house_sqft.value > main.areaSqft * 4.5) warnings.push('living area is more than 4.5x the main footprint; the footprint may be incomplete');
 
-    // ---- yard (best street reference: the locator's street-side point, else a street centreline, else none) ----
+    // ---- estimated lot (OFF by default: docs/yard-accuracy.md Stage 2 did not meet its accuracy rule) ----
+    /** @type {any} */ let estLot = null;
+    if (!boundary && ctx.estimateLotWithoutParcel === true && recsLoaded && main && S.streets) {
+      const m = S.estMemo;
+      if (m && m.fp === fp && m.streets === S.streets) estLot = m.est;
+      else {
+        const e = estimateLot({ building: main.polygon, neighbours: (fp?.buildings ?? []).filter((/** @type {any} */ b) => b !== main).map((/** @type {any} */ b) => b.polygon), streets: S.streets, streetName: sref?.streetName ?? null });
+        estLot = e.ok ? e : null;
+        S.estMemo = { fp, streets: S.streets, est: estLot };
+      }
+      if (estLot && fields.lot_sqft.value === null) {
+        fields.lot_sqft = entry(sourced(Math.round(estLot.areaSqft), { tag: 'estimated', source: 'Everyspace lot estimate', confidence: estLot.confidence, retrievedAt: at, unit: 'sqft', method: LOT_ESTIMATE_METHOD,
+          note: joinNotes('No parcel record: the lot outline is drawn from the neighbouring buildings and the street; check it on the map.', estLot.warnings.length ? `Warnings: ${estLot.warnings.join('; ')}.` : undefined) }));
+      }
+    }
+    const lotPoly = boundary ?? estLot?.polygon ?? null;
+    // ---- yard (best street reference: street centrelines, else the locator's street-side point, else none) ----
     /** @type {string|null} */ let yardWhy = null;
     if (typeof ctx.splitYard !== 'function') yardWhy = 'yard splitter not provided';
-    else if (!boundary) yardWhy = recsLoaded ? 'no parcel polygon' : 'parcel still loading';
+    else if (!lotPoly) yardWhy = recsLoaded ? 'no parcel polygon' : 'parcel still loading';
     else if (!main) yardWhy = fpsLoaded ? 'no building footprint on the parcel' : 'building outlines still loading';
     /** @type {any} */ let yard = null;
     /** @type {'centreline'|'point'|null} */ let yardRef = null;
     if (!yardWhy) {
       const memo = S.yardMemo;
-      if (memo && memo.boundary === boundary && memo.fp === fp && memo.streetSide === streetSide && memo.streets === S.streets && memo.buildings.length === buildings.length) { yard = memo.yard; yardWhy = memo.yardWhy; yardRef = memo.yardRef; }
+      if (memo && memo.boundary === lotPoly && memo.fp === fp && memo.streetSide === streetSide && memo.streets === S.streets && memo.buildings.length === buildings.length) { yard = memo.yard; yardWhy = memo.yardWhy; yardRef = memo.yardRef; }
       else {
         const onParcel = buildings.map((b) => b.polygon);
-        const base = { parcel: boundary, buildings: onParcel, mainBuildingIndex: mainIdx };
+        const base = { parcel: lotPoly, buildings: onParcel, mainBuildingIndex: mainIdx };
         /** @type {string[]} */ const tried = [];
         const attempt = async (/** @type {any} */ args, /** @type {'centreline'|'point'|null} */ how) => {
           try {
@@ -386,7 +417,7 @@ export async function buildPropertyProfile(query, ctx) {
         if (!done && !sref && !streetSide) done = await attempt({ ...(streetName ? { streetName } : {}) }, null);
         if (!done) yardWhy = `yard split failed: ${tried.join('; ') || 'no street reference'}`;
         if (!done && tried.length === 1) yardWhy = `yard split failed: ${tried[0].replace(/^[a-z ]+: /, '')}`;
-        S.yardMemo = { boundary, fp, streetSide, streets: S.streets, buildings, yard, yardWhy, yardRef };
+        S.yardMemo = { boundary: lotPoly, fp, streetSide, streets: S.streets, buildings, yard, yardWhy, yardRef };
       }
     }
     const yardKeys = /** @type {const} */ ([['front_yard_sqft', 'frontYardSqft'], ['back_yard_sqft', 'backYardSqft'], ['side_yard_sqft', 'sideYardSqft']]);
@@ -402,6 +433,90 @@ export async function buildPropertyProfile(query, ctx) {
       }
       details.yard = { lotSqft: yard.lotSqft, buildingSqft: yard.buildingSqft, openSqft: yard.openSqft, method: yard.method, confidence: yard.confidence, frontEdge: yard.frontEdge ?? null, warnings: yw, reference: yardRef, ...(yardRef === 'centreline' && sref ? { street: sref.how } : {}) };
     } else for (const [k] of yardKeys) fields[k] = gone(yardWhy ?? 'yard not computed');
+    // the owner does not trust the side-yard number: kept for the sums, hidden from pages
+    fields.side_yard_sqft = { ...fields.side_yard_sqft, hidden: true };
+
+    // ---- aerial photo reading (core/aerial.js over a USDA NAIP photo) ----
+    /** @type {any} */ let aer = null;
+    const AER_KEYS = ['green_area_sqft', 'paved_area_sqft', 'tree_cover_sqft', 'pool_area_sqft'];
+    const aerWhy = !aerialProviders.length ? 'no aerial photo source asked' : !S.aerialDone ? 'aerial photo still loading' : !S.aerial?.ok ? `aerial photo unavailable: ${S.aerial?.reason ?? 'no answer'}` : !lotPoly ? 'no lot outline to read the photo over' : !main ? 'no building outline to leave out of the photo reading' : null;
+    if (!aerWhy) {
+      const m = S.aerMemo;
+      if (m && m.lot === lotPoly && m.img === S.aerial && m.yard === yard && m.n === buildings.length) aer = m.aer;
+      else { aer = classifyLot({ image: S.aerial.image, parcel: lotPoly, buildings: buildings.map((b) => b.polygon), zoneAt: yard ? yardZoneAt(yard) : null }); S.aerMemo = { lot: lotPoly, img: S.aerial, yard, n: buildings.length, aer }; }
+    }
+    const aerOk = aer && aer.ok && aer.coverage >= AERIAL_MIN_COVERAGE && !aer.imagePartial;
+    if (aer && !aerOk && aer.ok) aer = { ...aer, why: aer.imagePartial ? 'the photo did not cover the whole lot' : `only ${Math.round(aer.coverage * 100)}% of the lot has photo data` };
+    if (aerOk) {
+      const sm = aer.summary, img = S.aerial.image;
+      attribute(S.aerial.attribution);
+      const shadowCut = Math.max(0, 1 - sm.shadowShare);
+      const base = { tag: /** @type {const} */ ('estimated'), source: `${S.aerial.source ?? 'USDA NAIP'}${img.date ? `, photo of ${img.date}` : ', photo date unknown'}`, retrievedAt: at, unit: 'sqft' };
+      const nir = Boolean(img.nir);
+      const split = (/** @type {any} */ z) => `front ${z.front}, back ${z.back}, side ${z.side} sq ft`;
+      const c0 = conf((nir ? 0.35 : 0.25) * shadowCut);
+      fields.green_area_sqft = entry(sourced(sm.greenSqft, { ...base, confidence: c0,
+        method: nir ? 'photo pixels of the open ground (lot minus building outlines) with near-infrared vegetation index NDVI >= 0.2; 60 cm pixels' : 'photo pixels of the open ground with StreetForge\'s greenness rule (visible light only); 60 cm pixels',
+        note: `Lawn, planting and tree canopy over the open ground; ${split(sm.green)}. Brown (dry) lawn reads as bare ground; trees over a driveway count as green.` }));
+      fields.paved_area_sqft = entry(sourced(sm.pavedSqft, { ...base, confidence: c0,
+        method: 'photo pixels of the open ground that are neither vegetation, water nor shadow; 60 cm pixels',
+        note: `Paved or bare ground (driveway, patio, path, bare soil, dry lawn); ${split(sm.paved)}. ${sm.shadowSqft} sq ft in shadow could not be read.` }));
+      fields.tree_cover_sqft = gone('tree canopy and lawn could not be told apart in these 60 cm photos (StreetForge\'s dark-green rule put nearly all vegetation under canopy on ten test lots); see green area', 'Everyspace aerial reading');
+      if (ctx.aerialPools === true && sm.pool) {
+        fields.pool_area_sqft = entry(sourced(sm.pool.areaSqft, { ...base, confidence: 0.2, method: 'a compact water-coloured region (low near-infrared, blue above red) of 108-1,615 sq ft on the open ground', note: 'Not validated; a light-blue roof or tarp can look like water. The owner should confirm.' }));
+      } else fields.pool_area_sqft = gone(ctx.aerialPools === true ? 'no pool-shaped water area seen in the photo (that does not mean there is no pool)' : 'pool reading from the photo is switched off: on ten test lots it found one real pool, called a light-blue roof a pool and missed one pool under an outline', 'Everyspace aerial reading');
+      details.aerial = { date: img.date, source: S.aerial.source, bands: img.bands, coverage: aer.coverage, summary: { ...sm }, frontPavingWarning: aer.frontPavingWarning };
+      if (aer.frontPavingWarning) details.yard_check = 'most of the front yard band looks paved in the photo (a driveway or parking pad, or the front line is misplaced)';
+    } else for (const k of AER_KEYS) fields[k] = gone(aerWhy ?? aer?.why ?? aer?.reason ?? 'aerial reading not available', 'Everyspace aerial reading');
+    // a mostly paved front band lowers the yard confidence (a check, never shown to the owner as text)
+    if (aerOk && aer.frontPavingWarning) for (const k of ['front_yard_sqft', 'back_yard_sqft']) if (fields[k].value !== null) fields[k] = { ...fields[k], confidence: conf(fields[k].confidence * 0.8), confidence_label: confidenceLabel(conf(fields[k].confidence * 0.8)) };
+
+    // ---- usable yard (core/usable-yard.js): open ground at least minWidthFt wide, minus a detected pool ----
+    const minW = isNum(ctx.minWidthFt) ? /** @type {number} */ (ctx.minWidthFt) : USABLE_DEFAULTS.MIN_WIDTH_FT;
+    /** @type {any} */ let usable = null;
+    const USE_KEYS = ['usable_yard_sqft', 'usable_front_yard_sqft', 'usable_back_yard_sqft'];
+    if (lotPoly && main) {
+      const m = S.useMemo;
+      if (m && m.lot === lotPoly && m.yard === yard && m.n === buildings.length) usable = m.u;
+      else { usable = usableYard({ parcel: lotPoly, buildings: buildings.map((b) => b.polygon), yard, minWidthFt: minW }); S.useMemo = { lot: lotPoly, yard, n: buildings.length, u: usable }; }
+    }
+    if (usable && usable.ok) {
+      const uc = conf(Math.min(CONFIDENCE.yard, yard ? (typeof yard.confidence === 'number' ? yard.confidence : 0.3) : 0.3));
+      const um = { tag: /** @type {const} */ ('estimated'), source: 'Everyspace usable-yard geometry', retrievedAt: at, unit: 'sqft', method: usable.method };
+      fields.usable_yard_sqft = entry(sourced(usable.usableSqft, { ...um, confidence: uc, note: `Open ground ${usable.openSqft} sq ft, of which ${usable.usableSqft} sq ft is at least ${minW} ft wide.${estLot ? ' The lot outline is an estimate.' : ''}` }));
+      for (const [k, v, what] of /** @type {const} */ ([['usable_front_yard_sqft', usable.usableFrontSqft, 'front'], ['usable_back_yard_sqft', usable.usableBackSqft, 'back']])) {
+        fields[k] = isNum(v) ? entry(sourced(/** @type {number} */ (v), { ...um, confidence: uc, note: `The usable part of the ${what} yard (same front line as the yard split).` })) : gone(yardWhy ?? 'front and back could not be told apart', 'Everyspace usable-yard geometry');
+      }
+      details.usable_yard = { minWidthFt: minW, usableSqft: usable.usableSqft, openSqft: usable.openSqft, front: usable.usableFrontSqft, back: usable.usableBackSqft, side: usable.usableSideSqft };
+      if (aerOk && aer.classes) {
+        // how much of the usable area is green vs paved (nothing is subtracted: a patio is usable)
+        const im = S.aerial.image, cells = usable.cells; const tally = [0, 0, 0, 0, 0, 0]; let n = 0;
+        for (let j = 0; j < cells.height; j++) for (let i = 0; i < cells.width; i++) {
+          if (!cells.mask[j * cells.width + i]) continue;
+          const lng = cells.bbox[0] + ((i + 0.5) / cells.width) * (cells.bbox[2] - cells.bbox[0]), lat = cells.bbox[3] - ((j + 0.5) / cells.height) * (cells.bbox[3] - cells.bbox[1]);
+          const pi = Math.floor(((lng - im.bbox[0]) / (im.bbox[2] - im.bbox[0])) * im.width), pj = Math.floor(((im.bbox[3] - lat) / (im.bbox[3] - im.bbox[1])) * im.height);
+          if (pi < 0 || pj < 0 || pi >= im.width || pj >= im.height) continue;
+          const c = aer.classes[pj * im.width + pi]; if (c) { tally[c - 1]++; n++; }
+        }
+        if (n) details.usable_yard.photo = { greenShare: Math.round(((tally[0] + tally[1]) / n) * 100) / 100, pavedShare: Math.round((tally[2] / n) * 100) / 100, shadowShare: Math.round((tally[4] / n) * 100) / 100, waterShare: Math.round((tally[3] / n) * 100) / 100 };
+      }
+    } else for (const k of USE_KEYS) fields[k] = gone(usable?.reason ?? (lotPoly ? (fpsLoaded ? 'no building outline on the lot' : 'building outlines still loading') : (recsLoaded ? 'no parcel polygon' : 'parcel still loading')), 'Everyspace usable-yard geometry');
+
+    // ---- geometry for a map: everything measured, in WGS84 GeoJSON, so a page can draw it and the owner can adjust it (core/measure.js) ----
+    const yardRefArgs = yardRef === 'centreline' && sref ? { streets: sref.streets, streetName: sref.streetName } : null;
+    geometry = {
+      parcel: lotPoly, parcelSource: boundary ? 'record' : estLot ? 'estimated' : null,
+      buildings: buildings.map((b, i) => ({ polygon: b.polygon, main: i === mainIdx })),
+      frontEdge: Array.isArray(yard?.frontEdge?.edges) && yard.frontEdge.edges.length ? { coordinates: yard.frontEdge.edges.reduce((/** @type {number[][]} */ acc, /** @type {any} */ e, /** @type {number} */ k) => { if (k === 0) acc.push([e.from.lng, e.from.lat]); acc.push([e.to.lng, e.to.lat]); return acc; }, []) } : null,
+      reference: yardRef,
+      streets: yardRefArgs ? yardRefArgs.streets.map((/** @type {any} */ x) => ({ name: x.name, geometry: x.geometry })) : [],
+      streetName: yardRefArgs?.streetName ?? null,
+      frontPoint: yardRef === 'point' && streetSide ? { lat: streetSide.lat, lng: streetSide.lng } : null,
+      zones: yard ? { bands: yard.bands ?? null, usable: usable?.ok ? { mask: usable.cells.mask, width: usable.cells.width, height: usable.cells.height, bbox: usable.cells.bbox, cellM: usable.cells.cellM, rowOrder: usable.cells.rowOrder } : null } : (usable?.ok ? { bands: null, usable: { mask: usable.cells.mask, width: usable.cells.width, height: usable.cells.height, bbox: usable.cells.bbox, cellM: usable.cells.cellM, rowOrder: usable.cells.rowOrder } } : null),
+      roof: roofIn,
+      minWidthFt: minW,
+      image: S.aerial?.ok ? displayImage(S.aerial) : null,
+    };
 
     // ---- transit (core/transit.js, City Pretty's walk-radius logic over OSM stops) ----
     // Opt-in so a profile never makes an unannounced network call: pass `ctx.osm` (an overpassNear answer) or `ctx.transit: true` (one call).
@@ -431,10 +546,11 @@ export async function buildPropertyProfile(query, ctx) {
     /** @type {Record<string, any>} */ const out = { address: fields.address.value, lat: fields.lat.value, lng: fields.lng.value, place_id: fields.place_id.value };
     const ordered = /** @type {Record<string, any>} */ ({});
     for (const k of PROFILE_FIELDS) ordered[k] = fields[k];
-    for (const k of ['building_footprint_sqft', 'use_code', 'units', 'transit_distance_m', 'transit_stops_nearby', 'rail_station_nearby']) ordered[k] = fields[k];
+    for (const k of ['building_footprint_sqft', 'use_code', 'units', 'remodeled_year', 'usable_yard_sqft', 'usable_front_yard_sqft', 'usable_back_yard_sqft', 'green_area_sqft', 'paved_area_sqft', 'tree_cover_sqft', 'pool_area_sqft', 'transit_distance_m', 'transit_stops_nearby', 'rail_station_nearby']) ordered[k] = fields[k];
     for (const k of PROFILE_FIELDS.slice(4)) out[k] = fields[k].value;
     out.building_footprint_sqft = fields.building_footprint_sqft.value;
     out.transit_distance_m = fields.transit_distance_m.value;
+    for (const k of ['remodeled_year', 'usable_yard_sqft', 'usable_front_yard_sqft', 'usable_back_yard_sqft', 'green_area_sqft', 'paved_area_sqft']) out[k] = fields[k].value;
     if (typeof ctx.splitYard === 'function' || yard) details.yard_used = Boolean(yard);
     if (J && J.state !== '??') details.county = { state: J.state, ...(J.countyFips ? { countyFips: J.countyFips } : {}), ...(J.county ? { county: J.county } : {}) };
     if (parcelSrc) {
@@ -442,7 +558,7 @@ export async function buildPropertyProfile(query, ctx) {
       details.jurisdiction_method = J?.countyFips === LA_COUNTY.countyFips ? 'parcel found in the LA County assessor layer' : `parcel found in the county's own parcel layer (${parcelSrc.p.id}); county from ${S.jurisdictionHow ?? 'the map location'}`;
     }
     const providers = [...rows.values()].filter((r) => r.status !== 'pending');
-    return { ...out, fields: ordered, providers, warnings, details, attributions, retrieved_at: at };
+    return { ...out, fields: ordered, providers, warnings, details, attributions, geometry, retrieved_at: at };
   }
 
   // ---- progressive output -------------------------------------------------------------------------------------------------------
@@ -535,6 +651,26 @@ export async function buildPropertyProfile(query, ctx) {
     S.streetDone = true;
   })();
 
+  const aerialTask = (async () => {
+    if (!aerialProviders.length) { S.aerialDone = true; return; }
+    const lotBox = (/** @type {any} */ g) => { const polys = g.type === 'Polygon' ? [g.coordinates] : g.coordinates; let w = Infinity, so = Infinity, e = -Infinity, n = -Infinity; for (const r of polys) for (const c of r[0]) { w = Math.min(w, c[0]); e = Math.max(e, c[0]); so = Math.min(so, c[1]); n = Math.max(n, c[1]); } return [w, so, e, n]; };
+    const inside = (/** @type {number[]} */ a, /** @type {number[]} */ b) => a[0] >= b[0] && a[1] >= b[1] && a[2] <= b[2] && a[3] <= b[3];
+    const aTimeout = ctx.aerialTimeoutMs ?? 8000;
+    for (const p of aerialProviders) {
+      const ask = (/** @type {any} */ qq) => safe(() => p.lookup(qq, { ...deps(p.id), timeoutMs: Math.min(aTimeout, ctx.timeoutMs ?? aTimeout), ...(ctx.decodeImage ? { decodeImage: ctx.decodeImage } : {}) }));
+      // 1. around the point, at once (in parallel with records, footprints and streets)
+      let r = point ? await ask({ lat: point.lat, lng: point.lng, radiusM: AERIAL_RADIUS_M }) : null;
+      // 2. once the parcel is known: again by the lot's own box if the first photo does not cover it (or there was no point)
+      await recsDone;
+      const b = S.recs?.find((/** @type {any} */ x) => x.r.ok && x.r.parcel?.boundary)?.r.parcel.boundary ?? null;
+      if (b && (!r || !r.ok || !inside(lotBox(b), r.image.bbox))) { const r2 = await ask({ parcel: b }); if (r2.ok || !r) r = r2; }
+      if (!r) { mark(p.id, 'skipped', 'no location'); continue; }
+      if (!r.ok) { mark(p.id, 'failed', r.reason); continue; }
+      S.aerial = r; mark(p.id, 'used'); break;
+    }
+    S.aerialDone = true;
+  })();
+
   const transitTask = (async () => {
     if (ctx.osm || ctx.transit !== true || !point) { S.transitDone = true; return; }
     const osm = await safe(() => overpassNear(point, { buildingRadiusM: 1 }, { fetch: ctx.fetch, now: at, ...(ctx.timeoutMs ? { timeoutMs: ctx.timeoutMs } : {}) }));
@@ -542,7 +678,7 @@ export async function buildPropertyProfile(query, ctx) {
     mark('overpass-transit', osm.ok ? 'used' : 'failed', osm.ok ? undefined : osm.reason);
   })();
 
-  await Promise.all([recTask, fpTask, streetTask, transitTask].map((t) => t.catch(() => {})));
+  await Promise.all([recTask, fpTask, streetTask, transitTask, aerialTask].map((t) => t.catch(() => {})));
   await chain;
   const result = await assemble('final');
   if (onPartial) { try { onPartial(result, { stage: 'final' }); } catch { /* ignore */ } }
@@ -562,8 +698,10 @@ export function toSourcedProfile(pj) {
   const put = (/** @type {string} */ key, /** @type {any} */ s) => { profile = setAttribute(profile, key, s); };
   const map = /** @type {Array<[string,string]>} */ ([['address', 'address'], ['apn', 'parcel_id'], ['lot_sqft', 'lot_area_sqft'], ['house_sqft', 'living_area_sqft'], ['floors', 'floors'],
     ['beds', 'bedrooms'], ['baths', 'bathrooms'], ['roof_sqft', 'roof_area_sqft'], ['front_yard_sqft', 'front_yard_sqft'], ['back_yard_sqft', 'back_yard_sqft'],
-    ['side_yard_sqft', 'side_yard_sqft'], ['year_built', 'year_built'], ['property_type', 'property_type'], ['place_id', 'place_id'], ['use_code', 'use_code'], ['units', 'units'],
+    ['year_built', 'year_built'], ['remodeled_year', 'remodeled_year'], ['usable_yard_sqft', 'usable_yard_sqft'], ['usable_front_yard_sqft', 'usable_front_yard_sqft'],
+    ['usable_back_yard_sqft', 'usable_back_yard_sqft'], ['green_area_sqft', 'green_area_sqft'], ['paved_area_sqft', 'paved_area_sqft'], ['tree_cover_sqft', 'tree_cover_sqft'], ['pool_area_sqft', 'pool_area_sqft'], ['property_type', 'property_type'], ['place_id', 'place_id'], ['use_code', 'use_code'], ['units', 'units'],
     ['building_footprint_sqft', 'building_footprint_sqft'], ['transit_distance_m', 'transit_distance_m'], ['transit_stops_nearby', 'transit_stops_nearby'], ['rail_station_nearby', 'rail_station_nearby']]);
+  // side_yard_sqft is left out on purpose: the owner does not trust it (it stays in pj.fields with hidden: true and in the yard total)
   for (const [from, to] of map) if (f[from]) put(to, toSourced(f[from]));
   if (f.lat && f.lng) {
     const ok = f.lat.value !== null && f.lng.value !== null;
