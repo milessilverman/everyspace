@@ -15,7 +15,9 @@
 // in parallel; when it does not answer the lot-size line simply stays an empty input). The older path below is still the way an
 // address is located when nothing better can place it.
 //
-// runCountyPath -> {kind:'fallback', why} | {kind:'confirm', matchedAddress, reason}
+// Condos and apartment buildings: `ctx.queryOpts` ({unit, ownsWholeBuilding, ownerPropertyType, roofType}) rides on the lookup's query; when the
+// lookup answers {needsUnit, units, complex} the result is {kind:'unit', units, unitCount} and the page asks which unit is the owner's.
+// runCountyPath -> {kind:'fallback', why} | {kind:'confirm', matchedAddress, reason} | {kind:'unit', units, unitCount, matchedAddress}
 //                | {kind:'ok', profile, pending:[{keys, promise}], summary}
 // runOlderPath  -> {kind:'ok'|'none', profile, pending} | {kind:'confirm', matchedAddress, profile} | {kind:'candidates', candidates, profile}
 // Each pending promise resolves to {profile} (a fuller looked-up profile) or {attrs} (extra attributes) or null; it never rejects.
@@ -26,6 +28,7 @@ import { addressMismatch, overpassNear, poolNear, transitNear, buildingsNear, re
 import { setAttribute, applyOwnerCorrection, createProfile } from '../core/profile.js';
 import { sourced } from '../core/provenance.js';
 import { yardAreaSqft, distanceM, pointInPolygon } from '../core/geometry.js';
+import { unitRequest } from './unit-adapter.js';
 
 /** Per-request timeout for the county services and the older path. */
 export const REQUEST_TIMEOUT_MS = 5000;
@@ -221,6 +224,9 @@ function countyProfile(pj, now) {
   return profile;
 }
 
+/** The lookup query with the owner's answers (unit, what they own, roof type) on it. A bare address stays a bare string when there are none. */
+const withOpts = (q, opts) => (opts && Object.keys(opts).length ? { ...(typeof q === 'string' ? { address: q } : q), ...opts } : q);
+
 /** A registry view without building-outline and street providers: the records-only first pass. */
 function recordsOnly(registry) {
   return { ...registry, providersFor: (kind, opts) => (kind === 'footprint' || kind === 'street' ? { providers: [], skipped: [] } : registry.providersFor(kind, opts)) };
@@ -271,11 +277,14 @@ export async function runCountyPath(typed, ctx) {
   // the building outlines.
   stage('records');
   const pctx = (reg) => ({ registry: reg, fetch: f, now: ctx.now, keys: {}, splitYard: browserSplitYard(splitYard), timeoutMs });
-  const pRecords = buildPropertyProfile(query, pctx(recordsOnly(registry)));
-  const pFull = buildPropertyProfile(query, pctx(registry));
+  const qo = ctx.queryOpts;
+  const pRecords = buildPropertyProfile(withOpts(query, qo), pctx(recordsOnly(registry)));
+  const pFull = buildPropertyProfile(withOpts(query, qo), pctx(registry));
   pFull.catch(() => {});
   const pj = await within(pRecords, mainLeft(), null);
   if (!pj) return giveUp('the county lookup took too long');
+  const ask = unitRequest(pj);
+  if (ask) { stopAll.abort(); return { kind: 'unit', ...ask, matchedAddress: pj.fields?.address?.value ?? query }; }
   const fl = pj.fields ?? {};
   if (!fl.address || fl.address.value === null) return giveUp('the county address locator gave no result');
   if (!pj.details?.parcel_boundary || !fl.apn || fl.apn.value === null) return giveUp('the county assessor has no matching parcel');
@@ -321,6 +330,7 @@ async function runNationwide(typed, ctx, env) {
     }
     query = { address: g.matchedAddress, lat: g.lat, lng: g.lng, pointPrecision: /^\d/.test(g.matchedAddress) ? 'rooftop' : 'street', pointSource: 'OpenStreetMap Nominatim', pointMethod: 'geocoded from the typed address' };
   }
+  query = withOpts(query, ctx.queryOpts);
   const point = { lat: query.lat, lng: query.lng };
   setSuggestionBias(point);
   stage('address');
@@ -338,6 +348,8 @@ async function runNationwide(typed, ctx, env) {
     } });
   build.then((r) => { onFirst(r); onBuildings(r); onFinal(r); }, () => { onFirst(null); onBuildings(null); onFinal(null); });
   const first = await within(firstP, mainLeft(), null);
+  const ask = unitRequest(first);
+  if (ask) { stopAll.abort(); return { kind: 'unit', ...ask, matchedAddress: query.address }; }
   if (!first || !first.fields?.address || first.fields.address.value === null) { stopAll.abort(); return null; }
   const profile = countyProfile(first, ctx.now);
   if (first.details?.county?.countyFips === '06037' && !how.picked) { stopAll.abort(); return null; } // Los Angeles County: the classic path has the richer records

@@ -82,3 +82,11 @@ Live checks, 5 requests to `public.gis.lacounty.gov` with `Origin: https://miles
 - Known limit: the locator's city can be a community name (e.g. Van Nuys), which would skip the City of Los Angeles rules in `core/regulatory.js`.
 - Outside LA County (2026-11-27, INTEGRATE): `runCountyPath` takes the nationwide route for a chosen Photon suggestion, a typed state other than CA, or a county-locator miss that Nominatim places outside LA County. Same assembler: county (FCC), Overture outline, roof/floors derived, lot from the county parcel service (`createBrowserRegistry({tryUnverifiedParcelServices:true})`, 4 s timeout, started in parallel; silent when it does not answer, the lot-size line stays an empty input). Yards stay empty (no street reference). Earnings ideas wait for the owner to choose a property type (parcel services map no use code).
 - Live check, public buildings only (real fetch, mocked nothing): LA City Hall typed: records 1.2 s, outline 4.1 s, 3 requests, 24 KB. Chicago City Hall from a Photon point: county 0.09 s, outline + roof + floors 1.5 s, 5 requests, 189 KB; Cook County's parcel host is outside the allowed hosts, so not contacted.
+
+## Condos and apartment buildings (2026-11-27; full detail in `docs/condos-and-buildings.md`)
+- A unit in the typed address (`Apt 4`, `#4`, `Unit 4B`, `No 18`, `Ste 200`, `- 4`) is read out (`parseAddress`, `stripUnit`, `normalizeUnit` in `core/parcel.js`) and never reaches the locator or a street match.
+- `property_type` comes from the use CODE: `01..C` is a condo (a unit-numbered record on a lot shared by the complex), "Two Units" to "Five or more apartments" are `multi_family` with `units` = the sum of `Units1..5` (unavailable when none). Query options: `unit`, `ownsWholeBuilding`, `ownerPropertyType`.
+- Several unit records and no unit: the builder returns `{ok:false, needsUnit:true, units, complex}` after the locator and one county query. The LA assessor is now awaited before the photo, street and outline lookups (it decides whether a condo can skip them).
+- A condo profile has the unit's own facts, `complex_unit_count` and `complex_lot_area_sqft` as building context, and everything lot-related `unavailable` ("shared with the building"); `geometry.shared` is true.
+- A building profile adds `units`, building totals and a roof only when the owner gives the roof type.
+

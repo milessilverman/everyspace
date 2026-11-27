@@ -77,6 +77,38 @@ function isVerified(r, now) {
   return (n - t) / 86400000 <= STALE_DAYS;
 }
 
+// ---- condo: the owner's HOA (docs/condos-and-buildings.md) -----------------------------------------------------------------------------------------
+export const HOA_NO_SUMMARY = 'Your HOA does not allow this (you told us)';
+export const HOA_CHECK_REQUIREMENT = "Check your HOA's rental rules";
+/** An Everyspace checklist item, NOT a statement of law and not verified against any source. */
+export const HOA_CHECK_RULE = Object.freeze({ ruleId: 'everyspace/checklist/hoa-rental-rules', summary: "Everyspace owner checklist: check your HOA's rental rules (a checklist item, not a legal rule).",
+  effect: /** @type {const} */ ('require'), verified: false, sourceRef: 'Everyspace checklist item (not a legal rule)' });
+
+/**
+ * Does this use bring guests or renters into the unit? Read from the category's own data (strangers in the home, or the home interior as its resource).
+ * @param {any} cat
+ */
+const bringsPeopleIn = (cat) => Boolean(cat && (cat.strangersInHome === true || (cat.resourceUse && cat.resourceUse.home_interior)));
+
+/**
+ * A condo owner's HOA answer (`hoa_allows_rentals`, owner-confirmed) applied on top of the rules: 'no' prohibits every use that brings guests or renters
+ * into the unit; 'unsure' or no answer adds the checklist item "Check your HOA's rental rules"; 'yes' adds nothing. Only for property_type 'condo'.
+ * @param {Feasibility} f @param {any} cat @param {PropertyProfile} profile @returns {Feasibility}
+ */
+function applyHoa(f, cat, profile) {
+  const a = profile?.attributes ?? {};
+  if (a.property_type?.value !== 'condo' || !bringsPeopleIn(cat)) return f;
+  const h = a.hoa_allows_rentals;
+  const answer = h && h.tag === 'owner-confirmed' && typeof h.value === 'string' ? h.value : null;
+  if (answer === 'yes') return f;
+  if (answer === 'no') {
+    return { ...f, status: 'prohibited', confidence: 0.9,
+      rules: [{ ruleId: 'owner/hoa-no-rentals', summary: HOA_NO_SUMMARY, effect: 'prohibit', verified: true, source: 'owner', sourceRef: 'Owner statement (hoa_allows_rentals = no)' }, ...f.rules] };
+  }
+  if (f.requirements.includes(HOA_CHECK_REQUIREMENT)) return f;
+  return { ...f, rules: [...f.rules, { ...HOA_CHECK_RULE }], requirements: [...f.requirements, HOA_CHECK_REQUIREMENT] };
+}
+
 /**
  * @param {string} categoryKey
  * @param {PropertyProfile} profile
@@ -84,6 +116,17 @@ function isVerified(r, now) {
  * @returns {Feasibility}
  */
 export function checkFeasibility(categoryKey, profile, { now, jurisdictions = JURISDICTIONS, categories = CATEGORIES }) {
+  const f = checkFeasibilityRules(categoryKey, profile, { now, jurisdictions, categories });
+  return applyHoa(f, categories.find((c) => c.key === categoryKey), profile);
+}
+
+/**
+ * @param {string} categoryKey
+ * @param {PropertyProfile} profile
+ * @param {{now:string, jurisdictions:JurisdictionRule[], categories:Array<{key:string, group:string}>}} opts
+ * @returns {Feasibility}
+ */
+function checkFeasibilityRules(categoryKey, profile, { now, jurisdictions, categories }) {
   const group = categories.find((c) => c.key === categoryKey)?.group;
   const attr = profile?.attributes?.jurisdiction;
   const loc = attr && attr.tag !== 'unavailable' ? attr.value : null;

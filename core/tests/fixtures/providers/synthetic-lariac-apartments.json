@@ -1,0 +1,89 @@
+{
+ "_fixture_note": "SYNTHETIC: invented address, units and geometry shaped like the live LA County response (record shapes checked 2026-11-27); not a real property",
+ "geometryType": "esriGeometryPolygon",
+ "spatialReference": {
+  "wkid": 4326
+ },
+ "features": [
+  {
+   "attributes": {
+    "OBJECTID": 11,
+    "CODE": "Building",
+    "BLD_ID": "11",
+    "HEIGHT": 30,
+    "ELEV": 300,
+    "SOURCE": "LARIAC6",
+    "DATE_": "2020",
+    "STATUS": "New",
+    "AREA": 6230,
+    "Shape_Area": 0
+   },
+   "geometry": {
+    "rings": [
+     [
+      [
+       -118.26019517860144,
+       34.059945721005974
+      ],
+      [
+       -118.26019517860144,
+       34.060090464990054
+      ],
+      [
+       -118.25980482139857,
+       34.060090464990054
+      ],
+      [
+       -118.25980482139857,
+       34.059945721005974
+      ],
+      [
+       -118.26019517860144,
+       34.059945721005974
+      ]
+     ]
+    ]
+   }
+  },
+  {
+   "attributes": {
+    "OBJECTID": 12,
+    "CODE": "Building",
+    "BLD_ID": "12",
+    "HEIGHT": 30,
+    "ELEV": 300,
+    "SOURCE": "LARIAC6",
+    "DATE_": "2020",
+    "STATUS": "New",
+    "AREA": 519,
+    "Shape_Area": 0
+   },
+   "geometry": {
+    "rings": [
+     [
+      [
+       -118.25988072418802,
+       34.05986430251493
+      ],
+      [
+       -118.25988072418802,
+       34.05991858150896
+      ],
+      [
+       -118.25979397814294,
+       34.05991858150896
+      ],
+      [
+       -118.25979397814294,
+       34.05986430251493
+      ],
+      [
+       -118.25988072418802,
+       34.05986430251493
+      ]
+     ]
+    ]
+   }
+  }
+ ]
+}

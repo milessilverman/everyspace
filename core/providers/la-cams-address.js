@@ -5,6 +5,7 @@
 // The returned point is address-range based (Addr_type StreetAddress); it is NOT claimed to be a street-side point.
 
 import { callJson, qs, fail, isoNow, num, text } from './util.js';
+import { stripUnit } from '../parcel.js';
 
 const BASE = 'https://public.gis.lacounty.gov/public/rest/services/CAMS_Locator/GeocodeServer';
 const MIN_SCORE = 85;
@@ -27,7 +28,8 @@ export const laCamsAddress = {
 
   async resolve(input, deps) {
     const at = isoNow(deps?.now);
-    const t = typeof input === 'string' ? input.trim().slice(0, 200) : text(input?.text) ?? '';
+    // a unit ("Apt 4", "#4") is not part of the street address the locator matches: it is left out of the query
+    const t = stripUnit(typeof input === 'string' ? input.trim().slice(0, 200) : text(input?.text) ?? '').address;
     if (!t) return fail('empty address', 'bad_query');
     const params = new URLSearchParams({ 'Single Line Input': t, outSR: '4326', outFields: '*', maxLocations: '3', f: 'json' });
     if (typeof input === 'object' && input && text(input.magicKey)) params.set('magicKey', /** @type {string} */ (input.magicKey));

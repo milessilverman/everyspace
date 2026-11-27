@@ -216,7 +216,7 @@ export function frameFor(ring) {
 // ---------------------------------------------------------------------------------------------------------------
 /**
  * @param {{getProfile:()=>any, applyOwnerCorrections:(b:Record<string,any>)=>any, clearOwnerCorrections:(keys:string[])=>any, mount:HTMLElement, now?:()=>string}} opts
- * @returns {{update:()=>void}}
+ * @returns {{update:()=>void, hide:()=>void}}
  */
 export function initLotMap(opts) {
   const { getProfile, applyOwnerCorrections, clearOwnerCorrections, mount } = opts;
@@ -224,7 +224,7 @@ export function initLotMap(opts) {
   /** @type {any} */ let core = null;
   let coreState = 'idle';
   /** @type {any} */ let M = null; // the model for the property on screen
-  let pushing = false, setupTimer = 0, layoutObs = null;
+  let pushing = false, setupTimer = 0, layoutObs = null, suspended = false;
   const uid = 'lm';
 
   const loadCore = () => {
@@ -1142,6 +1142,7 @@ export function initLotMap(opts) {
 
   // ----- update (called after every render of the page) -----------------------------------------------------
   function update() {
+    if (suspended) return;
     let profile = null;
     try { profile = getProfile(); } catch { profile = null; }
     if (!profile) { if (M) { M = null; mount.hidden = true; } return; }
@@ -1161,6 +1162,7 @@ export function initLotMap(opts) {
       // heavy work after the page has painted the list
       setupTimer = requestAnimationFrame(() => { setupTimer = setTimeout(() => {
         setupTimer = 0;
+        if (suspended) return;
         const s2 = readSource();
         if (!s2 || !setup(s2)) { mount.hidden = true; return; }
         build(); mount.hidden = false; layout(); structure(); D.sub.textContent = subline(); paint(true);
@@ -1202,5 +1204,8 @@ export function initLotMap(opts) {
     : M.parcelSource === 'estimated' ? 'This lot outline is an estimate. Drag the corners to match your lot.'
       : 'These are the outlines we measured. Drag a corner if one is off.');
 
-  return { update };
+  /** Let go of the mount (a condo owner sees the read-only picture there instead); the next update() builds again. */
+  function hide() { suspended = true; layoutObs?.disconnect(); if (M) { M = null; mount.hidden = true; } }
+
+  return { update: () => { suspended = false; update(); }, hide };
 }

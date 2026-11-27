@@ -4,6 +4,7 @@
 // higher confidence -> more preferred-category members -> fewer opportunities -> ids alphabetically.
 
 import { SCENARIO_NAMES } from './data/scenarios.js';
+import { quantityOf } from './revenue.js';
 
 /** @typedef {import('./types.js').Opportunity} Opportunity */
 /** @typedef {import('./types.js').OpportunityEstimate} OpportunityEstimate */
@@ -52,6 +53,10 @@ export function optimize(opportunities, estimatesById, options) {
 
   /** @param {string} id */
   const est = (id) => (Object.prototype.hasOwnProperty.call(estimates, id) ? estimates[id] : undefined);
+  /** Identical units an opportunity is offered as (default 1): its estimate, and the shared resources it uses, scale by it. @param {Opportunity} o */
+  const qty = (o) => quantityOf(o.quantity, `optimize: opportunity ${o.id} quantity`);
+  /** @param {Opportunity} o @param {string} res */
+  const useOf = (o, res) => (o.resourceUse?.[res] ?? 0) * qty(o);
   /** @param {string} id */
   const result = (id) => /** @type {NonNullable<OpportunityEstimate['scenarios']>} */ (est(id)?.scenarios)[scenario];
 
@@ -80,10 +85,15 @@ export function optimize(opportunities, estimatesById, options) {
       investments.push(o.id);
       return `Investment (${o.basis}): evaluated separately, not part of the existing-asset combination`;
     }
+    if (o.quantityNeeded) return `Needs your answer first: ${o.quantityNeeded.question} (${o.quantityNeeded.key}); no quantity is assumed`;
     if (!e) return 'No estimate was provided';
+    if ((e.quantity ?? 1) !== qty(o)) return `The estimate was made for ${e.quantity ?? 1} unit(s) but the opportunity says ${qty(o)}; estimate it again`;
     if (!e.available || !e.scenarios) return `Estimate unavailable: missing ${e.missing.join(', ') || 'required inputs'}`;
     const st = o.feasibility?.status ?? 'unknown';
-    if (st === 'prohibited') return 'Prohibited by local rules';
+    if (st === 'prohibited') {
+      const own = (o.feasibility?.rules ?? []).find((r) => r.source === 'owner' && r.effect === 'prohibit');
+      return own ? `Prohibited: ${own.summary}` : 'Prohibited by local rules';
+    }
     if (st === 'unknown' && !c.allowUnknownRegulatory) return 'Regulatory status unknown: check local rules (not selected unless you allow it)';
     if ((o.feasibility?.rules ?? []).some((r) => !r.verified) && !c.allowUnknownRegulatory) {
       return 'Local rules not verified yet: check local rules (not selected unless you allow it)';
@@ -118,7 +128,8 @@ export function optimize(opportunities, estimatesById, options) {
   // An opportunity that alone needs more of a shared resource than exists is eligible but can never fit.
   for (let i = candidates.length - 1; i >= 0; i--) {
     const o = candidates[i];
-    for (const [res, n] of Object.entries(o.resourceUse ?? {})) {
+    for (const res of Object.keys(o.resourceUse ?? {})) {
+      const n = useOf(o, res);
       if (Object.prototype.hasOwnProperty.call(capacity, res) && n > capacity[res]) {
         rejected.push({ id: o.id, reason: `Needs ${n} ${res} but only ${capacity[res]} available` });
         candidates.splice(i, 1);
@@ -152,7 +163,7 @@ export function optimize(opportunities, estimatesById, options) {
       if (!(mask & (1 << i))) continue;
       const d = data[i];
       if (d.conflictMask & mask) return null;
-      for (const res of resources) used[res] = (used[res] ?? 0) + (d.o.resourceUse?.[res] ?? 0);
+      for (const res of resources) used[res] = (used[res] ?? 0) + useOf(d.o, res);
       noi += d.noi; upfront += d.upfront; conf = Math.min(conf, d.conf); pref += d.pref; count++;
     }
     for (const res of resources) if ((used[res] ?? 0) > capacity[res]) return null;
@@ -205,8 +216,8 @@ export function optimize(opportunities, estimatesById, options) {
     for (const res of Object.keys(d.o.resourceUse ?? {})) {
       if (!resources.includes(res)) continue;
       const usedBy = data.filter((x) => selSet.has(x.o.id));
-      const usedAmt = usedBy.reduce((t, x) => t + (x.o.resourceUse?.[res] ?? 0), 0);
-      if (usedAmt + (d.o.resourceUse?.[res] ?? 0) > capacity[res]) {
+      const usedAmt = usedBy.reduce((t, x) => t + useOf(x.o, res), 0);
+      if (usedAmt + useOf(d.o, res) > capacity[res]) {
         return `Not enough ${res}: ${capacity[res]} available and the selected ${usedBy.filter((x) => x.o.resourceUse?.[res]).map((x) => x.o.id).join(', ')} use ${usedAmt}`;
       }
     }
@@ -230,6 +241,12 @@ export function optimize(opportunities, estimatesById, options) {
     goal,
     scenario,
     selected,
+    // one line per selected opportunity: its quantity, one unit's figures and the total (the totals below add the totals)
+    lines: chosen.map((d) => {
+      const e = /** @type {OpportunityEstimate} */ (est(d.o.id));
+      const u = e.perUnit?.[scenario] ?? result(d.o.id);
+      return { id: d.o.id, quantity: qty(d.o), perUnit: { noiCentsPerYear: u.noiCentsPerYear, grossCentsPerYear: u.grossCentsPerYear, upfrontCents: u.upfrontCents }, total: { noiCentsPerYear: d.noi, grossCentsPerYear: d.gross, upfrontCents: d.upfront } };
+    }),
     rejected,
     totals: {
       noiCentsPerMonth: roundInt(noiYear / 12),

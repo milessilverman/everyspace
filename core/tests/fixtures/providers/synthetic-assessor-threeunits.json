@@ -1,0 +1,93 @@
+{
+ "_fixture_note": "SYNTHETIC: invented address, units and geometry shaped like the live LA County response (record shapes checked 2026-11-27); not a real property",
+ "geometryType": "esriGeometryPolygon",
+ "spatialReference": {
+  "wkid": 4326
+ },
+ "features": [
+  {
+   "attributes": {
+    "OBJECTID": 300,
+    "AIN": "9993000000",
+    "APN": "9993-000-000",
+    "SitusHouseNo": "8800",
+    "SitusDirection": " ",
+    "SitusFraction": " ",
+    "SitusUnit": " ",
+    "SitusStreet": "FIXTURE WAY",
+    "SitusAddress": "8800 FIXTURE WAY",
+    "SitusCity": "LOS ANGELES CA",
+    "SitusZIP": "90097-0002",
+    "SitusFullAddress": "8800 FIXTURE WAY LOS ANGELES CA 90097",
+    "UseCode": "0300",
+    "UseCode_2": "05",
+    "UseType": "Residential",
+    "UseDescription": "Three Units (Any Combination)",
+    "DesignType1": null,
+    "YearBuilt1": "1959",
+    "EffectiveYear1": null,
+    "Units1": 1,
+    "Bedrooms1": 5,
+    "Bathrooms1": null,
+    "SQFTmain1": 2041,
+    "DesignType2": null,
+    "YearBuilt2": "2004",
+    "EffectiveYear2": null,
+    "Units2": 1,
+    "Bedrooms2": 2,
+    "Bathrooms2": null,
+    "SQFTmain2": 624,
+    "DesignType3": null,
+    "YearBuilt3": null,
+    "EffectiveYear3": null,
+    "Units3": 0,
+    "Bedrooms3": null,
+    "Bathrooms3": null,
+    "SQFTmain3": null,
+    "DesignType4": null,
+    "YearBuilt4": null,
+    "EffectiveYear4": null,
+    "Units4": null,
+    "Bedrooms4": null,
+    "Bathrooms4": null,
+    "SQFTmain4": null,
+    "DesignType5": null,
+    "YearBuilt5": null,
+    "EffectiveYear5": null,
+    "Units5": null,
+    "Bedrooms5": null,
+    "Bathrooms5": null,
+    "SQFTmain5": null,
+    "LegalDescription": "*TR=99999 LOT 2",
+    "ParcelTypeCode": 1,
+    "Shape.STArea()": 21631
+   },
+   "geometry": {
+    "rings": [
+     [
+      [
+       -118.26027108139088,
+       34.059819070019905
+      ],
+      [
+       -118.26027108139088,
+       34.0601809299801
+      ],
+      [
+       -118.25972891860913,
+       34.0601809299801
+      ],
+      [
+       -118.25972891860913,
+       34.059819070019905
+      ],
+      [
+       -118.26027108139088,
+       34.059819070019905
+      ]
+     ]
+    ]
+   }
+  }
+ ]
+}

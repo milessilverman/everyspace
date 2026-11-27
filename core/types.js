@@ -41,7 +41,8 @@
  * @typedef {'address'|'location'|'jurisdiction'|'parcel_id'|'parcel_boundary'|'lot_area_sqft'|'property_type'
  *   |'use_type'|'year_built'|'bedrooms'|'living_area_sqft'|'units'|'buildings'|'building_footprint_sqft'
  *   |'roof_area_sqft'|'yard_area_sqft'|'driveway_area_sqft'|'parking_spaces'|'garage_present'|'pool_present'
- *   |'adu_present'|'zoning'|'transit_distance_m'|'demand_generators'} AttributeKey
+ *   |'adu_present'|'zoning'|'transit_distance_m'|'demand_generators'|'unit_label'|'complex_unit_count'|'complex_lot_area_sqft'
+ *   |'assigned_parking_spaces'|'storage_unit_present'|'balcony_present'|'hoa_allows_rentals'|'units_available_to_rent'|'laundry_room_present'|'roof_access_present'} AttributeKey
  */
 
 /**
@@ -69,7 +70,7 @@
 /**
  * @typedef {Object} Feasibility
  * @property {'feasible'|'restricted'|'prohibited'|'unknown'} status
- * @property {Array<{ruleId:string, summary:string, effect:'allow'|'restrict'|'prohibit'|'require', verified:boolean, sourceUrl?:string}>} rules
+ * @property {Array<{ruleId:string, summary:string, effect:'allow'|'restrict'|'prohibit'|'require', verified:boolean, sourceUrl?:string, sourceRef?:string, source?:'owner'}>} rules
  * @property {number} confidence  0..1; unverified rules cap this at 0.3
  * @property {string[]} requirements  e.g. 'Home-sharing registration number'
  * @property {string} [note]
@@ -92,6 +93,8 @@
  * @property {number} privacyImpact    0 (no one on the property) .. 3 (strangers inside the home)
  * @property {boolean} strangersInHome
  * @property {string[]} notes
+ * @property {number} [quantity]       integer >= 1 (default 1): how many identical units this is offered as (several apartments, several parking spaces). The estimate, the totals and the shared-resource use scale linearly by it
+ * @property {{key:string, question:string}} [quantityNeeded]  set when the quantity is unknown and must come from the owner (no quantity is assumed); the optimizer does not select it until it is given
  */
 
 /**
@@ -135,6 +138,8 @@
  * @typedef {Object} OpportunityEstimate
  * @property {string} opportunityId
  * @property {boolean} available            false when a required input is 'unavailable'; scenarios is then null
+ * @property {number} [quantity]            the opportunity's quantity (default 1)
+ * @property {Record<ScenarioName, ScenarioResult>|null} perUnit  one unit's figures; `scenarios` are the totals for `quantity` units (equal to perUnit when quantity is 1)
  * @property {Record<ScenarioName, ScenarioResult>|null} scenarios
  * @property {number} confidence            0..1, never above the weakest material input
  * @property {ConfidenceLabel} confidenceLabel

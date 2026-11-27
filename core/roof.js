@@ -20,7 +20,8 @@
 //  - Everyspace is scoped to Los Angeles County, so `stateCode` defaults to 'CA' (City Pretty's own default, line 11).
 //  - An owner who says the roof is flat but gives no pitch gets rise 0.5:12, City Pretty's lower clamp (line 104); City Pretty
 //    itself would keep the era pitch and only change the shape multiplier, which is inconsistent.
-//  - A condo or multi-family property returns unavailable: a building footprint is not one unit's roof. (Everyspace guard.)
+//  - A condo property returns unavailable (the roof is shared with the building). A multi-family building returns unavailable unless the owner gives a
+//    roof type (flat, gable or hip); a flat one uses the flat shape factor with no pitch. (Everyspace guard.)
 // Pure, dependency-free ES module; inputs are never mutated; no clock (`now` is passed in).
 
 import { sourced, unavailable } from './provenance.js';
@@ -74,7 +75,12 @@ export function estimateRoof(input, ctx = {}) {
   const i = input ?? {};
   const at = typeof ctx.now === 'string' ? ctx.now : null;
   const gone = (/** @type {string} */ why) => ({ ok: false, roof: unavailable(why, SOURCE) });
-  if (i.propertyType === 'condo' || i.propertyType === 'multi_family') return gone(`roof area not estimated for a ${i.propertyType.replace('_', '-')} property: the building footprint is not one unit's roof`);
+  // A condo owner has no roof of their own: the building's roof is shared (docs/condos-and-buildings.md).
+  if (i.propertyType === 'condo') return gone("roof area not estimated for a condo property: shared with the building (the building footprint is not one unit's roof)");
+  // A multi-family building is estimated ONLY when the owner has said what the roof is (flat, gable or hip): apartment roofs are not assumed flat.
+  const ownerRoof = i.roofType === 'flat' || i.roofType === 'gable' || i.roofType === 'hip';
+  const building = i.propertyType === 'multi_family';
+  if (building && !ownerRoof) return gone('roof area for a multi-family building needs the roof type: tell us the roof type (flat, gable or hip); apartment-building roofs are not assumed to be flat or pitched');
 
   const stories = Math.max(1, Number(i.stories) || 1);
   const living = isNum(i.livingSqft) && i.livingSqft > 0 ? Math.max(MIN_LIVING_SQFT, i.livingSqft) : 0;
@@ -99,9 +105,10 @@ export function estimateRoof(input, ctx = {}) {
   /** @type {number} */ let rise; let pitchFrom; let ownerPitch = false;
   if (isNum(i.pitchRise)) { rise = i.pitchRise; pitchFrom = 'owner-supplied pitch'; ownerPitch = true; }
   else if (isNum(i.pitchDegrees)) { rise = 12 * Math.tan((i.pitchDegrees * Math.PI) / 180); pitchFrom = 'owner-supplied pitch'; ownerPitch = true; }
+  else if (i.roofType === 'flat' && building) { rise = 0; pitchFrom = 'owner says the roof is flat (no pitch applied)'; ownerPitch = true; }
   else if (i.roofType === 'flat') { rise = PITCH_RISE_MIN; pitchFrom = 'owner says the roof is flat'; ownerPitch = true; }
-  else { const d = defaultPitchRise(i.yearBuilt, i.stateCode); rise = d.rise; pitchFrom = `typical pitch for homes ${d.basis}`; }
-  rise = Math.max(PITCH_RISE_MIN, Math.min(PITCH_RISE_MAX, rise));
+  else { const d = defaultPitchRise(i.yearBuilt, i.stateCode); rise = d.rise; pitchFrom = `typical pitch for ${building ? 'houses (a house rule of thumb, not apartment buildings)' : 'homes'} ${d.basis}`; }
+  if (!(building && rise === 0)) rise = Math.max(PITCH_RISE_MIN, Math.min(PITCH_RISE_MAX, rise));
   const slopeFactor = Number((Math.sqrt(144 + rise * rise) / 12).toFixed(4));
   const pitchDegrees = Number(((Math.atan(rise / 12) * 180) / Math.PI).toFixed(1));
   const shape = i.roofType && i.roofType in SHAPE_MULTIPLIER ? i.roofType : rise <= 2.0 ? 'flat' : 'gable';

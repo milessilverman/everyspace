@@ -11,6 +11,8 @@
 // in order until one returns suggestions. Sources exposed by core/providers/browser.js (optional `suggestionSources()`
 // export) are asked after the registered ones.
 
+import { parseUnit, withUnit, sameAddress } from './unit-adapter.js';
+
 export const MIN_CHARS = 3;
 export const DEBOUNCE_MS = 150;
 export const MAX_ITEMS = 6;
@@ -72,7 +74,8 @@ let picked = null;
  * @returns {{text:string, lat:number, lng:number, precision?:string, source?:string}|null}
  */
 export function getPickedLocation(text) {
-  return picked && typeof text === 'string' && picked.text === text.trim() ? { ...picked } : null;
+  // a unit the owner added after choosing ("... Apt 4") does not change which address was chosen
+  return picked && typeof text === 'string' && (picked.text === text.trim() || sameAddress(parseUnit(text).base, picked.text)) ? { ...picked } : null;
 }
 
 /**
@@ -83,7 +86,7 @@ export function getPickedLocation(text) {
 export function setPickedLocation(p) {
   const lat = Number(p?.lat), lng = Number(p?.lng), text = typeof p?.text === 'string' ? p.text.trim() : '';
   if (!text || !Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return false;
-  picked = { text, lat, lng, ...(typeof p.precision === 'string' && p.precision ? { precision: p.precision.slice(0, 40) } : {}), ...(typeof p.source === 'string' && p.source ? { source: p.source.slice(0, 60) } : {}) };
+  picked = { text: parseUnit(text).base, lat, lng, ...(typeof p.precision === 'string' && p.precision ? { precision: p.precision.slice(0, 40) } : {}), ...(typeof p.source === 'string' && p.source ? { source: p.source.slice(0, 60) } : {}) };
   return true;
 }
 
@@ -179,7 +182,7 @@ export function attachAddressSuggest(input, opts = {}) {
   const choose = (i) => {
     const t = items[i];
     if (typeof t !== 'string') return;
-    input.value = t; // programmatic: fires no `input` event, so no new request and no submit
+    input.value = withUnit(t, parseUnit(input.value).designator); // programmatic: fires no `input` event, so no new request and no submit; a unit the owner typed stays
     picked = located.get(t) ?? null; // a source that returned coordinates lets the lookup skip geocoding
     cancel(); close(); live.textContent = '';
   };
@@ -202,8 +205,11 @@ export function attachAddressSuggest(input, opts = {}) {
   };
 
   input.addEventListener('input', () => {
-    cancel(); picked = null;
-    const text = input.value.trim();
+    cancel();
+    // the suggestions are asked for the address without its unit ("123 Main St Apt 4" asks for "123 Main St"); a chosen address stays chosen when only a unit is added
+    const pu = parseUnit(input.value);
+    if (!(picked && pu.unit && sameAddress(pu.base, picked.text))) picked = null;
+    const text = (pu.unit ? pu.base : input.value).trim();
     if (text.length < minChars) { close(); return; }
     const hit = cache.get(keyOf(text));
     if (hit && !opts.sources) { show(hit, text); return; } // answered before in this session: instant, no request

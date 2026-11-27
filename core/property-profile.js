@@ -27,7 +27,7 @@
 
 import { confidenceLabel, sourced, unavailable } from './provenance.js';
 import { createProfile, setAttribute } from './profile.js';
-import { addressMismatch, CONFIDENCE, isoNow, parseStreet } from './parcel.js';
+import { addressMismatch, CONFIDENCE, isoNow, parseStreet, stripUnit, cleanUnit, unitsMatch } from './parcel.js';
 import { polygonAreaSqft, pointInPolygon, centroid, localProjection, distanceM } from './geometry.js';
 import { compareValues, COMPARE_KIND } from './providers/util.js';
 import { countyAt } from './providers/county-lookup.js';
@@ -48,7 +48,10 @@ import { footprintAreaSqft } from './measure.js';
 /** Los Angeles County (the first jurisdiction with richer providers). Kept as an export; the assembler no longer assumes it. */
 export const LA_COUNTY = { state: 'CA', countyFips: '06037', county: 'Los Angeles County' };
 const ASSEMBLER = 'Everyspace property-profile assembler';
-const RECORD_KEYS = ['apn', 'lot_sqft', 'house_sqft', 'floors', 'beds', 'baths', 'year_built', 'remodeled_year', 'property_type', 'use_code', 'units'];
+const RECORD_KEYS = ['apn', 'lot_sqft', 'house_sqft', 'floors', 'beds', 'baths', 'year_built', 'remodeled_year', 'property_type', 'use_code', 'units', 'unit_label', 'complex_unit_count'];
+/** Why a condominium owner gets no lot, yard, roof, driveway, garage or green/paved facts: they belong to the building, not to the unit. */
+export const SHARED_WHY = 'shared with the building';
+const OWNER_TYPES = ['single_family', 'condo', 'multi_family', 'land'];
 /** Top-level flat fields of the profile, in output order. */
 export const PROFILE_FIELDS = ['address', 'lat', 'lng', 'place_id', 'apn', 'lot_sqft', 'house_sqft', 'floors', 'beds', 'baths', 'roof_sqft',
   'front_yard_sqft', 'back_yard_sqft', 'side_yard_sqft', 'year_built', 'property_type'];
@@ -132,14 +135,25 @@ const needsPointInParcel = (/** @type {any} */ p) => p.needsPointInParcel === tr
 const needsParcel = (/** @type {any} */ p) => p.needsParcel === true || p.id === 'lariac-buildings';
 
 /**
- * @param {{address:string, lat?:number, lng?:number, placeId?:string, apn?:string, jurisdiction?:{state?:string,countyFips?:string,county?:string}, pointPrecision?:'rooftop'|'street'|string, pointSource?:string, pointMethod?:string, roofPitchRise?:number, roofType?:string}|string} query
+ * Condos and apartment buildings (docs/condos-and-buildings.md): a unit in the typed address ("Apt 4", "#4") is read out and kept as `unit`; `query.unit`
+ * wins over it. `ownsWholeBuilding: true` treats a condominium complex as one multi-unit building. `ownerPropertyType` ('single_family'|'condo'|'multi_family'|
+ * 'land') is what the owner says and is kept (owner-confirmed). When the county has several unit records at the address and no unit was given, the builder
+ * returns early with {ok:false, needsUnit:true, units, complex} and has asked for nothing but the address and the county record.
+ * @param {{address:string, lat?:number, lng?:number, placeId?:string, apn?:string, jurisdiction?:{state?:string,countyFips?:string,county?:string}, pointPrecision?:'rooftop'|'street'|string, pointSource?:string, pointMethod?:string, roofPitchRise?:number, roofType?:string,
+ *   unit?:string, ownsWholeBuilding?:boolean, ownerPropertyType?:'single_family'|'condo'|'multi_family'|'land'}|string} query
  * @param {{registry:any, fetch:(url:string, init?:any)=>Promise<any>, now:string, keys?:Record<string,string|undefined>, osm?:any, transit?:boolean, splitYard?:(a:any)=>any, timeoutMs?:number,
  *   jurisdiction?:{state?:string,countyFips?:string,county?:string}, countyCache?:Map<string,any>, onPartial?:(profileSoFar:any, info:{stage:string})=>void}} ctx
  */
 export async function buildPropertyProfile(query, ctx) {
   const at = isoNow(ctx?.now);
   const q = typeof query === 'string' ? { address: query } : { ...query };
-  const typed = typeof q.address === 'string' ? q.address.trim() : '';
+  const rawTyped = typeof q.address === 'string' ? q.address.trim() : '';
+  // the unit leaves the address first: it must never reach a locator query or a street match (core/parcel.js stripUnit)
+  const stripped = stripUnit(rawTyped);
+  const typed = stripped.address;
+  const unitTyped = typeof q.unit === 'string' && cleanUnit(q.unit) ? /** @type {string} */ (cleanUnit(q.unit)) : stripped.unit;
+  const ownerType = OWNER_TYPES.includes(/** @type {any} */ (q.ownerPropertyType)) ? /** @type {string} */ (q.ownerPropertyType) : null;
+  const ownsWhole = q.ownsWholeBuilding === true;
   const { registry, keys = {} } = ctx;
   const deps = (/** @type {string} */ id) => ({ fetch: ctx.fetch, now: at, ...(keys[id] ? { apiKey: keys[id] } : {}), ...(ctx.timeoutMs ? { timeoutMs: ctx.timeoutMs } : {}) });
   /** @type {Map<string, {id:string, status:string, reason?:string}>} rows in launch order; 'pending' rows are not reported */
@@ -157,7 +171,7 @@ export async function buildPropertyProfile(query, ctx) {
     recs: /** @type {Array<{p:any,r:any}>|null} */ (null), fps: /** @type {Array<{p:any,r:any}>|null} */ (null), streets: /** @type {any[]|null} */ (null), streetSource: null, streetDone: false, osm: undefined, transitDone: false,
   });
   if (isNum(q.lat) && isNum(q.lng)) S.addr = { address: typed, lat: q.lat, lng: q.lng, placeId: q.placeId, source: q.pointSource ?? 'caller-supplied coordinates', confidence: 0.7, provider: 'caller', precision: q.pointPrecision ?? null, ...(q.pointMethod ? { methodNote: q.pointMethod } : {}) };
-  const wantStreetSide = typeof ctx.splitYard === 'function';
+  const wantStreetSide = typeof ctx.splitYard === 'function' && ownerType !== 'condo'; // a condo has no yard to split, so no street-side point is needed
 
   // ---- 1. jurisdiction (when the caller gave coordinates) and address ----------------------------------------------------------
   let jurTried = false;
@@ -176,14 +190,20 @@ export async function buildPropertyProfile(query, ctx) {
   };
   await resolveJurisdiction(); // caller-supplied lat/lng: the county first, so address providers of other counties are not asked
   const addrProviders = typed ? (jur ? forKind('address') : (() => { const r = registry.providersFor('address', { keys }); for (const s of r.skipped) mark(s.id, 'skipped', s.skipped); return r.providers; })()) : [];
-  for (const p of addrProviders) {
-    if (S.addr && (S.streetSide || !wantStreetSide)) { mark(p.id, 'skipped', 'not needed: address already resolved'); continue; }
+  const resolveWith = async (/** @type {any} */ p) => {
     const r = await safe(() => p.resolve(typed, deps(p.id)));
-    if (!r.ok) { mark(p.id, 'failed', r.reason); S.addrDetails.push({ id: p.id, ok: false, reason: r.reason }); continue; }
+    if (!r.ok) { mark(p.id, 'failed', r.reason); S.addrDetails.push({ id: p.id, ok: false, reason: r.reason }); return; }
     S.addrDetails.push({ id: p.id, ok: true, address: r.address, mismatch: addressMismatch(typed, r.address) ?? null, hasStreetSidePoint: Boolean(r.streetSidePoint) });
     if (!S.addr) { S.addr = { ...r, source: p.label, provider: p.id, providerCoverage: p.coverage }; }
     if (!S.streetSide && r.streetSidePoint) S.streetSide = { ...r.streetSidePoint, from: p.id };
     mark(p.id, 'used', S.addr.provider === p.id ? undefined : 'street-side point only');
+  };
+  /** @type {any[]} providers asked only for a street-side point, once the county record is in (a condominium has no yard to split, and a needsUnit answer asks for nothing more) */
+  const streetSideLater = [];
+  for (const p of addrProviders) {
+    if (S.addr && (S.streetSide || !wantStreetSide)) { mark(p.id, 'skipped', 'not needed: address already resolved'); continue; }
+    if (S.addr) { streetSideLater.push(p); continue; }
+    await resolveWith(p);
   }
   // ---- 2. jurisdiction from the located address (no request when a county-level provider located it) ---------------------------------
   await resolveJurisdiction();
@@ -192,9 +212,9 @@ export async function buildPropertyProfile(query, ctx) {
   // ---- 3. everything that can start now ------------------------------------------------------------------------------------
   const fpProviders = forKind('footprint');
   const recProviders = typed ? forKind('records') : (forKind('records'), []);
-  const streetProviders = S.addr ? forKind('street') : (forKind('street'), []);
+  let streetProviders = S.addr ? forKind('street') : (forKind('street'), []);
   // the aerial photo is read over the lot minus its building outlines, so it is only asked when building outlines are
-  const aerialProviders = ctx.aerial !== false && fpProviders.length ? forKind('aerial') : [];
+  let aerialProviders = ctx.aerial !== false && fpProviders.length ? forKind('aerial') : [];
   for (const p of [...recProviders, ...fpProviders, ...streetProviders, ...aerialProviders]) mark(p.id, 'pending');
   const point = S.addr ? { lat: S.addr.lat, lng: S.addr.lng } : null;
   const rooftop = S.addr?.precision === 'rooftop';
@@ -256,6 +276,7 @@ export async function buildPropertyProfile(query, ctx) {
     const main = mainIdx >= 0 ? buildings[mainIdx] : null;
     if (buildings.length) details.buildings = buildings.map((b) => ({ polygon: b.polygon, areaSqft: b.areaSqft, ...(b.heightFt !== undefined ? { heightFt: b.heightFt } : {}), ...(b.kind ? { kind: b.kind } : {}) }));
     if (main) details.main_building_index = mainIdx;
+    if (buildings.length) details.buildings_source = fp?.source ?? fpP?.label ?? 'building outlines';
     const pcen = boundary ? centroid(boundary) : null;
     const fpPoint = pcen ?? point;
 
@@ -310,6 +331,34 @@ export async function buildPropertyProfile(query, ctx) {
       fields[k] = entry({ ...s, ...(note !== undefined ? { note } : {}) }, cross);
     }
 
+    // ---- what is owned: a house, one condominium unit, or a multi-unit building (docs/condos-and-buildings.md) ----
+    // `property_type` comes from the county record (estimated from the use code) unless the owner says otherwise (owner-confirmed, always wins).
+    const recType = typeof fields.property_type.value === 'string' ? /** @type {string} */ (fields.property_type.value) : null;
+    if (ownerType) {
+      fields.property_type = entry(sourced(ownerType, { tag: 'owner-confirmed', source: 'Owner', confidence: 1, retrievedAt: at, method: 'the owner said what they own (ownerPropertyType)',
+        ...(recType ? { note: recType === ownerType ? 'Agrees with the county use code.' : `The county use code reads as ${recType.replace('_', '-')}; the owner's answer is used.` } : { note: 'The records do not state a use here.' }) }));
+      if (recType && recType !== ownerType) warnings.push(`you said ${ownerType.replace('_', '-')}; the county record for this address reads as ${recType.replace('_', '-')}`);
+    }
+    const ptype = ownerType ?? recType;
+    const isCondo = ptype === 'condo', isBuilding = ptype === 'multi_family';
+    if (isCondo) {
+      // the lot the record gives is the whole complex's: it is context about the building, never the owner's lot
+      const lotE = fields.lot_sqft;
+      fields.complex_lot_sqft = lotE.value !== null ? { ...lotE, note: joinNotes(lotE.note, 'Shared by all owners in the building: this is the whole lot, not the unit.') } : gone('no county parcel was found for the shared lot');
+      fields.lot_sqft = gone(SHARED_WHY);
+      if (fields.complex_unit_count.value === null && fields.complex_unit_count.tag === 'unavailable' && ownerType === 'condo' && recType !== 'condo') fields.complex_unit_count = gone('the records do not say how many units the building has');
+    } else fields.complex_lot_sqft = gone('not a condominium unit');
+    // the unit: the record's own unit number, else the one typed with the address (owner-confirmed)
+    if (unitTyped) {
+      if (fields.unit_label.value === null) fields.unit_label = entry(sourced(unitTyped, { tag: 'owner-confirmed', source: 'Owner (typed with the address)', confidence: 1, retrievedAt: at, method: 'unit read from the typed address' }));
+      else if (!unitsMatch(fields.unit_label.value, unitTyped)) warnings.push(`you gave unit ${unitTyped}; the county record is for unit ${fields.unit_label.value}`);
+      if (ptype === 'single_family') warnings.push(`you gave unit ${unitTyped}, but the county record for this address reads as a single-family home`);
+    }
+    if (isBuilding) for (const [k, what] of /** @type {const} */ ([['house_sqft', 'living area'], ['beds', 'bedrooms'], ['baths', 'bathrooms']])) {
+      const e = fields[k];
+      if (e.value !== null && !/building total/i.test(e.note ?? '')) fields[k] = { ...e, note: joinNotes(e.note, `Building total (${what} of all units together), not one unit.`) };
+    }
+
     // ---- address / location / place id ----
     const geoConf = addr ? (addr.mismatchReason ? CONFIDENCE.mismatch : addr.confidence ?? CONFIDENCE.census) : 0;
     const geoSrc = addr ? addr.source ?? addr.provider : ASSEMBLER;
@@ -343,10 +392,12 @@ export async function buildPropertyProfile(query, ctx) {
         note: joinNotes(buildings.length > 1 ? `${buildings.length} buildings on the parcel; this is the largest.` : undefined, main.layerAreaSqft ? `Layer's own AREA ${Math.round(main.layerAreaSqft)} sq ft.` : undefined,
           lariacOutline ? 'Outlines date from the 2008-2020 imagery.' : undefined, pointScoped && !boundary ? 'No parcel polygon: the building at the address point, not confirmed to be on this lot.' : undefined) }));
     } else fields.building_footprint_sqft = gone(!fpsLoaded ? 'building outlines still loading' : fpP || fpProviders.length ? 'no building outline found on the parcel' : 'no footprint provider available');
+    if (isCondo) fields.building_footprint_sqft = gone(SHARED_WHY); // the outlines are still drawn (geometry.buildings) as context, but their area is not the unit's
 
     // floors: records provider first (above), then the footprint provider's floor count (OSM levels / Overture num_floors), then its height
     // (not LARIAC's: its unit and accuracy are unverified, so that one stays a note), then living area / footprint (core/building-size.js).
-    if (fields.floors.value === null) {
+    if (isCondo) fields.floors = gone(SHARED_WHY);
+    else if (fields.floors.value === null) {
       const levels = main?.levels ?? main?.floors ?? null;
       const est = estimateFloors({ levelsTag: levels, heightFt: !lariacOutline && isNum(main?.heightFt) ? main.heightFt : null, livingAreaSqft: isNum(fields.house_sqft.value) ? fields.house_sqft.value : null, footprintSqft: main && main.areaSqft > 0 ? main.areaSqft : null }, { now: at });
       const s = est.floors;
@@ -361,7 +412,8 @@ export async function buildPropertyProfile(query, ctx) {
     }
 
     /** @type {any} */ let roofIn = null;
-    if (roof) {
+    if (isCondo) fields.roof_sqft = gone(SHARED_WHY);
+    else if (roof) {
       fields.roof_sqft = entry(sourced(Math.round(roof.areaSqft), { tag: 'measured', source: roofP.label, confidence: 0.8, retrievedAt: at, unit: 'sqft', method: 'solarPotential.wholeRoofStats.areaMeters2 converted to sq ft', note: `${roof.segments?.length ?? 0} roof segments returned.` }));
     } else if (main) {
       // City Pretty's roof-area method (core/roof.js): footprint x pitch. The pitch is a typical value unless an owner supplies one.
@@ -370,11 +422,11 @@ export async function buildPropertyProfile(query, ctx) {
         state: stateCode && stateCode !== '??' ? stateCode : null, ...(q.roofPitchRise !== undefined ? { pitchRise: q.roofPitchRise } : {}), ...(q.roofType ? { roofType: q.roofType } : {}) };
       const rr = estimateRoof({ footprintSqft: main.areaSqft, yearBuilt: roofIn.yearBuilt, propertyType: roofIn.propertyType, stories: roofIn.stories,
         ...(roofIn.state ? { stateCode: roofIn.state } : {}), ...(q.roofPitchRise !== undefined ? { pitchRise: q.roofPitchRise } : {}), ...(q.roofType ? { roofType: q.roofType } : {}) }, { now: at });
-      fields.roof_sqft = rr.ok ? entry({ ...rr.roof, source: `${rr.roof.source} on ${fp?.source ?? fpSrc} footprint` }) : gone(rr.roof.note ?? 'roof not estimated');
+      fields.roof_sqft = rr.ok ? entry({ ...rr.roof, source: `${rr.roof.source} on ${fp?.source ?? fpSrc} footprint`, ...(isBuilding && buildings.length > 1 ? { note: joinNotes(rr.roof.note, `${buildings.length} buildings are on the lot; this is the largest one's roof only.`) } : {}) }) : gone(rr.roof.note ?? 'roof not estimated');
       if (rr.ok) details.roof = { planAreaSqft: rr.planAreaSqft, footprintSqft: rr.footprintSqft, pitchRise: rr.pitchRise, pitchDegrees: rr.pitchDegrees, pitchSource: rr.pitchSource, slopeFactor: rr.slopeFactor, roofShape: rr.roofShape, shapeMultiplier: rr.shapeMultiplier, overhangInches: rr.overhangInches };
     } else fields.roof_sqft = gone(fpsLoaded ? 'no roof area provider answered and no building footprint is available' : 'roof still loading');
 
-    if (isNum(fields.house_sqft.value) && main && fields.house_sqft.value > main.areaSqft * 4.5) warnings.push('living area is more than 4.5x the main footprint; the footprint may be incomplete');
+    if (!isCondo && !isBuilding && isNum(fields.house_sqft.value) && main && fields.house_sqft.value > main.areaSqft * 4.5) warnings.push('living area is more than 4.5x the main footprint; the footprint may be incomplete');
 
     // ---- estimated lot (OFF by default: docs/yard-accuracy.md Stage 2 did not meet its accuracy rule) ----
     /** @type {any} */ let estLot = null;
@@ -394,7 +446,8 @@ export async function buildPropertyProfile(query, ctx) {
     const lotPoly = boundary ?? estLot?.polygon ?? null;
     // ---- yard (best street reference: street centrelines, else the locator's street-side point, else none) ----
     /** @type {string|null} */ let yardWhy = null;
-    if (typeof ctx.splitYard !== 'function') yardWhy = 'yard splitter not provided';
+    if (isCondo) yardWhy = SHARED_WHY;
+    else if (typeof ctx.splitYard !== 'function') yardWhy = 'yard splitter not provided';
     else if (!lotPoly) yardWhy = recsLoaded ? 'no parcel polygon' : 'parcel still loading';
     else if (!main) yardWhy = fpsLoaded ? 'no building footprint on the parcel' : 'building outlines still loading';
     /** @type {any} */ let yard = null;
@@ -442,7 +495,7 @@ export async function buildPropertyProfile(query, ctx) {
     // ---- aerial photo reading (core/aerial.js over a USDA NAIP photo) ----
     /** @type {any} */ let aer = null;
     const AER_KEYS = ['green_area_sqft', 'paved_area_sqft', 'tree_cover_sqft', 'pool_area_sqft'];
-    const aerWhy = !aerialProviders.length ? 'no aerial photo source asked' : !S.aerialDone ? 'aerial photo still loading' : !S.aerial?.ok ? `aerial photo unavailable: ${S.aerial?.reason ?? 'no answer'}` : !lotPoly ? 'no lot outline to read the photo over' : !main ? 'no building outline to leave out of the photo reading' : null;
+    const aerWhy = isCondo ? SHARED_WHY : !aerialProviders.length ? 'no aerial photo source asked' : !S.aerialDone ? 'aerial photo still loading' : !S.aerial?.ok ? `aerial photo unavailable: ${S.aerial?.reason ?? 'no answer'}` : !lotPoly ? 'no lot outline to read the photo over' : !main ? 'no building outline to leave out of the photo reading' : null;
     if (!aerWhy) {
       const m = S.aerMemo;
       if (m && m.lot === lotPoly && m.img === S.aerial && m.yard === yard && m.n === buildings.length) aer = m.aer;
@@ -476,7 +529,8 @@ export async function buildPropertyProfile(query, ctx) {
 
     // ---- driveway (core/driveway.js): a mapped driveway line and/or the paving the photo shows from the street side to a building ----
     /** @type {any} */ let drive = null; let driveWhy = 'driveway detection is switched off (ctx.detectDriveway: false)';
-    if (ctx.detectDriveway !== false) {
+    if (isCondo) driveWhy = SHARED_WHY;
+    else if (ctx.detectDriveway !== false) {
       if (!lotPoly || !main) driveWhy = lotPoly ? 'no building outline on the lot' : 'no lot outline';
       else if (!yard) driveWhy = 'the front of the lot is not known, so a driveway cannot be followed from the street side';
       else if (!aerOk && !(S.driveways ?? []).length) driveWhy = aerWhy ?? aer?.why ?? 'no aerial photo reading';
@@ -495,17 +549,18 @@ export async function buildPropertyProfile(query, ctx) {
     } else fields.driveway_area_sqft = gone(drive ? 'the driveway outline lies off the lot' : driveWhy, 'Everyspace driveway reading');
 
     // ---- other buildings: what a data source says they are (never inferred) ----
-    const kinds = buildings.map((b, i) => (i === mainIdx ? { kind: 'house', source: 'main (largest) building on the lot', value: null } : kindFromSource(b)));
-    const garageIdx = kinds.findIndex((k, i) => i !== mainIdx && k.kind === 'garage');
+    const kinds = buildings.map((b, i) => (i === mainIdx && !isCondo ? { kind: 'house', source: 'main (largest) building on the lot', value: null } : kindFromSource(b)));
+    const garageIdx = isCondo ? -1 : kinds.findIndex((k, i) => i !== mainIdx && k.kind === 'garage');
+    if (isCondo) { fields.garage_present = gone(SHARED_WHY); fields.adu_present = gone(SHARED_WHY); } else
     fields.garage_present = garageIdx >= 0 ? entry(sourced(true, { tag: 'estimated', source: /** @type {string} */ (kinds[garageIdx].source), confidence: 0.4, retrievedAt: at, method: `a building on the lot is mapped as "${kinds[garageIdx].value}"`, note: 'From map data; the owner should confirm.' }))
       : gone('no data source says a building on the lot is a garage (ask the owner)', 'Everyspace building kinds');
-    fields.adu_present = gone('no data source says a building on the lot is an ADU (ask the owner)', 'Everyspace building kinds');
+    if (!isCondo) fields.adu_present = gone('no data source says a building on the lot is an ADU (ask the owner)', 'Everyspace building kinds');
 
     // ---- usable yard (core/usable-yard.js): open ground at least minWidthFt wide, minus a detected pool and the driveway ----
     const minW = isNum(ctx.minWidthFt) ? /** @type {number} */ (ctx.minWidthFt) : USABLE_DEFAULTS.MIN_WIDTH_FT;
     /** @type {any} */ let usable = null;
     const USE_KEYS = ['usable_yard_sqft', 'usable_front_yard_sqft', 'usable_back_yard_sqft'];
-    if (lotPoly && main) {
+    if (lotPoly && main && !isCondo) {
       const m = S.useMemo;
       if (m && m.lot === lotPoly && m.yard === yard && m.n === buildings.length && m.drive === drive) usable = m.u;
       else { usable = usableYard({ parcel: lotPoly, buildings: buildings.map((b) => b.polygon), yard, minWidthFt: minW, exclude: drive && driveArea !== null ? [drive.polygon] : [] }); S.useMemo = { lot: lotPoly, yard, n: buildings.length, u: usable, drive }; }
@@ -530,13 +585,14 @@ export async function buildPropertyProfile(query, ctx) {
         }
         if (n) details.usable_yard.photo = { greenShare: Math.round(((tally[1] + tally[2]) / n) * 100) / 100, pavedShare: Math.round((tally[3] / n) * 100) / 100, shadowShare: Math.round((tally[5] / n) * 100) / 100, waterShare: Math.round((tally[4] / n) * 100) / 100 };
       }
-    } else for (const k of USE_KEYS) fields[k] = gone(usable?.reason ?? (lotPoly ? (fpsLoaded ? 'no building outline on the lot' : 'building outlines still loading') : (recsLoaded ? 'no parcel polygon' : 'parcel still loading')), 'Everyspace usable-yard geometry');
+    } else for (const k of USE_KEYS) fields[k] = gone(isCondo ? SHARED_WHY : usable?.reason ?? (lotPoly ? (fpsLoaded ? 'no building outline on the lot' : 'building outlines still loading') : (recsLoaded ? 'no parcel polygon' : 'parcel still loading')), 'Everyspace usable-yard geometry');
 
     // ---- geometry for a map: everything measured, in WGS84 GeoJSON, so a page can draw it and the owner can adjust it (core/measure.js) ----
     const yardRefArgs = yardRef === 'centreline' && sref ? { streets: sref.streets, streetName: sref.streetName } : null;
     geometry = {
       parcel: lotPoly, parcelSource: boundary ? 'record' : estLot ? 'estimated' : null,
-      buildings: buildings.map((b, i) => ({ polygon: b.polygon, main: i === mainIdx, kind: kinds[i].kind, kindSource: kinds[i].source, areaSqft: Math.round(footprintAreaSqft(b.polygon)) })),
+      shared: isCondo, // true: the lot and the outlines belong to everyone in the building, not to the owner of one unit
+      buildings: buildings.map((b, i) => ({ polygon: b.polygon, main: i === mainIdx && !isCondo, kind: kinds[i].kind, kindSource: kinds[i].source, areaSqft: Math.round(footprintAreaSqft(b.polygon)) })),
       driveway: drive && driveArea !== null ? { polygon: drive.polygon, areaSqft: driveArea, source: drive.source, confidence: drive.confidence } : null,
       frontEdge: Array.isArray(yard?.frontEdge?.edges) && yard.frontEdge.edges.length ? { coordinates: yard.frontEdge.edges.reduce((/** @type {number[][]} */ acc, /** @type {any} */ e, /** @type {number} */ k) => { if (k === 0) acc.push([e.from.lng, e.from.lat]); acc.push([e.to.lng, e.to.lat]); return acc; }, []) } : null,
       reference: yardRef,
@@ -577,9 +633,10 @@ export async function buildPropertyProfile(query, ctx) {
     /** @type {Record<string, any>} */ const out = { address: fields.address.value, lat: fields.lat.value, lng: fields.lng.value, place_id: fields.place_id.value };
     const ordered = /** @type {Record<string, any>} */ ({});
     for (const k of PROFILE_FIELDS) ordered[k] = fields[k];
-    for (const k of ['building_footprint_sqft', 'use_code', 'units', 'remodeled_year', 'usable_yard_sqft', 'usable_front_yard_sqft', 'usable_back_yard_sqft', 'green_area_sqft', 'paved_area_sqft', 'tree_cover_sqft', 'pool_area_sqft', 'driveway_area_sqft', 'garage_present', 'adu_present', 'transit_distance_m', 'transit_stops_nearby', 'rail_station_nearby']) ordered[k] = fields[k];
+    for (const k of ['building_footprint_sqft', 'use_code', 'units', 'unit_label', 'complex_unit_count', 'complex_lot_sqft', 'remodeled_year', 'usable_yard_sqft', 'usable_front_yard_sqft', 'usable_back_yard_sqft', 'green_area_sqft', 'paved_area_sqft', 'tree_cover_sqft', 'pool_area_sqft', 'driveway_area_sqft', 'garage_present', 'adu_present', 'transit_distance_m', 'transit_stops_nearby', 'rail_station_nearby']) ordered[k] = fields[k];
     for (const k of PROFILE_FIELDS.slice(4)) out[k] = fields[k].value;
     out.building_footprint_sqft = fields.building_footprint_sqft.value;
+    for (const k of ['units', 'unit_label', 'complex_unit_count', 'complex_lot_sqft']) out[k] = fields[k].value;
     out.transit_distance_m = fields.transit_distance_m.value;
     for (const k of ['remodeled_year', 'usable_yard_sqft', 'usable_front_yard_sqft', 'usable_back_yard_sqft', 'green_area_sqft', 'paved_area_sqft', 'driveway_area_sqft']) out[k] = fields[k].value;
     if (typeof ctx.splitYard === 'function' || yard) details.yard_used = Boolean(yard);
@@ -589,7 +646,19 @@ export async function buildPropertyProfile(query, ctx) {
       details.jurisdiction_method = J?.countyFips === LA_COUNTY.countyFips ? 'parcel found in the LA County assessor layer' : `parcel found in the county's own parcel layer (${parcelSrc.p.id}); county from ${S.jurisdictionHow ?? 'the map location'}`;
     }
     const providers = [...rows.values()].filter((r) => r.status !== 'pending');
-    return { ...out, fields: ordered, providers, warnings, details, attributions, geometry, retrieved_at: at };
+    // `ownership` and the attribute `property_type` always agree (null = unknown): what the owner owns, in one place
+    const ownedType = typeof fields.property_type.value === 'string' ? fields.property_type.value : 'unknown';
+    const ownership = {
+      kind: ownedType === 'condo' ? 'unit' : ownedType === 'multi_family' ? 'building' : ownedType === 'single_family' ? 'house' : ownedType === 'land' ? 'land' : ownedType === 'commercial' ? 'commercial' : 'unknown',
+      property_type: ownedType,
+      units: ownedType === 'multi_family' && isNum(fields.units.value) ? fields.units.value : null,
+      unit_label: typeof fields.unit_label.value === 'string' && (ownedType === 'condo' || unitTyped) ? fields.unit_label.value : null,
+      complex_unit_count: ownedType === 'condo' && isNum(fields.complex_unit_count.value) ? fields.complex_unit_count.value : null,
+      shared_lot: ownedType === 'condo',
+      source: fields.property_type.tag === 'owner-confirmed' ? 'owner' : fields.property_type.value !== null ? 'record' : 'none',
+      basis: fields.property_type.method ?? fields.property_type.note ?? 'no use stated in the records; ask the owner',
+    };
+    return { ...out, ownership, fields: ordered, providers, warnings, details, attributions, geometry, retrieved_at: at };
   }
 
   // ---- progressive output -------------------------------------------------------------------------------------------------------
@@ -600,6 +669,38 @@ export async function buildPropertyProfile(query, ctx) {
     chain = chain.then(async () => { try { const r = await assemble(stage); try { onPartial(r, { stage }); } catch { /* a page callback must not break the builder */ } } catch { /* a partial is optional */ } });
   };
   if (S.addr || typed) emit('address');
+
+  // ---- the county record first, for providers that gate the lookup (the LA assessor) ------------------------------------------------
+  // Its answer says whether this address is a house, ONE condominium unit among several records (the caller must say which: needsUnit) or a
+  // multi-unit building. A condo's lot, yard and roof are shared, so the photo, street-line and yard work is not started for one, and a
+  // needsUnit answer has asked for nothing but the address and this county record. Other providers still start together.
+  let lotShared = ownerType === 'condo';
+  const askRec = (/** @type {any} */ p, /** @type {any} */ pt) => safe(() => p.lookup({ address: recAddress, ...(isNum(pt?.lat) ? { lat: pt.lat, lng: pt.lng } : {}), ...(S.addr?.placeId ? { placeId: S.addr.placeId } : {}), ...(q.apn ? { apn: q.apn } : {}), ...(jur ? { jurisdiction: jur } : {}),
+    ...(unitTyped ? { unit: unitTyped } : {}), ...(ownsWhole ? { ownsWholeBuilding: true } : {}) }, deps(p.id)));
+  /** @type {Map<any, any>} */ const gated = new Map();
+  const gateProviders = recProviders.filter((p) => p.gatesLookup === true && !needsPointInParcel(p));
+  if (gateProviders.length) {
+    await Promise.all(gateProviders.map(async (p) => { gated.set(p, await askRec(p, point ?? {})); }));
+    const need = [...gated.values()].find((r) => !r.ok && r.code === 'needs_unit');
+    if (need) {
+      for (const [p, r] of gated) mark(p.id, r.ok || r.code === 'needs_unit' ? 'used' : 'failed', r.ok ? undefined : r.code === 'needs_unit' ? 'several units at this address' : r.reason);
+      await chain;
+      return { ok: false, needsUnit: true, reason: need.reason, units: need.units ?? [], complex: need.complex, ...(need.unitsTruncated ? { unitsTruncated: true } : {}),
+        address: S.addr?.address ?? typed, providers: [...rows.values()].filter((r) => r.status !== 'pending'), retrieved_at: at };
+    }
+    // is it a condominium unit (from the record, or because the owner says so)? Then nothing that only serves a lot is asked for.
+    const gotType = [...gated.values()].map((r) => (r.ok ? r.fields?.property_type : null)).find((v) => v && v.tag !== 'unavailable' && v.value !== null)?.value ?? null;
+    if ((ownerType ?? gotType) === 'condo') {
+      lotShared = true;
+      for (const p of [...streetProviders, ...aerialProviders]) mark(p.id, 'skipped', 'not needed for a condominium unit: its lot, yard and street frontage are shared with the building');
+      streetProviders = []; aerialProviders = [];
+    }
+  }
+
+  for (const p of streetSideLater) {
+    if (S.streetSide || lotShared) { mark(p.id, 'skipped', lotShared ? 'not needed for a condominium unit: there is no yard to split' : 'not needed: address already resolved'); continue; }
+    await resolveWith(p);
+  }
 
   // ---- records, footprints, street, transit: started together -------------------------------------------------------------------
   /** @type {any} */ let resolveEarly;
@@ -634,7 +735,8 @@ export async function buildPropertyProfile(query, ctx) {
       // The parcel registry needs a point INSIDE the parcel. RULE: a rooftop-level geocode is used as it is; otherwise the point is the centroid of
       // the building footprint nearest the geocoded point (the building containing it, else the closest), once footprints have arrived.
       if (needsPoint && !rooftop) { await earlyDone; at0 = nearestCentroid() ?? at0; }
-      const ask = (/** @type {any} */ pt) => safe(() => p.lookup({ address: recAddress, ...(isNum(pt?.lat) ? { lat: pt.lat, lng: pt.lng } : {}), ...(S.addr?.placeId ? { placeId: S.addr.placeId } : {}), ...(q.apn ? { apn: q.apn } : {}), ...(jur ? { jurisdiction: jur } : {}) }, deps(p.id)));
+      if (gated.has(p)) return { p, r: gated.get(p) };
+      const ask = (/** @type {any} */ pt) => askRec(p, pt);
       let r = await ask(at0);
       if (!r.ok && needsPoint && rooftop && r.code === 'no_match') {
         await earlyDone;
@@ -731,18 +833,23 @@ export function toSourcedProfile(pj) {
     ['beds', 'bedrooms'], ['baths', 'bathrooms'], ['roof_sqft', 'roof_area_sqft'], ['front_yard_sqft', 'front_yard_sqft'], ['back_yard_sqft', 'back_yard_sqft'],
     ['year_built', 'year_built'], ['remodeled_year', 'remodeled_year'], ['usable_yard_sqft', 'usable_yard_sqft'], ['usable_front_yard_sqft', 'usable_front_yard_sqft'],
     ['usable_back_yard_sqft', 'usable_back_yard_sqft'], ['green_area_sqft', 'green_area_sqft'], ['paved_area_sqft', 'paved_area_sqft'], ['tree_cover_sqft', 'tree_cover_sqft'], ['pool_area_sqft', 'pool_area_sqft'], ['driveway_area_sqft', 'driveway_area_sqft'], ['property_type', 'property_type'], ['place_id', 'place_id'], ['use_code', 'use_code'], ['units', 'units'],
+    ['unit_label', 'unit_label'], ['complex_unit_count', 'complex_unit_count'], ['complex_lot_sqft', 'complex_lot_area_sqft'],
     ['building_footprint_sqft', 'building_footprint_sqft'], ['transit_distance_m', 'transit_distance_m'], ['transit_stops_nearby', 'transit_stops_nearby'], ['rail_station_nearby', 'rail_station_nearby']]);
   // side_yard_sqft is left out on purpose: the owner does not trust it (it stays in pj.fields with hidden: true and in the yard total)
   for (const [from, to] of map) if (f[from]) put(to, toSourced(f[from]));
   // garage / ADU only when a source says so (absent otherwise, as before, so the page asks the owner)
   for (const k of ['garage_present', 'adu_present']) if (f[k] && f[k].value !== null && f[k].tag !== 'unavailable') put(k, toSourced(f[k]));
+  // a condominium unit owns no garage, yard or roof of its own: say so (with the reason) instead of leaving the key absent
+  const condo = pj?.ownership?.property_type === 'condo';
+  if (condo) for (const k of ['garage_present', 'adu_present']) put(k, unavailable(SHARED_WHY, ASSEMBLER));
   if (f.lat && f.lng) {
     const ok = f.lat.value !== null && f.lng.value !== null;
     put('location', ok ? sourced({ lat: f.lat.value, lng: f.lng.value }, { tag: f.lat.tag, source: f.lat.source, confidence: Math.min(f.lat.confidence, f.lng.confidence), retrievedAt: f.lat.retrieved_at ?? null, unit: 'degrees (WGS84)', ...(f.lat.method ? { method: f.lat.method } : {}) })
       : unavailable(f.lat.note ?? 'no location', f.lat.source));
   }
   const ys = ['front_yard_sqft', 'back_yard_sqft', 'side_yard_sqft'].map((k) => f[k]);
-  if (ys.every((y) => y && isNum(y.value))) {
+  if (condo) put('yard_area_sqft', unavailable(SHARED_WHY, ASSEMBLER));
+  else if (ys.every((y) => y && isNum(y.value))) {
     put('yard_area_sqft', sourced(ys.reduce((s, y) => s + y.value, 0), { tag: 'estimated', source: ys[0].source, confidence: Math.min(...ys.map((y) => y.confidence)), retrievedAt: ys[0].retrieved_at ?? null, unit: 'sqft', method: 'front + back + side yard' }));
   } else put('yard_area_sqft', unavailable('no yard split', ASSEMBLER));
   const d = pj?.details ?? {};
@@ -750,7 +857,9 @@ export function toSourcedProfile(pj) {
   else put('parcel_boundary', unavailable('no parcel polygon', ASSEMBLER));
   if (d.jurisdiction) put('jurisdiction', sourced(d.jurisdiction, { tag: 'measured', source: f.apn?.source ?? ASSEMBLER, confidence: 0.8, retrievedAt: f.apn?.retrieved_at ?? null, method: 'parcel found in the LA County assessor layer' }));
   if (Array.isArray(d.buildings) && d.buildings.length) {
-    put('buildings', sourced(d.buildings.map((/** @type {any} */ b) => ({ footprintSqft: Math.round(b.areaSqft), polygon: b.polygon })), { tag: f.building_footprint_sqft?.tag ?? 'measured', source: f.building_footprint_sqft?.source ?? ASSEMBLER, confidence: f.building_footprint_sqft?.confidence ?? 0.6, retrievedAt: f.building_footprint_sqft?.retrieved_at ?? null }));
+    // a condo's building_footprint_sqft is unavailable (shared) while the outlines themselves are still known: they keep a measured tag
+    const fpOk = f.building_footprint_sqft && f.building_footprint_sqft.tag !== 'unavailable';
+    put('buildings', sourced(d.buildings.map((/** @type {any} */ b) => ({ footprintSqft: Math.round(b.areaSqft), polygon: b.polygon })), { tag: fpOk ? f.building_footprint_sqft.tag : 'measured', source: fpOk ? f.building_footprint_sqft.source : d.buildings_source ?? ASSEMBLER, confidence: fpOk ? f.building_footprint_sqft.confidence : 0.6, retrievedAt: f.building_footprint_sqft?.retrieved_at ?? null }));
   }
   return profile;
 }

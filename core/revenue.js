@@ -249,6 +249,32 @@ export function withOverrides(inputs, overrides, now) {
   return out;
 }
 
+// ---------- several identical units ----------
+
+/**
+ * An opportunity's quantity: how many identical units it is offered as (docs/revenue-method.md "Several identical units"). Absent = 1.
+ * @param {any} q @param {string} [who]
+ */
+export function quantityOf(q, who = 'quantity') {
+  if (q === undefined || q === null) return 1;
+  if (typeof q !== 'number' || !Number.isInteger(q) || q < 1) throw new Error(`${who} must be an integer >= 1 (got ${String(q)})`);
+  return q;
+}
+
+const MONEY_KEYS = /** @type {const} */ (['grossCentsPerMonth', 'platformFeeCentsPerMonth', 'cleaningCentsPerMonth', 'utilitiesCentsPerMonth', 'insuranceCentsPerMonth',
+  'taxAndPermitCentsPerMonth', 'noiCentsPerMonth', 'grossCentsPerYear', 'noiCentsPerYear', 'upfrontCents']);
+
+/**
+ * The scenario for `quantity` identical units: every money figure is exactly `quantity` times the one-unit figure (integer cents x integer, so no
+ * rounding enters). Occupancy, ROI and payback are ratios and stay the one-unit values. Quantity 1 returns the same numbers.
+ * @param {ScenarioResult} r @param {number} quantity @returns {ScenarioResult}
+ */
+function scaleScenario(r, quantity) {
+  const out = /** @type {any} */ ({ ...r, noiCentsByMonth: r.noiCentsByMonth.map((v) => v * quantity) });
+  for (const k of MONEY_KEYS) out[k] = r[k] * quantity;
+  return out;
+}
+
 // ---------- estimate ----------
 
 /**
@@ -336,6 +362,7 @@ function usesPlanningDefaults(o, used) {
  */
 export function estimateOpportunity(opportunity, inputs) {
   if (!opportunity || typeof opportunity.id !== 'string') throw new Error('estimateOpportunity: opportunity with id is required');
+  const quantity = quantityOf(opportunity.quantity, 'estimateOpportunity: opportunity.quantity');
   validateInputs(inputs);
   /** @type {EstimateInputs} */
   const used = /** @type {any} */ ({});
@@ -375,12 +402,22 @@ export function estimateOpportunity(opportunity, inputs) {
     }
   }
 
+  if (quantity > 1) {
+    assumptions.push({ key: 'quantity', text: `${quantity} identical units: every figure is ${quantity} times the one-unit figure. This assumes each unit performs like the others; no vacancy correlation or market saturation between units is modelled.`, source: 'Everyspace modelling assumption' });
+  }
   let confidence = 0;
   /** @type {Record<ScenarioName, ScenarioResult>|null} */
   let scenarios = null;
+  /** @type {Record<ScenarioName, ScenarioResult>|null} */
+  let perUnit = null;
   if (available) {
     scenarios = /** @type {any} */ ({});
-    for (const name of SCENARIO_NAMES) /** @type {any} */ (scenarios)[name] = computeScenario(used, set[name]);
+    perUnit = /** @type {any} */ ({});
+    for (const name of SCENARIO_NAMES) {
+      const one = computeScenario(used, set[name]);
+      /** @type {any} */ (perUnit)[name] = { ...one, noiCentsByMonth: [...one.noiCentsByMonth] };
+      /** @type {any} */ (scenarios)[name] = quantity === 1 ? one : scaleScenario(one, quantity);
+    }
     const ev = typeof opportunity.evidenceConfidence === 'number' ? opportunity.evidenceConfidence : 0;
     confidence = Math.min(used.priceCents.confidence, used.unitsPerMonth.confidence, ev);
     // Unknown local rules are not "zero confidence in the owner's numbers": the regulatory cap below applies instead.
@@ -395,7 +432,9 @@ export function estimateOpportunity(opportunity, inputs) {
   return {
     opportunityId: opportunity.id,
     available,
+    quantity,
     scenarios,
+    perUnit,
     confidence,
     confidenceLabel: labelFor(confidence),
     inputs: used,
@@ -424,10 +463,14 @@ export function summarize(estimates, selectedIds, scenario) {
   /** @type {string[]} */ const unavailableIds = [];
   /** @type {string[]} */ const upfrontUnknownIds = [];
   /** @type {string[]} */ const included = [];
+  /** @type {Array<{id:string, quantity:number, perUnit:{grossCentsPerYear:number, noiCentsPerYear:number, upfrontCents:number}, total:{grossCentsPerYear:number, noiCentsPerYear:number, upfrontCents:number}}>} */
+  const lines = [];
   for (const id of ids) {
     const e = byId.get(id);
     if (!e || !e.available || !e.scenarios) { unavailableIds.push(id); continue; }
     const r = e.scenarios[scenario];
+    const u = e.perUnit?.[scenario] ?? r;
+    lines.push({ id, quantity: e.quantity ?? 1, perUnit: { grossCentsPerYear: u.grossCentsPerYear, noiCentsPerYear: u.noiCentsPerYear, upfrontCents: u.upfrontCents }, total: { grossCentsPerYear: r.grossCentsPerYear, noiCentsPerYear: r.noiCentsPerYear, upfrontCents: r.upfrontCents } });
     included.push(id);
     grossYear += r.grossCentsPerYear; noiYear += r.noiCentsPerYear; upfront += r.upfrontCents;
     r.noiCentsByMonth.forEach((v, i) => { byMonth[i] += v; });
@@ -438,6 +481,7 @@ export function summarize(estimates, selectedIds, scenario) {
   return {
     scenario,
     selected: included,
+    lines,
     unavailableIds,
     upfrontUnknownIds,
     grossCentsPerYear: grossYear,

@@ -68,6 +68,9 @@ Exhaustive search over subsets (max 20 opportunities). A subset is feasible when
 | fastest_payback | lowest combined payback months, then highest NOI |
 The result reports `eligibleIds` (opportunities that passed every owner, rule and investment filter, before conflicts, shared-resource capacity and the combined budget) and `naiveSumNoiCentsPerYear`, the sum over exactly that set. The two totals therefore differ only because of conflicts, capacity and budget. When the eligible set equals the selected set the page shows no "adding everything up" sentence.
 
+### Several identical units (2026-11-27)
+An opportunity may carry `quantity` (integer >= 1, default 1): several apartments offered the same way, or several parking spaces. The inputs (price, volume, per-booking costs, per-unit fixed costs such as utilities, insurance, permit and start-up cost) describe ONE unit; the estimate computes one unit exactly as before (`perUnit`) and the totals (`scenarios`) are `quantity` times it, in integer cents with no extra rounding. The optimizer uses the totals and counts shared-resource use as `resourceUse x quantity`; `summarize` and the optimizer report a `lines` entry per selection with the one-unit and the total figures. Occupancy, ROI and payback are ratios and do not change. This assumes each unit performs like the others: no vacancy correlation between units and no market saturation (the 6th unit does not rent for less than the 1st) is modelled. With quantity 1 every number is identical to the single-unit model (checked against a frozen set of 80 estimates, `core/tests/fixtures/revenue-golden.json`).
+
 ## 8. Communication rules (estimator UI)
 Show three scenarios side by side; show every input with its source tag and an edit control; show what is not included; show confidence in words; never show a single headline number without its range; never say "you will earn".
 

@@ -427,9 +427,9 @@ await scenario('candidates: "None of these" -> the list keeps what was found, an
   await page.click('#cand-none');
   await page.waitForSelector('#facts');
   assert.match(await text(page, '#h-profile'), /200 South Spring Street/);
-  assert.match(await text(page, '#type-hint'), /Choose a property type to see more ideas/);
-  await page.selectOption('#f-property_type', 'multi_family');
-  await edited(page, 'property_type');
+  assert.match(await text(page, '#type-hint'), /Choose what you own to see more ideas/);
+  await page.click('#own-building');
+  await page.waitForSelector('#own-building:checked');
   await typeFact(page, 'bedrooms', 4);
   await toEarn(page);
   await page.waitForSelector('[data-opp-card]');
@@ -450,8 +450,8 @@ await scenario('nothing found: one sentence, empty list, owner basics still give
   assert.match(await text(page, '#earn-headline'), /^We have not found a way to earn yet\. Add a few details about your property and we can show what it could earn\./);
   assert.ok(await page.locator('#back-property').count() >= 1, 'points back to page 1');
   await toProperty(page);
-  await page.selectOption('#f-property_type', 'single_family');
-  await edited(page, 'property_type');
+  await page.click('#own-house');
+  await page.waitForSelector('#own-house:checked');
   await typeFact(page, 'bedrooms', 3);
   await typeFact(page, 'yard_area_sqft', 800);
   await page.click('#f-pool_present-yes');
@@ -865,7 +865,7 @@ await scenario('non-LA address with an answering county parcel service: the lot 
   assert.ok(lot > 60000 && lot < 70000, `lot ${lot} sq ft (a 90 m x 70 m parcel is about 67,800)`);
   assert.doesNotMatch(await ownerText(page), FORBIDDEN);
   // the county service maps no use code, so the property type is left for the owner to choose (earnings ideas follow that choice)
-  assert.match(await text(page, 'main'), /Choose a property type to see more ideas/);
+  assert.match(await text(page, 'main'), /Choose what you own to see more ideas/);
 }));
 
 await scenario('Photon suggestion: picking it fills the field; the lookup then asks no geocoder (no Nominatim, no county locator) and uses the suggestion\'s point', withChicago({ photon: [

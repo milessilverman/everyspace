@@ -246,9 +246,9 @@ await scenario('inline edit: type over a value, Enter applies, commas accepted, 
   await page.waitForFunction(() => document.querySelector('#f-pool_present-yes').getAttribute('aria-pressed') === 'true');
   assert.equal(await page.evaluate(() => document.activeElement.id), 'f-pool_present-yes', 'focus stays on the toggle');
   assert.equal(await hasCard(page, 'pool'), 1, 'a yes adds the pool idea');
-  // a property type from the list
-  await page.selectOption('#f-property_type', 'condo');
-  await page.waitForSelector(`${row('property_type')}[data-state="edited"]`);
+  // what the owner says they own
+  await page.click('#own-building');
+  await page.waitForSelector('#own-building:checked');
   assert.notDeepEqual(await figures(page), before, 'corrections changed the estimates at once');
 });
 
@@ -381,8 +381,8 @@ await scenario('every lookup fails: one actionable sentence, the same list with 
   assert.equal((t.match(/couldn't find/g) ?? []).length, 2, 'the sentence (in the list and in the status line) and nothing else');
   await page.locator('section#property').screenshot({ path: `${SHOTS}/nothing-found-desktop.png` });
   // the owner fills in the basics and gets ideas
-  await page.selectOption('#f-property_type', 'single_family');
-  await page.waitForSelector(`${row('property_type')}[data-state="edited"]`);
+  await page.click('#own-house');
+  await page.waitForSelector('#own-house:checked');
   await typeFact(page, 'bedrooms', '3');
   await page.click('#f-garage_present-yes');
   await toEarn(page);
@@ -411,8 +411,8 @@ await scenario('skip the lookup: the same list, nothing looked up, owner values 
   await page.waitForSelector('#facts');
   assert.equal(await page.locator('#not-found').count(), 0, 'no message: the owner chose this');
   assert.equal(await text(page, '#h-profile'), 'Your property');
-  await page.selectOption('#f-property_type', 'single_family');
-  await page.waitForSelector(`${row('property_type')}[data-state="edited"]`);
+  await page.click('#own-house');
+  await page.waitForSelector('#own-house:checked');
   await typeFact(page, 'yard_area_sqft', '1,200');
   await toEarn(page);
   await page.waitForSelector('[data-opp-card]');
