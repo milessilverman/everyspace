@@ -1,7 +1,7 @@
 # Property data: providers and the profile assembler
 
 `buildPropertyProfile(query, {registry, fetch, now, keys, splitYard})` (core/property-profile.js) turns an address into a
-PropertyProfile for Los Angeles County: flat values plus per-field source, tag, confidence and cross-check. Providers live in
+PropertyProfile for any US address (richest in Los Angeles County): flat values plus per-field source, tag, confidence and cross-check. Providers live in
 `core/providers/` and are plain objects (contract: `core/providers/types.js`). Nothing is guessed: an unobtainable field is
 `unavailable` with a reason. Measured accuracy of the keyless path: `docs/phase1-accuracy.md`.
 
@@ -12,6 +12,9 @@ PropertyProfile for Los Angeles County: flat values plus per-field source, tag, 
 | census-address | address | no | US (server side only, no CORS) | verified live | US Government service; gives the street-side point |
 | la-assessor | records + parcel polygon | no | LA County | verified live | no licence text on the service; confirm before storing at scale |
 | lariac-buildings | footprint | no | LA County | verified live (2008-2020 imagery) | no licence text on the service |
+| overture-buildings | footprint (+ height, floors) | no | US except LA County (LARIAC wrapper falls back to it inside LA) | verified live; CORS ok | ODbL; footer credit "Drafted buildings: Overture Maps Foundation (ODbL)" |
+| parcel-registry | records + parcel polygon | no | US except LA County, 131 county/state ArcGIS services | one service CORS-verified (LA); the browser tries the rest with a 4 s timeout | each county sets its own terms; none verified |
+| photon (suggestions only) | address | no | US | fair-use public instance, best effort | OpenStreetMap, ODbL; footer credit "Address suggestions © OpenStreetMap contributors (via Photon)" |
 | rentcast | records | yes | US | UNVERIFIED (field names from memory) | commercial terms: confirm caching/storage |
 | google-solar | footprint (roof area) | yes | US | UNVERIFIED (from memory) | 30 days; confirm Google's terms on use and caching |
 | google-places | address (pure normaliser only) | yes (browser) | US | normaliser tested; no network code | Places terms apply |
@@ -19,6 +22,13 @@ PropertyProfile for Los Angeles County: flat values plus per-field source, tag, 
 
 Microsoft Global Building Footprints is a bulk dataset with no per-address query API. Using it needs hosted tiles or a database
 import, which is a cost and hosting decision. LARIAC is the Los Angeles fallback in its place.
+
+## How a run goes (any US address)
+County first: the caller's `jurisdiction`, else the county of the county-level address provider, else `countyAt` (FCC, TIGERweb fallback). Then
+records (all providers together), footprints, street and transit start together; a footprint provider flagged `needsParcel` (LARIAC) waits for
+the parcel, a records provider flagged `needsPointInParcel` (parcel registry) uses a rooftop point at once, otherwise the centroid of the
+building nearest the geocoded point. `onPartial(profileSoFar, {stage})` (stages address, records, footprints, final) lets a page render by group;
+the last call equals the returned value. Results carry `attributions`; the 2008-2020 outline note only appears when LARIAC supplied the outline.
 
 ## Fallback order
 Address: county locator, then Census (Census is also asked for the street-side point when a yard split is wanted). Records:
@@ -51,5 +61,7 @@ Live checks, 5 requests to `public.gis.lacounty.gov` with `Origin: https://miles
 - Locator point vs parcel: the candidate point (-118.243493, 34.053898) is OUTSIDE the matched parcel polygon, 9.1 m from its nearest edge, on the street side of the frontage. That is ONE sample; it is not proof for every lot.
 - So `core/providers/browser.js` offers the point as `streetSidePoint`, but `browserSplitYard` uses it only when it lies outside the parcel and within 40 m; otherwise front/back/side stay unavailable ("needs a street reference; available once the server-side lookup is switched on"). A front is never guessed.
 - `createBrowserRegistry()`: county locator, assessor, LARIAC. `estimate/county-path.js` runs it first (plus OSM Overpass for pool and transit as before). It falls back to the old Nominatim path when the locator has no match or fails, the typed state is not CA or the typed ZIP differs from the county's, or the assessor finds no parcel. A different house number or direction, or two near-equal candidates, asks "Is this your property?" first.
-- `estimate/address-suggest.js`: combobox on the homepage and estimator, county `suggest` only, 5+ characters, 300 ms debounce, one request in flight, max 5, silent on failure. `EXTRA_SOURCES` is where a Google Places source can be added later (none now).
+- `estimate/address-suggest.js`: combobox on the homepage and estimator; the county `suggest` is asked first (skipped when the text ends in another state), Photon (`suggestionSources()` in browser.js) only when the county has nothing; Photon: 4+ characters, one request in flight, one start per 250 ms, silent on failure, US addresses with a house number only, coordinates returned. A chosen Photon suggestion's point goes to `runCountyPath` (`picked`), so no geocoder is asked.
 - Known limit: the locator's city can be a community name (e.g. Van Nuys), which would skip the City of Los Angeles rules in `core/regulatory.js`.
+- Outside LA County (2026-11-27, INTEGRATE): `runCountyPath` takes the nationwide route for a chosen Photon suggestion, a typed state other than CA, or a county-locator miss that Nominatim places outside LA County. Same assembler: county (FCC), Overture outline, roof/floors derived, lot from the county parcel service (`createBrowserRegistry({tryUnverifiedParcelServices:true})`, 4 s timeout, started in parallel; silent when it does not answer, the lot-size line stays an empty input). Yards stay empty (no street reference). Earnings ideas wait for the owner to choose a property type (parcel services map no use code).
+- Live check, public buildings only (real fetch, mocked nothing): LA City Hall typed: records 1.2 s, outline 4.1 s, 3 requests, 24 KB. Chicago City Hall from a Photon point: county 0.09 s, outline + roof + floors 1.5 s, 5 requests, 189 KB; Cook County's parcel host is outside the allowed hosts, so not contacted.

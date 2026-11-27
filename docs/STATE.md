@@ -10,6 +10,7 @@ Updated 2026-11-27. Read this first. Detail lives in the files named here.
 | Site audit, fixes, browser tests (Part 2) | done on branch | `claude/part2-site-audit`, findings in `docs/audit.md` |
 | Property-data providers, yard split, profile storage, accuracy run | done on branch (keyless path) | `claude/trusting-cannon-yynabw`; `docs/property-data.md`, `docs/phase1-accuracy.md` |
 | Property-data wired into the homepage flow | done on branch (keyless path) | same branch; LA County addresses use the county locator, assessor and building outlines first, earlier lookup as fallback; address suggestions from the county service |
+| Owner-first property screen, fast lookups, progress bar, nationwide autofill; City Pretty and StreetForge methods reused | done on branch | `estimate/`, `core/{roof,transit,building-size}.js`, `core/providers/{overture-buildings,parcel-registry,county-lookup,photon-address}.js`; `docs/audit/reuse-*.md`, `docs/zillow.md` |
 | Rename to "Spacavia" ("Your space, your way") and repository rename | on hold | waiting for the owner's go-ahead |
 | Backend from run 1 (orgs, conflict engine, adapters) | staging only | not applied to the live database |
 
@@ -26,9 +27,9 @@ Live backend functions (checked read-only 2026-11-27): `calendar-feed`, `calenda
 ## Test commands and last results
 | command | result |
 |---|---|
-| `npm test` (core unit tests) | 257 pass on the Part 2 branch; 370 on the property-data branch |
-| `npm run e2e` (every `tests/*.e2e.mjs`) | Part 2 branch: 7 files pass (home 10, address entry 20, property confirm 8, navigation 12, sign-in 62 checks, console navigation 164 checks, console 18 checks). Property-data branch: 8 files pass (adds address suggestions 25; address entry 35, property confirm 10) |
-| `cd platform && npm test` | 231 on main; 264 on the property-data branch |
+| `npm test` (core unit tests) | 464 pass |
+| `npm run e2e` (every `tests/*.e2e.mjs`) | 9 files pass (home, address entry, address suggestions, property confirm, navigation, speed, sign-in, console navigation, console) |
+| `cd platform && npm test` | 264 pass |
 | `cd platform && npm run test:staging` | 16 pass |
 | demo repo: `node --test tests/*.test.mjs` | 15 pass |
 
@@ -68,7 +69,13 @@ Live backend functions (checked read-only 2026-11-27): `calendar-feed`, `calenda
 | LA County assessor (records + parcel), LARIAC building outlines, county address locator, Census geocoder | built, verified live |
 | RentCast (primary records), Google Solar (roof) | adapters written from documentation recall, never run: no key. Marked unverified |
 | Google Places Autocomplete | only the place-to-address mapping; no key, no script |
-| Microsoft building footprints | not built: bulk dataset with no per-address API (see `docs/property-data.md`) |
+| Building footprints outside LA County | Overture's public building tiles (include Microsoft's machine-read footprints), read with range requests as StreetForge does; checked live on two public buildings (LA City Hall within 0.2% of the county outline) |
+| Roof size | City Pretty's method (footprint x slope for a pitch chosen by build year and state). City Pretty's own notes call the default pitches a rule of thumb with no source, so it stays an estimate the owner can type over |
+| Floors | records first; else floor count or height from the footprint source (StreetForge's 3.4 m per floor rule); else living area / footprint |
+| Transit | City Pretty's rules: nearest stop, half-mile count, tourist/private stations and trams excluded |
+| Parcels and lot size outside LA County | StreetForge's registry: 131 county and state services, all 50 states + DC. Only LA is confirmed readable from a browser; others are tried with a 4 s limit and silently skipped |
+| Address autofill | LA County's address service first; Photon (OpenStreetMap, built for search-as-you-type, fair-use) for the rest of the US |
+| Zillow | no self-serve source for lot size, no footprint offering; its one records programme is invite-only and commercial; site terms could not be read. See `docs/zillow.md` |
 | Yard split (`core/yard.js`) | built; 60 tests incl. 200 generated lots |
 | `buildPropertyProfile` -> one PropertyProfile JSON with per-field source and confidence | built |
 | Storage + server endpoint (`property_profiles`, budget guard, `property-profile` function) | built, staging only |
@@ -92,6 +99,8 @@ All three need an account with the provider (and a billing account for Google), 
 | A8 | Go-ahead for the Spacavia rename and the repository rename | brand change; the public address changes and Supabase's allowed redirect addresses must be updated |
 
 ## Known limits
+- Outside LA County an owner gets footprint, roof and floors, and lot size only when their county's service answers; home size, beds, baths, year and front/back yards stay empty boxes to fill in.
+- The property screen deliberately shows no failure or source text; sources are in one collapsed section.
 - Every earnings estimate is low confidence until the owner enters their own price and bookings.
 - LA short-term-rental rules are unverified. OpenStreetMap lookups were never run live from the build environment.
 - Without RentCast, record fields come from the assessor, so "profile vs assessor" agreement is by construction; only lot area and footprint area were checked independently.

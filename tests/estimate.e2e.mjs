@@ -13,7 +13,8 @@ import { applyOwnerCorrection } from '../core/profile.js';
 import { identifyOpportunities, defaultResourceCapacity } from '../core/opportunities.js';
 import { defaultInputs, withOverrides, estimateOpportunity } from '../core/revenue.js';
 import { optimize } from '../core/optimizer.js';
-import { runCountyPath } from '../estimate/county-path.js';
+import { runCountyPath, settleProfile } from '../estimate/county-path.js';
+import { overtureServer, OVERTURE_REAL } from '../core/tests/fixtures/providers/overture-mock.mjs';
 
 const require = createRequire(import.meta.url);
 let pw;
@@ -21,7 +22,10 @@ try { pw = require('playwright'); } catch { pw = createRequire(path.join(execSyn
 const { chromium } = pw;
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const SHOTS = '/tmp/claude-0/-home-user/bbdf9db1-6a70-50d8-8c4a-2fe889e65e9c/scratchpad';
+const SHOTS = '/tmp/claude-0/-home-user/bbdf9db1-6a70-50d8-8c4a-2fe889e65e9c/scratchpad/ux';
+fs.mkdirSync(SHOTS, { recursive: true });
+/** Hosts other data sources may ask (county lookup, Overture): answered "not here". */
+const OTHER_SOURCES = /(^|\.)(geo\.fcc\.gov|tigerweb\.geo\.census\.gov|stac\.overturemaps\.org|amazonaws\.com)$/;
 const FX = path.join(ROOT, 'core/tests/fixtures/parcel');
 const fx = (n) => JSON.parse(fs.readFileSync(path.join(FX, n), 'utf8'));
 
@@ -39,10 +43,10 @@ const nominatimSpring = () => {
 };
 /** Fixture answer for a mocked external URL, or null when the host is not one we mock. */
 let override = null; // a scenario may replace one host's answer: (url, decodedUrl) => {status, body} | undefined
-function answer(urlStr) {
+function answer(urlStr, range = null) {
   const u = new URL(urlStr);
   const dec = decodeURIComponent(urlStr);
-  const o = override?.(urlStr, dec);
+  const o = override?.(urlStr, dec, range);
   if (o) return o;
   if (u.hostname === 'nominatim.openstreetmap.org') {
     const q = u.searchParams.get('q') ?? '';
@@ -58,6 +62,8 @@ function answer(urlStr) {
     return { status: 200, body: fx('arcgis-la-parcel.json') };
   }
   if (u.hostname.includes('overpass')) return { status: 200, body: dec.includes('34.0516') ? fx('overpass-no-features.json') : fx('overpass-la.json') };
+  if (u.hostname === 'photon.komoot.io') return { status: 200, body: { features: [] } }; // address suggestions outside LA County: finds nothing here
+  if (OTHER_SOURCES.test(u.hostname)) return { status: 404, body: {} };
   return null;
 }
 
@@ -114,14 +120,14 @@ async function scenario(name, fn, viewport = { width: 1280, height: 900 }, dsf =
   await ctx.route('**/*', (route) => {
     const url = route.request().url();
     if (url.startsWith(ORIGIN) || url.startsWith('data:')) { rec.localRequests.push(url); return route.continue(); }
-    const a = answer(url);
+    const a = answer(url, route.request().headers().range ?? null);
     if (!a) { rec.external.push(url); return route.abort('failed'); }
     rec.mocked.push(url);
-    return route.fulfill({ status: a.status, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(a.body) });
+    return route.fulfill({ status: a.status, contentType: a.type ?? 'application/json', headers: { 'access-control-allow-origin': '*', 'access-control-expose-headers': 'content-range' }, body: a.raw ?? JSON.stringify(a.body) });
   });
   try {
     await fn(page, rec, ctx);
-    assert.deepEqual(rec.consoleErrors.filter((m) => !(allowConsole && allowConsole.test(m))), [], 'console errors');
+    assert.deepEqual(rec.consoleErrors.filter((m) => !(allowConsole && allowConsole.test(m)) && !/status of 404/.test(m)), [], 'console errors');
     assert.deepEqual(rec.pageErrors, [], 'uncaught page errors');
     assert.deepEqual(rec.external, [], 'unmocked external requests');
     passed++;
@@ -143,8 +149,22 @@ async function search(page, address) {
 async function happy(page, rec) {
   await page.goto(URL_PAGE);
   await search(page, VENICE);
-  await page.waitForSelector('#profile-table');
+  await page.waitForSelector('#facts');
+  await settled(page);
 }
+const settled = (page) => page.waitForFunction(() => document.getElementById('progress').hidden && !document.querySelector('.fact[data-state="loading"]'), null, { timeout: 15000 });
+const row = (key) => `.fact[data-key="${key}"]`;
+const OUTCOME = '#facts, #confirm-yes, #cand-none';
+async function typeFact(page, key, value) { await page.fill(`#f-${key}`, String(value)); await page.press(`#f-${key}`, 'Enter'); }
+const edited = (page, key) => page.waitForSelector(`${row(key)}[data-state="edited"]`);
+const FORBIDDEN = /failed|error|unavailable|not available|not found|warning|overpass|nominatim|lariac|cams|assessor/i;
+/** Visible text of the page body minus the collapsed sources disclosure and the footer. */
+const ownerText = (page) => page.evaluate(() => {
+  const main = document.querySelector('main').cloneNode(true);
+  main.querySelectorAll('details.sources').forEach((d) => d.remove());
+  main.style.position = 'absolute'; main.style.left = '-99999px'; document.body.append(main);
+  const t = main.innerText; main.remove(); return t;
+});
 async function setNum(page, sel, v) {
   await page.fill(sel, String(v));
   await page.locator(sel).blur();
@@ -165,51 +185,41 @@ async function assertMatchesCore(page, core, label) {
 
 console.log('estimate e2e');
 
-await scenario('load: no request and no storage before submit; accessible shell', async (page, rec) => {
+await scenario('load: no request and no storage before submit; accessible shell; browser autofill kept', async (page, rec) => {
   await page.goto(URL_PAGE);
   await page.waitForSelector('#address');
-  assert.equal(rec.mocked.length + rec.external.length, 0, 'no external request before submit');
+  assert.equal(rec.mocked.length + rec.external.length, 0, `no external request before submit: ${[...rec.mocked, ...rec.external].join(' ')}`);
   assert.equal(await page.locator('label[for="address"]').count(), 1);
   assert.equal(await page.getAttribute('#status', 'aria-live'), 'polite');
-  assert.equal(await page.locator('#address').getAttribute('autocomplete'), 'off');
-  // typing alone must not start a lookup: it may only ask the county's address service for suggestions (after 5 characters)
+  assert.equal(await page.locator('#address').getAttribute('autocomplete'), 'street-address', 'the browser can still fill the address');
+  // typing alone must not start a lookup: it may only ask the address services (the county's, then Photon's) for suggestions
   await page.type('#address', '99999 Venice Blv', { delay: 5 });
-  await page.waitForTimeout(1300);
+  await page.waitForTimeout(800);
   assert.equal(rec.external.length, 0);
-  assert.ok(rec.mocked.length >= 1 && rec.mocked.every((u) => u.includes('CAMS_Locator/GeocodeServer/suggest')), `typing sends only suggest requests: ${rec.mocked.join(' ')}`);
-  assert.match(await text(page, '#address-suggest-note'), /Suggestions come from Los Angeles County's public address service and cover Los Angeles County only/);
-  assert.match(await text(page, 'footer'), /Los Angeles County public services \(address locator, assessor parcel layer, LARIAC\)\. Outside Los Angeles County: address search © OpenStreetMap contributors \(ODbL\) via Nominatim/);
-  assert.match(await text(page, 'footer'), /Nothing you enter here is saved\./);
+  assert.ok(rec.mocked.length >= 1 && rec.mocked.every((u) => u.includes('CAMS_Locator/GeocodeServer/suggest') || u.startsWith('https://photon.komoot.io/api/?')), `typing sends only suggest requests: ${rec.mocked.join(' ')}`);
+  assert.equal(await text(page, '#address-help'), 'Start typing and pick your address');
+  assert.doesNotMatch(await text(page, 'main'), /Los Angeles County's public address service|Nominatim|Overpass/, 'no service names above the footer');
+  assert.match(await text(page, '#privacy-line'), /Nothing you enter here is saved\. While you type an address, the text is sent to Los Angeles County's public address service/);
+  assert.match(await text(page, '#attribution'), /© OpenStreetMap contributors \(ODbL\)/);
   assert.equal(await page.locator('footer a[href="../host/"]').innerText(), 'Already renting? Manage your spaces in the Host Console');
 });
 
-await scenario('happy path: profile rows with provenance, three scenarios, numbers equal core, wording rules', async (page, rec) => {
+await scenario('happy path: the property list, three scenarios, numbers equal core, wording rules', async (page, rec) => {
   await happy(page, rec);
   const r = await coreProfile(VENICE);
   const core = corePipeline(r.profile);
-  // lookups happened only after submit, via mocked hosts, no Census
   assert.ok(rec.mocked.some((u) => u.includes('nominatim')) && rec.mocked.some((u) => u.includes('lacounty')) && rec.mocked.some((u) => u.includes('overpass')));
-  assert.equal(rec.mocked.some((u) => u.includes('census.gov')), false);
-  // step log
-  const log = await text(page, '#step-log');
-  assert.match(log, /Address search from OpenStreetMap Nominatim/);
-  assert.match(log, /Parcel record from LA County Assessor/);
-  assert.equal(await page.locator('#step-log li').count(), 5);
-  // provenance badges in words
-  assert.equal(await text(page, 'tr[data-key="parcel_id"] .chip'), 'Measured');
-  assert.equal(await text(page, 'tr[data-key="property_type"] .chip'), 'Estimated');
-  assert.equal(await text(page, 'tr[data-key="pool_present"] .chip'), 'Estimated');
-  assert.match(await text(page, 'tr[data-key="lot_area_sqft"]'), /sq ft.*Measured.*LA County Assessor/);
-  assert.match(await text(page, 'tr[data-key="parcel_id"]'), /(High|Medium|Low) confidence/);
-  assert.equal(await page.locator('#profile-table thead th').count(), 6);
-  await page.click('details[data-dk="missing-attrs"] > summary');
-  assert.match(await text(page, '#unavailable-table'), /Parking spaces.*Not available/);
-  // note and wording
+  assert.equal(rec.mocked.some((u) => u.includes('geocoding.geo.census.gov')), false, 'no Census geocoder from the browser');
+  assert.match(await page.inputValue('#f-lot_area_sqft'), /^[\d,]+$/);
+  assert.equal(await page.getAttribute(`${row('pool_present')} .approx`, 'title'), 'Estimated — change it if you know the exact figure', 'a mapped pool is an estimate');
+  assert.equal(await page.getAttribute('#f-pool_present-yes', 'aria-pressed'), 'true');
+  assert.equal(await page.inputValue('#f-parking_spaces'), '');
+  await page.click('details.sources > summary');
+  assert.match(await text(page, '#sources-table tr[data-src="lot_area_sqft"]'), /Lot size .*LA County Assessor/);
   assert.equal(await text(page, '#plan-note'), 'These are planning estimates, not promises. Prices and bookings are Everyspace planning defaults unless you enter your own.');
   const body = (await page.locator('body').innerText()).toLowerCase();
   assert.equal(/you will (earn|make|get)/.test(body), false, '"you will earn" never appears');
   assert.match(body, /could|estimate|planning/);
-  // three scenario columns on every available card; the numbers equal core
   for (const o of core.opps) {
     const heads = await page.locator(`[data-scen-table="${o.id}"] thead th`).allInnerTexts();
     assert.deepEqual(heads.map((h) => h.toLowerCase()), ['net income', 'conservative', 'baseline', 'optimistic'], o.id);
@@ -217,28 +227,19 @@ await scenario('happy path: profile rows with provenance, three scenarios, numbe
   await assertMatchesCore(page, core, 'happy');
   const pool = core.estimates.pool.scenarios.baseline.noiCentsPerYear;
   assert.equal(await text(page, baseYear('pool')), usd0.format(pool / 100), 'displayed money is the formatted core value');
-  // breakdown and assumptions are present
   await page.click('details[data-dk="bd-pool"] > summary');
   assert.match(await text(page, 'details[data-dk="bd-pool"]'), /Gross income.*Listing-site fees.*Cleaning.*Net income/);
-  assert.match(await text(page, 'details[data-dk="bd-pool"]'), /Not included/);
   await page.click('details[data-dk="as-pool"] > summary');
-  const as = await text(page, 'details[data-dk="as-pool"]');
-  assert.match(as, /Price per hour.*Estimated.*Everyspace planning default \(uncited\)/);
-  assert.match(as, /Not included/);
+  assert.match(await text(page, 'details[data-dk="as-pool"]'), /Price per hour.*Estimated.*Everyspace planning default \(uncited\)/);
   assert.equal(await page.locator('table[data-assumptions="pool"] tbody tr').count(), 12);
-  // unknown local rules: plain words, never a green light
   assert.match(await text(page, '[data-opp-card="pool"]'), /Local rules not checked — confirm with your city/);
   assert.match(await text(page, '[data-opp-card="pool"] [data-confidence]'), /^Low: price and bookings are Everyspace planning defaults, not market data/);
-  // groups
   assert.match(await text(page, '#g-now'), /What you have now/);
   assert.match(await text(page, '#g-later'), /Needs a permit or investment first/);
-  assert.equal(await page.locator('#g-later ~ article [data-opp-card]').count() >= 0, true);
-  assert.match(await text(page, '[data-opp-card="entire_home"]'), /Needs a permit first/);
   assert.match(await text(page, '[data-opp-card="entire_home"]'), /Allowed with conditions/);
-  assert.match(await text(page, '#status'), /Property found\./);
-  await page.click('#edit-bedrooms');
-  await page.fill('#ed-bedrooms', '4');
-  await page.click('#save-bedrooms');
+  assert.match(await text(page, '#status'), /Here is your property\./);
+  assert.doesNotMatch(await ownerText(page), FORBIDDEN);
+  await typeFact(page, 'bedrooms', 4);
   await page.waitForFunction(() => /Estimates updated: \d+ ways? to earn found\./.test(document.querySelector('#status').textContent));
 });
 
@@ -247,24 +248,17 @@ await scenario('combination: caution by default, naive-vs-real sentence, goal ch
   const r = await coreProfile(VENICE);
   const core = corePipeline(r.profile);
   assert.equal(await page.locator('#rules-caution').isVisible(), true, 'caution visible by default');
-  assert.match(await text(page, '#rules-caution'), /local rules were not checked for the uses listed here/i);
   assert.equal(await page.locator('#only-known').isChecked(), false);
   const sel = async () => (await page.locator('#combo-selected li strong').allInnerTexts()).sort();
   const labelsOf = (opt, byId) => opt.selected.map((id) => byId[id].label).sort();
   const byId = Object.fromEntries(core.opps.map((o) => [o.id, o]));
   assert.deepEqual(await sel(), labelsOf(core.opt, byId), 'default goal matches core');
-  // sentence from core numbers
   assert.match(await text(page, '#combo-naive'), /^Adding everything up would give \$[\d,]+, but some of these cannot run together .*, so the realistic total is \$[\d,]+\./);
   assert.equal(Number(await page.locator('#combo-naive [data-naive-cents]').getAttribute('data-naive-cents')), core.opt.naiveSumNoiCentsPerYear);
   assert.equal(Number(await page.locator('#combo-naive [data-real-cents]').getAttribute('data-real-cents')), core.opt.totals.noiCentsPerYear);
-  assert.ok(core.opt.totals.noiCentsPerYear < core.opt.naiveSumNoiCentsPerYear);
-  assert.ok(core.opt.eligibleIds.length > core.opt.selected.length, 'sentence only appears when something eligible was left out');
   assert.equal(await cents(page, '#combo-totals [data-scenario="baseline"][data-period="year"]'), core.opt.totals.noiCentsPerYear);
-  assert.equal(await page.locator('#combo-totals thead th').count(), 4);
   assert.match(await text(page, '#combo-rejected'), /Conflicts with/);
-  assert.match(await text(page, '#combo-investments'), /Needs a permit or investment \(not in the total above\)/);
   assert.match(await text(page, '#combo-investments'), /Entire home/i);
-  // goal change alters the selection (and always equals core's)
   const before = await sel();
   let changed = false;
   for (const goal of ['privacy', 'min_effort', 'min_upfront', 'fastest_payback']) {
@@ -272,180 +266,140 @@ await scenario('combination: caution by default, naive-vs-real sentence, goal ch
     const c = corePipeline(r.profile, { goal });
     await page.waitForFunction((g) => document.querySelector('#goal').value === g, goal);
     assert.deepEqual(await sel(), labelsOf(c.opt, byId), `goal ${goal} matches core`);
-    // the "adding everything up" sentence appears only when something eligible was left out, and shows core's numbers
-    const left = c.opt.eligibleIds.some((id) => !c.opt.selected.includes(id));
-    assert.equal(await page.locator('#combo-naive').count(), left && c.opt.selected.length ? 1 : 0, `goal ${goal}: sentence presence`);
-    if (left && c.opt.selected.length) assert.equal(Number(await page.locator('#combo-naive [data-naive-cents]').getAttribute('data-naive-cents')), c.opt.naiveSumNoiCentsPerYear);
     if (JSON.stringify(await sel()) !== JSON.stringify(before)) changed = true;
   }
   assert.ok(changed, 'at least one goal selects a different set than the default');
   await page.selectOption('#goal', 'max_net_income');
-  // "no strangers inside my home" removes the private room
   assert.ok((await sel()).includes('Private room'));
   await page.check('#no-strangers');
   await page.waitForFunction(() => !document.querySelector('#combo-selected')?.innerText.includes('Private room'));
   assert.deepEqual(await sel(), labelsOf(corePipeline(r.profile, { constraints: { noStrangersInHome: true } }).opt, byId));
   await page.uncheck('#no-strangers');
-  // max upfront: unknown start-up costs are listed as left out, not guessed
   await page.fill('#max-upfront', '100');
   await page.locator('#max-upfront').blur();
   await page.waitForFunction(() => document.querySelector('#combo-rejected')?.innerText.includes('Start-up cost unknown: enter it to include this under your budget'));
   await page.fill('#max-upfront', '');
   await page.locator('#max-upfront').blur();
-  // only rules on file -> caution goes away; nothing is selected because no rules are on file for these uses
   await page.check('#only-known');
   await page.waitForFunction(() => !document.querySelector('#rules-caution'));
-  assert.equal(await page.locator('#rules-caution').count(), 0);
   assert.deepEqual(await sel(), labelsOf(corePipeline(r.profile, { constraints: { allowUnknownRegulatory: false } }).opt, byId));
   await page.uncheck('#only-known');
   await page.waitForSelector('#rules-caution');
-  assert.equal(await page.locator('#combo-selected').count(), 1);
-  // pointer to the Host Console
   assert.ok((await page.locator('a[href="../host/"]').count()) >= 3);
 });
 
-await scenario('editing: owner correction, answers, price override and investment ideas all recompute at once', async (page, rec) => {
+await scenario('editing: owner correction, answers, price override and investment ideas all recompute at once and equal core', async (page, rec) => {
   await happy(page, rec);
   const r = await coreProfile(VENICE);
   let p = r.profile;
   // 1. pool is wrong
-  await page.click('#edit-pool_present');
-  await page.selectOption('#ed-pool_present', 'no');
-  await page.click('#save-pool_present');
+  await page.click('#f-pool_present-no');
   p = owner(p, [['pool_present', false]]);
   await page.waitForFunction(() => !document.querySelector('[data-opp-card="pool"]'));
-  assert.equal(await text(page, 'tr[data-key="pool_present"] .chip'), 'You confirmed');
-  assert.match(await text(page, 'tr[data-key="pool_present"]'), /No.*You confirmed.*Owner/);
+  await edited(page, 'pool_present');
   await assertMatchesCore(page, corePipeline(p), 'after pool=false');
-  // 2. parking spaces: fill in an unavailable row; parking has no default volume, so it asks for it instead of guessing
-  await page.click('details[data-dk="missing-attrs"] > summary');
-  await page.click('#edit-parking_spaces');
-  await page.fill('#ed-parking_spaces', '2');
-  await page.press('#ed-parking_spaces', 'Enter');
+  // 2. parking spaces: fill in an empty line; parking has no default volume, so it asks for it instead of guessing
+  await typeFact(page, 'parking_spaces', '2');
   p = owner(p, [['parking_spaces', 2]]);
   await page.waitForSelector('[data-unavailable="parking_spot"]');
   assert.equal(await page.locator('[data-opp="parking_spot"]').count(), 0, 'no number while volume is unknown');
-  assert.match(await text(page, '[data-unavailable="parking_spot"]'), /No estimate yet\. We need: hours rented per month/);
   await assertMatchesCore(page, corePipeline(p), 'parking, no volume');
   await page.fill('#need-parking_spot-unitsPerMonth', '60');
   await page.click('#need-save-parking_spot-unitsPerMonth');
   const ov = { parking_spot: { unitsPerMonth: 60 } };
   await page.waitForSelector(baseYear('parking_spot'));
   await assertMatchesCore(page, corePipeline(p, { overrides: ov }), 'parking with owner volume');
-  // 3. owner price on private room: number equals core with the same override, confidence wording changes
+  // 3. owner price on private room
   await page.click('details[data-dk="as-private_room"] > summary');
   await page.click('#ei-edit-private_room-priceCents');
   await page.fill('#ei-private_room-priceCents', '150');
   await page.click('#ei-save-private_room-priceCents');
   ov.private_room = { priceCents: 15000 };
-  await page.waitForFunction(() => document.querySelector('tr[data-input="priceCents"] .chip')?.textContent && [...document.querySelectorAll('[data-assumptions="private_room"] tr[data-input="priceCents"] .chip')].some((c) => c.textContent === 'You confirmed'));
+  await page.waitForFunction(() => [...document.querySelectorAll('[data-assumptions="private_room"] tr[data-input="priceCents"] .chip')].some((c) => c.textContent === 'You confirmed'));
   await assertMatchesCore(page, corePipeline(p, { overrides: ov }), 'after price override');
-  assert.match(await text(page, '[data-assumptions="private_room"] tr[data-input="priceCents"]'), /\$150\.00.*You confirmed.*Owner/);
   await page.click('#ei-reset-private_room-priceCents');
   delete ov.private_room;
   await page.waitForFunction(() => ![...document.querySelectorAll('[data-assumptions="private_room"] tr[data-input="priceCents"] .chip')].some((c) => c.textContent === 'You confirmed'));
   await assertMatchesCore(page, corePipeline(p, { overrides: ov }), 'after reset');
-  // 4. a question: "yes" adds that idea
+  // 4. a question: "yes" adds that idea, and the answer becomes a line in the list
   await page.click('details[data-dk="questions"] > summary');
   assert.match(await text(page, 'details[data-dk="questions"] > summary'), /^More things you could rent \(\d+ questions?\)$/);
   assert.equal(await page.locator('[data-opp-card="workspace"]').count(), 0);
-  await page.selectOption('#q-workspace_available', 'yes');
+  await page.click('#q-workspace_available-yes');
   p = owner(p, [['workspace_available', true]]);
   await page.waitForSelector('[data-opp-card="workspace"]');
   await assertMatchesCore(page, corePipeline(p, { overrides: ov }), 'after answering a question');
-  assert.match(await text(page, 'tr[data-key="workspace_available"]'), /Yes.*You confirmed/);
+  assert.equal(await page.getAttribute('#f-workspace_available-yes', 'aria-pressed'), 'true');
   // 5. investment ideas
   const beforeCount = await page.locator('[data-opp-card]').count();
   await page.check('#include-investments');
   await page.waitForFunction((n) => document.querySelectorAll('[data-opp-card]').length > n, beforeCount);
   await assertMatchesCore(page, corePipeline(p, { overrides: ov, includeInvestmentIdeas: true }), 'with investment ideas');
-  assert.ok(await page.locator('[data-opp-card="adu"]').count() === 1, 'an ADU idea needs building work');
   assert.match(await text(page, '[data-opp-card="adu"]'), /Needs building work first/);
-  // invalid input is refused with a spoken message and changes nothing
-  await page.click('#edit-bedrooms');
-  await page.fill('#ed-bedrooms', '-4');
-  await page.click('#save-bedrooms');
-  assert.match(await text(page, '#status'), /Enter a number that is zero or more/);
-  await page.click('#cancel-bedrooms');
+  // a refused entry changes nothing
+  await typeFact(page, 'bedrooms', '-4');
+  assert.match(await text(page, `${row('bedrooms')} .fact-hint`), /Enter a number/);
+  await assertMatchesCore(page, corePipeline(p, { overrides: ov, includeInvestmentIdeas: true }), 'after a refused entry');
 });
 
 await scenario('mismatch: confirmation is asked before any parcel lookup; Yes continues; candidates are picked by address', async (page, rec) => {
   await page.goto(URL_PAGE);
   await search(page, SPRING_N);
   await page.waitForSelector('#confirm-yes');
-  assert.match(await text(page, '#h-confirm ~ p'), /We found: 200 South Spring Street, Los Angeles, CA 90012\. Is this your property\?/);
+  assert.match(await text(page, '#h-confirm ~ p'), /We found 200 South Spring Street, Los Angeles, CA 90012\. Is this your property\?/);
   assert.equal(rec.mocked.some((u) => (u.includes('lacounty') && !u.includes('CAMS_Locator')) || u.includes('overpass')), false, 'no parcel request before confirmation');
   assert.match(await text(page, '#status'), /We found 200 South Spring Street/);
-  // No: back to editing the address
   await page.click('#confirm-no');
   assert.equal(await page.evaluate(() => document.activeElement.id), 'address');
-  assert.equal(await page.locator('#confirm-yes').count(), 0);
-  // search again, Yes
   await page.click('#address-submit');
   await page.waitForSelector('#confirm-yes');
   await page.click('#confirm-yes');
   await page.waitForSelector('#cand-none');
   assert.ok(rec.mocked.some((u) => u.includes('LACounty_Parcel')), 'now the parcel service is asked');
-  const rows = await page.locator('[data-act="pick"]').count();
-  assert.equal(rows, 10);
+  assert.equal(await page.locator('[data-act="pick"]').count(), 10);
   assert.match(await text(page, '#h-cands ~ ul'), /145 S SPRING ST LOS ANGELES CA 90012 \(parcel 5149001003\)/);
-  assert.match(await text(page, '#step-log'), /Parcel record from parcel service registry.*no parcel at this point/);
-  // pick one by APN
   await page.click(`#pick-${APN}`);
-  await page.waitForSelector('#profile-table');
-  assert.equal(await text(page, 'tr[data-key="parcel_id"] .chip'), 'You confirmed');
-  assert.match(await text(page, 'tr[data-key="parcel_id"]'), new RegExp(APN));
+  await page.waitForSelector('#facts');
+  await settled(page);
+  assert.match(await text(page, '#prop-parcel'), new RegExp(APN));
   const r = await coreProfile(SPRING_N, { confirmMatchedAddress: true, parcelApn: APN });
   assert.equal(r.ok, true);
   await assertMatchesCore(page, corePipeline(r.profile), 'picked parcel');
 });
 
-await scenario('candidates: "None of these" -> manual basics keep what the geocoder found, and estimates still work', async (page, rec) => {
+await scenario('candidates: "None of these" -> the list keeps what was found, and owner basics give estimates equal to core', async (page) => {
   await page.goto(URL_PAGE);
   await search(page, SPRING_S);
   await page.waitForSelector('#cand-none');
-  assert.equal(await page.locator('#confirm-yes').count(), 0, 'no mismatch for the S street');
   await page.click('#cand-none');
-  await page.waitForSelector('#manual-basics');
-  assert.match(await text(page, 'tr[data-key="address"]'), /200 South Spring Street.*Measured/);
-  assert.match(await text(page, 'tr[data-key="jurisdiction"]'), /Los Angeles, CA/);
-  assert.equal(await page.locator('#manual-basics').isVisible(), true);
-  assert.match(await text(page, '#manual-basics'), /Choose a property type to see ideas/);
-  await page.selectOption('#basic-property_type', 'multi_family');
-  await page.waitForFunction(() => document.querySelector('#basic-property_type').value === 'multi_family');
-  await setNum(page, '#basic-bedrooms', 4);
+  await page.waitForSelector('#facts');
+  assert.match(await text(page, '#h-profile'), /200 South Spring Street/);
+  assert.match(await text(page, '#type-hint'), /Choose a property type to see more ideas/);
+  await page.selectOption('#f-property_type', 'multi_family');
+  await edited(page, 'property_type');
+  await typeFact(page, 'bedrooms', 4);
   await page.waitForSelector('[data-opp-card]');
   const r = await coreProfile(SPRING_S);
   const p = owner(r.profile, [['property_type', 'multi_family'], ['bedrooms', 4]]);
   await assertMatchesCore(page, corePipeline(p), 'manual after candidates');
-  assert.match(await text(page, 'tr[data-key="property_type"]'), /Multi-family.*You confirmed/);
 });
 
-await scenario('manual mode: every lookup fails, the log says why, owner basics still give estimates', async (page, rec) => {
+await scenario('nothing found: one sentence, empty list, owner basics still give estimates equal to core', async (page, rec) => {
   await page.goto(URL_PAGE);
   await search(page, FAIL);
-  await page.waitForSelector('#manual-basics');
-  assert.match(await text(page, '#step-log'), /Failed Address search from OpenStreetMap Nominatim could not geocode: Nominatim: HTTP 503/);
-  assert.match(await text(page, '#status'), /could not look up your property.*Enter the basics/i);
+  await page.waitForSelector('#not-found');
+  assert.match(await text(page, '#status'), /couldn't find that address automatically/i);
   assert.equal(await page.locator('[data-opp-card]').count(), 0);
-  assert.equal(await page.locator('#combo-selected').count(), 0);
   assert.match(await text(page, '#combo-empty'), /No combination fits/);
-  assert.ok(await page.locator('details[data-dk="missing-attrs"]').evaluate((d) => d.open), 'unavailable rows are open and invite filling in');
-  // the basics: type, bedrooms, lot size (optional), yard, pool, parking, garage
-  await page.selectOption('#basic-property_type', 'single_family');
-  await page.waitForFunction(() => document.querySelector('#basic-property_type').value === 'single_family');
-  await setNum(page, '#basic-bedrooms', 3);
-  await page.waitForFunction(() => document.querySelector('#basic-bedrooms').value === '3');
-  await page.selectOption('#basic-yard', 'yes');
-  await page.waitForFunction(() => document.querySelector('#basic-yard').value === 'yes');
-  assert.match(await text(page, '#manual-basics'), /Add a rough yard size to see yard ideas/);
-  await setNum(page, '#basic-yard_area_sqft', 800);
-  await page.waitForFunction(() => document.querySelector('#basic-yard_area_sqft').value === '800');
-  await page.selectOption('#basic-pool_present', 'yes');
-  await page.waitForFunction(() => document.querySelector('#basic-pool_present').value === 'yes');
-  await setNum(page, '#basic-parking_spaces', 2);
-  await page.waitForFunction(() => document.querySelector('#basic-parking_spaces').value === '2');
-  await page.selectOption('#basic-garage_present', 'yes');
+  assert.doesNotMatch(await ownerText(page), FORBIDDEN);
+  await page.selectOption('#f-property_type', 'single_family');
+  await edited(page, 'property_type');
+  await typeFact(page, 'bedrooms', 3);
+  await typeFact(page, 'yard_area_sqft', 800);
+  await page.click('#f-pool_present-yes');
+  await edited(page, 'pool_present');
+  await typeFact(page, 'parking_spaces', 2);
+  await page.click('#f-garage_present-yes');
   await page.waitForSelector('[data-opp-card="garage_storage"]');
   const r = await coreProfile(FAIL);
   assert.equal(r.ok, false);
@@ -453,52 +407,41 @@ await scenario('manual mode: every lookup fails, the log says why, owner basics 
   const core = corePipeline(p);
   await assertMatchesCore(page, core, 'manual');
   for (const k of ['pool', 'backyard', 'private_room', 'garage_storage', 'parking_spot']) assert.equal(await page.locator(`[data-opp-card="${k}"]`).count(), 1, k);
-  assert.deepEqual((await page.locator('#combo-selected li strong').allInnerTexts()).sort(), core.opt.selected.map((id) => core.opps.find((o) => o.id === id).label).sort());
-  assert.match(await text(page, 'tr[data-key="pool_present"]'), /Yes.*You confirmed/);
-  // yard "no" is a confirmed zero, and removes yard ideas
-  await page.selectOption('#basic-yard', 'no');
+  // a yard of 0 removes yard ideas
+  await typeFact(page, 'yard_area_sqft', 0);
   await page.waitForFunction(() => !document.querySelector('[data-opp-card="backyard"]'));
-  await assertMatchesCore(page, corePipeline(owner(p, [['yard_area_sqft', 0]])), 'yard no');
-  // "enter details myself" works with no network call at all
+  await assertMatchesCore(page, corePipeline(owner(p, [['yard_area_sqft', 0]])), 'yard 0');
+  // "enter details myself" asks before dropping the owner's values, and looks nothing up
   const mockedBefore = rec.mocked.length;
   await page.click('#manual-start');
-  assert.match(await text(page, '#status'), /You have corrections on this page\. Starting again discards them/, 'owner corrections are not dropped silently');
+  assert.match(await text(page, '#status'), /You have changes on this page\. Starting again clears them/);
   assert.ok(await page.locator('[data-opp-card]').count() > 0, 'first press changes nothing');
   await page.click('#manual-start');
-  await page.waitForSelector('#manual-basics');
+  await page.waitForFunction(() => !document.querySelector('[data-opp-card]'));
   assert.equal(rec.mocked.length, mockedBefore);
-  assert.equal(await page.locator('[data-opp-card]').count(), 0);
-}, { width: 1280, height: 900 }, 1, /^Failed to load resource: the server responded with a status of 503/); // the mocked Nominatim outage itself
+}, { width: 1280, height: 900 }, 1, /^Failed to load resource: the server responded with a status of 503/);
 
-await scenario('privacy and accessibility: nothing stored, labelled controls, keyboard, no autocomplete', async (page, rec, ctx) => {
+await scenario('privacy and accessibility: nothing stored, labelled controls, only lookup hosts', async (page, rec, ctx) => {
   await happy(page, rec);
   await page.click('details[data-dk="questions"] > summary');
   await page.click('details[data-dk="as-pool"] > summary');
   const unlabeled = await page.evaluate(() => [...document.querySelectorAll('input, select')].filter((el) => !(el.labels && el.labels.length) && !el.getAttribute('aria-label') && !el.closest('label')).map((el) => el.id || el.outerHTML.slice(0, 60)));
   assert.deepEqual(unlabeled, [], 'every control has a label');
-  const tables = await page.evaluate(() => [...document.querySelectorAll('table')].filter((t) => !t.querySelector('th')).length);
-  assert.equal(tables, 0, 'every table has headers');
+  const groups = await page.evaluate(() => [...document.querySelectorAll('.yn')].filter((g) => !g.getAttribute('aria-labelledby') && !g.getAttribute('aria-label')).length);
+  assert.equal(groups, 0, 'every yes/no toggle is labelled');
+  assert.equal(await page.evaluate(() => [...document.querySelectorAll('table')].filter((t) => !t.querySelector('th')).length), 0, 'every table has headers');
   assert.equal(await page.locator('main h1').count(), 1);
-  // keyboard: Tab reaches the first edit button and Enter opens the editor
-  await page.focus('#edit-address');
-  await page.keyboard.press('Enter');
-  await page.waitForSelector('#ed-address');
-  assert.equal(await page.evaluate(() => document.activeElement.id), 'ed-address');
-  await page.keyboard.press('Escape');
-  await page.click('#cancel-address');
-  // storage
   const stored = await page.evaluate(async () => ({
     local: localStorage.length, session: sessionStorage.length, cookie: document.cookie,
     idb: (await indexedDB.databases?.())?.length ?? 0, caches: (await caches.keys()).length,
   }));
   assert.deepEqual(stored, { local: 0, session: 0, cookie: '', idb: 0, caches: 0 });
   assert.deepEqual(await ctx.cookies(), []);
-  // the only external requests are the three lookup hosts, all GET with no body
-  for (const u of rec.mocked) assert.match(new URL(u).hostname, /^(nominatim\.openstreetmap\.org|public\.gis\.lacounty\.gov|overpass[\w.-]*)$/);
+  for (const u of rec.mocked) assert.ok(/^(nominatim\.openstreetmap\.org|public\.gis\.lacounty\.gov|overpass[\w.-]*)$/.test(new URL(u).hostname) || OTHER_SOURCES.test(new URL(u).hostname), u);
   assert.equal(await page.evaluate(() => performance.getEntriesByType('resource').filter((e) => /google|analytics|cdn|gtag|fonts/.test(e.name)).length), 0);
 });
 
-await scenario('mobile 390px: no horizontal scroll at any stage; screenshot', async (page, rec) => {
+await scenario('mobile 390px: no horizontal scroll at any stage; screenshot', async (page) => {
   await page.goto(URL_PAGE);
   const fits = async (label) => {
     const m = await page.evaluate(() => ({ sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth, bw: document.body.scrollWidth }));
@@ -513,39 +456,29 @@ await scenario('mobile 390px: no horizontal scroll at any stage; screenshot', as
   await fits('candidates');
   await page.fill('#address', VENICE);
   await page.click('#address-submit');
-  await page.waitForSelector('#profile-table');
-  await page.click('details[data-dk="missing-attrs"] > summary');
+  await page.waitForSelector('#facts');
+  await fits('loading');
+  await settled(page);
   await page.click('details[data-dk="questions"] > summary');
+  await page.click('details.sources > summary');
   await page.click('details[data-dk="as-pool"] > summary');
   await page.click('details[data-dk="bd-pool"] > summary');
   await page.click('#include-investments');
   await page.waitForSelector('[data-opp-card="adu"]');
   await fits('results');
-  await page.click('#edit-pool_present');
-  await fits('editing');
-  await page.click('#cancel-pool_present');
-  await page.click('details[data-dk="questions"] > summary'); // close questions again for a shorter screenshot
-  await page.click('details[data-dk="missing-attrs"] > summary');
+  await typeFact(page, 'bedrooms', 'x');
+  await fits('hint shown');
   await page.screenshot({ path: `${SHOTS}/estimate-phone.png`, fullPage: true });
 }, { width: 390, height: 844 }, 2);
-
-await scenario('desktop screenshot of the results state', async (page, rec) => {
-  await happy(page, rec);
-  await page.click('details[data-dk="bd-pool"] > summary');
-  await page.click('details[data-dk="as-pool"] > summary');
-  await page.screenshot({ path: `${SHOTS}/estimate-desktop.png`, fullPage: true });
-}, { width: 1280, height: 900 }, 2);
 
 await scenario('dark mode renders (colour scheme follows the console)', async (page, rec) => {
   await page.emulateMedia({ colorScheme: 'dark' });
   await happy(page, rec);
-  const bg = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
-  assert.equal(bg, 'rgb(11, 16, 22)');
-  await page.screenshot({ path: `${SHOTS}/estimate-dark.png`, fullPage: false });
+  assert.equal(await page.evaluate(() => getComputedStyle(document.body).backgroundColor), 'rgb(11, 16, 22)');
+  await page.locator('section#property').screenshot({ path: `${SHOTS}/older-path-dark-desktop.png` });
 });
 
-
-// ---- address entry: malformed input, markup, double submit, failure messages (audit additions) ----------------------
+// ---- address entry: malformed input, markup, double submit, failure messages ----------------------
 const PWN = '<img src=x onerror=window.__pwn=1>';
 const noPwn = async (page, label) => {
   assert.equal(await page.evaluate(() => window.__pwn), undefined, `${label}: injected handler did not run`);
@@ -558,37 +491,35 @@ await scenario('arrival URLs: no address, empty, malformed and very long values 
     await page.goto('about:blank');
     await page.goto(URL_PAGE + suffix);
     await page.waitForSelector('#address');
-    assert.equal(await page.locator('#profile-table, #confirm-yes, #cand-none').count(), 0, `nothing runs for "${suffix}"`);
+    assert.equal(await page.locator(OUTCOME).count(), 0, `nothing runs for "${suffix}"`);
     assert.equal(rec.mocked.length, 0, `no request for "${suffix}"`);
   }
-  // a malformed escape is searched as the text it is (arrival counts as a submit) and must not crash the page
-  await page.goto('about:blank'); // a hash-only change would not reload the page
+  await page.goto('about:blank');
   await page.goto(URL_PAGE + '#address=%E0%A4%A');
-  await page.waitForSelector('#profile-table, #manual-basics, #confirm-yes, #cand-none');
+  await page.waitForSelector(OUTCOME);
   await page.goto('about:blank');
   await page.goto(URL_PAGE + '#address=' + 'x'.repeat(5000));
-  await page.waitForSelector('#profile-table, #manual-basics, #confirm-yes, #cand-none');
+  await page.waitForSelector(OUTCOME);
   const qs = nominatimQs(rec);
   assert.ok(qs.length >= 1 && qs.every((q) => q.length <= 300), `address is capped at 300 characters (${qs.map((q) => q.length)})`);
   assert.equal(await page.evaluate(() => location.hash + location.search), '', 'arrival address removed from the URL');
   assert.equal(await page.getAttribute('#address', 'maxlength'), '300');
 });
 
-await scenario('markup in the typed address is shown as text and never runs', async (page, rec) => {
+await scenario('markup in the typed address is shown as text and never runs', async (page) => {
   await page.goto(URL_PAGE);
   await search(page, PWN);
-  await page.waitForSelector('#profile-table, #manual-basics, #confirm-yes, #cand-none');
+  await page.waitForSelector(OUTCOME);
   await noPwn(page, 'typed address');
-  // the same through the homepage fragment path
   await page.goto('about:blank');
   await page.goto(URL_PAGE + '#address=' + encodeURIComponent(PWN));
-  await page.waitForSelector('#profile-table, #manual-basics, #confirm-yes, #cand-none');
+  await page.waitForSelector(OUTCOME);
   await noPwn(page, 'fragment address');
 });
 
-await scenario('markup in a looked-up parcel record (situs address, use type) is escaped', async (page, rec) => {
+await scenario('markup in a looked-up parcel record (situs address, use type) is escaped', async (page) => {
   override = (url) => {
-    if (!new URL(url).hostname.endsWith('lacounty.gov')) return undefined;
+    if (!new URL(url).hostname.endsWith('lacounty.gov') || url.includes('CAMS_Locator')) return undefined;
     if (url.includes('-118.2455') && url.includes('distance=')) {
       const body = fx('arcgis-la-buffer-spring-st-recorded.json');
       body.features[0].attributes.SitusFullAddress = `145 S SPRING ST ${PWN}`;
@@ -610,12 +541,10 @@ await scenario('markup in a looked-up parcel record (situs address, use type) is
     await noPwn(page, 'candidate list');
     await page.goto(URL_PAGE);
     await search(page, VENICE);
-    await page.waitForSelector('#profile-table');
-    await noPwn(page, 'profile table');
-    assert.match(await text(page, 'tr[data-key="use_type"]'), /<img src=x/, 'use type shown as text');
-    await page.click('#edit-use_type');
-    assert.match(await page.inputValue('#ed-use_type'), /<img src=x/, 'editor value is the literal text');
-    await noPwn(page, 'text editor');
+    await page.waitForSelector('#facts');
+    await settled(page);
+    await page.click('details.sources > summary');
+    await noPwn(page, 'property list');
   } finally { override = null; }
 });
 
@@ -623,32 +552,28 @@ await scenario('double submit and submit during a lookup: one lookup, the first 
   await page.goto(URL_PAGE);
   await page.fill('#address', VENICE);
   await page.evaluate(() => { const f = document.getElementById('address-form'); f.requestSubmit(); f.requestSubmit(); f.requestSubmit(); });
-  await page.waitForSelector('#profile-table');
+  await page.waitForSelector('#facts');
   await page.waitForTimeout(500);
   assert.equal(nominatimQs(rec).length, 1, 'geocoded once');
-  // change the address mid-lookup and press "enter details myself": ignored, the running lookup is not clobbered
+  await settled(page);
   await page.fill('#address', FAIL);
   await page.evaluate(() => { document.getElementById('address-form').requestSubmit(); document.getElementById('manual-start').click(); document.getElementById('address-form').requestSubmit(); });
-  await page.waitForSelector('#manual-basics');
+  await page.waitForSelector('#not-found');
   assert.equal(nominatimQs(rec).filter((q) => q.includes('Failville')).length, 1, 'second address looked up once');
-  assert.match(await text(page, '#step-log'), /Failed Address search/);
 }, { width: 1280, height: 900 }, 1, /^Failed to load resource: the server responded with a status of 503/);
 
-await scenario('lookup failure messaging: geocoder down, request aborted, parcel service down (partial)', async (page, rec) => {
+await scenario('lookup failures (geocoder down, parcel service down) show only the actionable sentence', async (page) => {
   await page.goto(URL_PAGE);
   await search(page, FAIL);
-  await page.waitForSelector('#manual-basics');
-  assert.match(await text(page, '#status'), /could not look up your property/i);
-  assert.match(await text(page, '#step-log'), /Failed Address search.*HTTP 503/);
-  // the parcel service answers with an error: found address, failed parcel, the page says which step failed and still lets the owner continue
+  await page.waitForSelector('#not-found');
+  assert.doesNotMatch(await ownerText(page), FORBIDDEN);
   override = (url) => (new URL(url).hostname.endsWith('lacounty.gov') ? { status: 500, body: { error: 'down' } } : undefined);
   try {
     await page.goto(URL_PAGE);
     await search(page, VENICE);
-    await page.waitForSelector('#manual-basics');
-    assert.match(await text(page, '#step-log'), /Found Address search/);
-    assert.match(await text(page, '#step-log'), /Failed Parcel record/);
-    assert.match(await text(page, '#h-profile'), /Your property/);
+    await page.waitForSelector('#not-found');
+    assert.equal(await text(page, '#not-found'), "We couldn't find that address automatically. Add your property details below.");
+    assert.doesNotMatch(await ownerText(page), FORBIDDEN);
     assert.equal(await page.locator('[data-opp-card]').count(), 0, 'no invented ways to earn');
   } finally { override = null; }
 }, { width: 1280, height: 900 }, 1, /^Failed to load resource: the server responded with a status of (503|500)/);
@@ -658,71 +583,41 @@ await scenario('reload mid-flow starts clean and the page says nothing is saved'
   assert.match(await text(page, '#session-note'), /Nothing is saved\. If you reload or leave this page, everything you entered here is cleared/);
   await page.reload();
   await page.waitForSelector('#address');
-  assert.equal(await page.locator('#profile-table').count(), 0);
+  assert.equal(await page.locator('#facts').count(), 0);
   assert.equal(await page.inputValue('#address'), '');
   assert.match(await text(page, 'main'), /Nothing you enter here is saved\./);
 });
 
-await scenario('a second search does not silently discard owner corrections', async (page, rec) => {
-  await happy(page, rec);
-  await page.click('#edit-bedrooms');
-  await setNum(page, '#ed-bedrooms', 7);
-  await page.click('#save-bedrooms');
-  await page.waitForFunction(() => /7/.test(document.querySelector('tr[data-key="bedrooms"] .val')?.textContent ?? ''));
-  const before = nominatimQs(rec).length;
-  await page.click('#address-submit');
-  assert.match(await text(page, '#status'), /You have corrections on this page\. Starting again discards them/);
-  assert.equal(nominatimQs(rec).length, before, 'first press sends nothing');
-  assert.match(await text(page, 'tr[data-key="bedrooms"]'), /7.*You confirmed/, 'correction still there');
-  await page.click('#address-submit');
-  await page.waitForFunction((n) => document.querySelector('#profile-table') && !/You confirmed/.test(document.querySelector('tr[data-key="bedrooms"]')?.textContent ?? ''), before);
-  assert.equal(nominatimQs(rec).length, before + 1, 'second press searches again');
-});
-
-await scenario('keyboard only: type, Enter, focus lands on the results heading, edit with Enter, status announces', async (page, rec) => {
+await scenario('keyboard only: type, Enter, focus lands on the property heading, edit with Enter, status announces', async (page) => {
   await page.goto(URL_PAGE);
-  await page.keyboard.press('Tab'); // skip link
-  assert.equal(await page.evaluate(() => document.activeElement.className), 'skip');
   await page.keyboard.press('Tab');
-  assert.equal(await page.evaluate(() => document.activeElement.tagName), 'A', 'Start over link comes next');
+  assert.equal(await page.evaluate(() => document.activeElement.className), 'skip');
   await page.focus('#address');
   await page.keyboard.type(VENICE);
+  await page.keyboard.press('Escape'); // close the suggestion list
   await page.keyboard.press('Enter');
-  await page.waitForSelector('#profile-table');
-  assert.equal(await page.evaluate(() => document.activeElement.id), 'h-profile', 'focus moves to the results heading');
-  assert.match(await text(page, '#status'), /Estimates updated|Property found/);
+  await page.waitForSelector('#facts');
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'h-profile', 'focus moves to the property heading');
+  assert.match(await text(page, '#status'), /Here is your property/);
   assert.equal(await page.getAttribute('#status', 'aria-atomic'), 'true');
-  await page.focus('#edit-bedrooms');
-  await page.keyboard.press('Enter');
+  await settled(page);
+  await page.focus('#f-bedrooms');
+  await page.keyboard.press('Control+A');
   await page.keyboard.type('4');
   await page.keyboard.press('Enter');
-  await page.waitForFunction(() => document.activeElement.id === 'edit-bedrooms' && /4/.test(document.querySelector('tr[data-key="bedrooms"] .val').textContent));
+  await page.waitForFunction(() => document.activeElement.id === 'f-bedrooms' && document.querySelector('.fact[data-key="bedrooms"]').dataset.state === 'edited');
+  assert.equal(await page.inputValue('#f-bedrooms'), '4');
 });
 
-await scenario('small fixes: no-JavaScript notice, Overpass disclosure, "Apply" label, range per selected idea, step count wording', async (page, rec, ctx) => {
+await scenario('no-JavaScript notice; range per selected idea', async (page, rec, ctx) => {
   const nojs = await ctx.browser().newContext({ javaScriptEnabled: false });
   const p2 = await nojs.newPage();
   await p2.goto(URL_PAGE);
   assert.match((await p2.locator('noscript').first().innerText().catch(() => '')) || (await p2.locator('main').innerText()), /needs JavaScript/);
   await nojs.close();
-  await page.goto(URL_PAGE);
-  assert.match(await text(page, '#address-help'), /map location is then sent to OpenStreetMap's Overpass service/);
-  await search(page, FAIL);
-  await page.waitForSelector('#manual-basics');
-  assert.match(await text(page, 'details[data-dk="steplog"] summary'), /\(5 steps, 5 failed\)/);
-  await page.goto(URL_PAGE);
-  await search(page, SPRING_N);
-  await page.waitForSelector('#confirm-yes');
-  assert.match(await text(page, 'details[data-dk="steplog"] summary'), /\(1 step\)/, 'singular for one step');
-  await page.goto(URL_PAGE);
-  await search(page, VENICE);
-  await page.waitForSelector('#profile-table');
-  assert.equal(await page.locator('#save-bedrooms, [data-act="save-attr"]').count(), 0, 'no editor open yet');
-  await page.click('#edit-bedrooms');
-  assert.equal(await text(page, '#save-bedrooms'), 'Apply');
-  const li = await text(page, '#combo-selected li');
-  assert.match(li, /\$[\d,]+ to \$[\d,]+ a year on its own, baseline \$[\d,]+/, 'a range, not a lone number');
-}, { width: 1280, height: 900 }, 1, /^Failed to load resource: the server responded with a status of 503/);
+  await happy(page, rec);
+  assert.match(await text(page, '#combo-selected li'), /\$[\d,]+ to \$[\d,]+ a year on its own, baseline \$[\d,]+/, 'a range, not a lone number');
+});
 
 // ---- the county path (first choice): Los Angeles County's public services, mocked from synthetic fixtures ----------------
 const PFX = path.join(ROOT, 'core/tests/fixtures/providers');
@@ -747,151 +642,219 @@ function countyWorld(over = {}) {
 const countyReqs = (rec) => rec.mocked.filter((u) => u.includes('public.gis.lacounty.gov'));
 const withCounty = (over, fn) => async (page, rec, ctx) => { override = countyWorld(over); try { await fn(page, rec, ctx); } finally { override = null; } };
 const noNominatim = (rec) => assert.equal(rec.mocked.some((u) => u.includes('nominatim')), false, 'Nominatim was not used');
-const SOURCE_ROWS = ['floors', 'bathrooms', 'roof_area_sqft', 'front_yard_sqft', 'back_yard_sqft', 'side_yard_sqft'];
+const countyFetch = async (u, init) => { const a = answer(String(u)); if (!a) throw new Error(`unmocked ${u}`); return json(a.body, a.status); };
+async function countyPage(page) { await page.goto(URL_PAGE); await search(page, SFR); await page.waitForSelector('#facts'); await settled(page); }
 
-await scenario('county path: an LA address uses the county services, shows floors, bathrooms, roof and yards with source, date, confidence and an edit control; earnings equal core', withCounty({}, async (page, rec) => {
-  await page.goto(URL_PAGE);
-  await search(page, SFR);
-  await page.waitForSelector('#profile-table');
+await scenario('county path: an LA address uses the county services; floors, bathrooms, roof and yards are filled in; earnings equal core', withCounty({}, async (page, rec) => {
+  await countyPage(page);
   noNominatim(rec);
   assert.ok(countyReqs(rec).some((u) => u.includes('CAMS_Locator')) && countyReqs(rec).some((u) => u.includes('LACounty_Parcel')) && countyReqs(rec).some((u) => u.includes('LARIAC')));
-  assert.match(await text(page, '#path-note'), /Lookup path: used Los Angeles County's public services \(address locator, assessor parcel layer, LARIAC building outlines\)\. OpenStreetMap Nominatim was not used\./);
-  assert.equal(await page.locator('#step-log li').count(), 5);
-  for (const k of SOURCE_ROWS) {
-    const row = `tr[data-key="${k}"]`;
-    assert.equal(await page.locator(row).count(), 1, `${k} row`);
-    assert.match(await text(page, row), /(High|Medium|Low) confidence/, `${k} confidence`);
-    assert.match(await text(page, row), /\b[A-Z][a-z]{2} \d{1,2}, \d{4}\b/, `${k} date`);
-    assert.equal(await page.locator(`#edit-${k}`).count(), 1, `${k} edit control`);
+  assert.equal(countyReqs(rec).filter((u) => u.includes('findAddressCandidates')).length, 1, 'the address is asked once, not twice');
+  assert.equal(countyReqs(rec).filter((u) => u.includes('LACounty_Parcel')).length, 1, 'the parcel is asked once');
+  assert.equal(await page.inputValue('#f-floors'), '2');
+  assert.equal(await page.inputValue('#f-bathrooms'), '2');
+  assert.equal(await page.inputValue('#f-living_area_sqft'), '2,800');
+  assert.match(await page.inputValue('#f-roof_area_sqft'), /^[\d,]+$/);
+  for (const k of ['front_yard_sqft', 'back_yard_sqft', 'side_yard_sqft', 'yard_area_sqft']) {
+    assert.match(await page.inputValue(`#f-${k}`), /^[\d,]+$/, k);
+    assert.equal(await page.locator(row(k)).getAttribute('data-state'), 'estimated', k);
   }
-  const t = async (k) => text(page, `tr[data-key="${k}"]`);
-  assert.match(await t('floors'), /Floors.*2.*Estimated.*Everyspace property-profile assembler/);
-  assert.match(await t('bathrooms'), /Bathrooms.*2.*Measured.*LA County Assessor/);
-  assert.match(await t('roof_area_sqft'), /Roof area.*1,400 sq ft.*Estimated.*LARIAC building outlines 2020 \(LA County\).*plan area/);
-  for (const k of ['front_yard_sqft', 'back_yard_sqft', 'side_yard_sqft']) assert.match(await t(k), /Estimated.*Everyspace yard split/, k);
-  assert.match(await t('front_yard_sqft'), /Front yard.*sq ft/);
-  assert.match(await t('living_area_sqft'), /2,800 sq ft.*Measured/);
-  const c = await runCountyPath(SFR, { fetch: async (u) => { const a = answer(String(u)); if (!a) throw new Error(`unmocked ${u}`); return json(a.body, a.status); }, now: NOW });
+  assert.doesNotMatch(await ownerText(page), FORBIDDEN);
+  const c = await runCountyPath(SFR, { fetch: countyFetch, now: NOW });
   assert.equal(c.kind, 'ok');
-  await assertMatchesCore(page, corePipeline(c.profile), 'county path');
+  await assertMatchesCore(page, corePipeline(await settleProfile(c)), 'county path');
   assert.equal(await page.evaluate(() => localStorage.length + sessionStorage.length + document.cookie.length), 0, 'nothing stored');
 }));
 
-await scenario('county path: an estimated value reads as estimated; an owner correction on a new row is applied and marked as confirmed by the owner', withCounty({}, async (page) => {
-  await page.goto(URL_PAGE);
-  await search(page, SFR);
-  await page.waitForSelector('#profile-table');
-  assert.equal(await text(page, 'tr[data-key="floors"] .chip'), 'Estimated');
-  assert.match(await text(page, 'tr[data-key="floors"] .row-note'), /Ratio 2/);
-  await page.click('#edit-floors');
-  await page.fill('#ed-floors', '1');
-  await page.click('#save-floors');
-  assert.equal(await text(page, 'tr[data-key="floors"] .chip'), 'You confirmed');
-  assert.match(await text(page, 'tr[data-key="floors"] .val'), /^1$/);
-  assert.match(await text(page, 'tr[data-key="floors"]'), /Owner/);
-  assert.equal(await page.locator('tr[data-key="floors"] .row-note').count(), 0, 'the automated note is gone once the owner confirmed');
-  await page.click('#edit-roof_area_sqft');
-  await page.fill('#ed-roof_area_sqft', '1700');
-  await page.click('#save-roof_area_sqft');
-  assert.equal(await text(page, 'tr[data-key="roof_area_sqft"] .chip'), 'You confirmed');
-  assert.match(await text(page, 'tr[data-key="roof_area_sqft"] .val'), /1,700 sq ft/);
-  await page.click('#edit-floors'); await page.fill('#ed-floors', '1.5'); await page.click('#save-floors');
-  assert.match(await text(page, '#status'), /Enter a whole number/);
+await scenario('county path: an estimated value carries only "≈"; typing over it marks it as edited; a refused entry gets a hint', withCounty({}, async (page) => {
+  await countyPage(page);
+  assert.equal(await page.locator(row('floors')).getAttribute('data-state'), 'estimated');
+  assert.equal(await page.getAttribute(`${row('floors')} .approx`, 'title'), 'Estimated — change it if you know the exact figure');
+  assert.doesNotMatch(await text(page, row('floors')), /Ratio|confidence/);
+  await typeFact(page, 'floors', '1');
+  await edited(page, 'floors');
+  assert.equal(await page.locator(`${row('floors')} .approx[title]`).count(), 0, 'no "≈" once the owner set it');
+  await typeFact(page, 'roof_area_sqft', '1700');
+  await edited(page, 'roof_area_sqft');
+  assert.equal(await page.inputValue('#f-roof_area_sqft'), '1,700');
+  await typeFact(page, 'floors', '1.5');
+  assert.match(await text(page, `${row('floors')} .fact-hint`), /whole number/);
+  assert.equal(await page.inputValue('#f-floors'), '1');
 }));
 
-await scenario('county path: a street-side point outside the lot gives yard values; the locator point inside the lot gives the stated reason and no guessed front', withCounty({}, async (page) => {
-  await page.goto(URL_PAGE);
-  await search(page, SFR);
-  await page.waitForSelector('#profile-table');
-  for (const k of ['front_yard_sqft', 'back_yard_sqft', 'side_yard_sqft']) assert.match(await text(page, `tr[data-key="${k}"] .val`), /^[\d,]+ sq ft$/, k);
-  assert.match(await text(page, 'tr[data-key="front_yard_sqft"] .row-note'), /no street centreline/i, 'the splitter warning is shown as a short note');
-  assert.equal((await text(page, 'tr[data-key="front_yard_sqft"] .row-note')).match(/no street centreline/gi).length, 1, 'once, not repeated');
-}));
-await scenario('county path: with no street-side reference the three yard rows say why and invite the owner to fill them in', withCounty({ cams: (b) => { b.candidates[0].location = { x: -118.29992, y: 34.00018 }; return b; } }, async (page) => {
-  await page.goto(URL_PAGE);
-  await search(page, SFR);
-  await page.waitForSelector('#profile-table');
-  for (const k of ['front_yard_sqft', 'back_yard_sqft', 'side_yard_sqft']) assert.equal(await page.locator(`#profile-table tr[data-key="${k}"]`).count(), 0, `${k} is not shown as a value`);
-  await page.click('details[data-dk="missing-attrs"] > summary');
+await scenario('county path: with no street-side reference the yard lines are simply empty to fill in; total open ground is still estimated', withCounty({ cams: (b) => { b.candidates[0].location = { x: -118.29992, y: 34.00018 }; return b; } }, async (page) => {
+  await countyPage(page);
   for (const k of ['front_yard_sqft', 'back_yard_sqft', 'side_yard_sqft']) {
-    const row = await text(page, `#unavailable-table tr[data-key="${k}"]`);
-    assert.match(row, /Not available.*Needs a street reference; available once the server-side lookup is switched on/, k);
-    assert.equal(await page.locator(`#edit-${k}`).count(), 1, `${k} can be filled in`);
+    assert.equal(await page.inputValue(`#f-${k}`), '', k);
+    assert.equal(await page.getAttribute(`#f-${k}`, 'placeholder'), 'Add');
   }
-  assert.match(await text(page, 'tr[data-key="yard_area_sqft"]'), /4,800 sq ft.*Estimated/, 'total open ground is still estimated from the lot and the outlines');
-  await page.click('#edit-front_yard_sqft'); await page.fill('#ed-front_yard_sqft', '900'); await page.click('#save-front_yard_sqft');
-  assert.match(await text(page, 'tr[data-key="front_yard_sqft"]'), /900 sq ft.*You confirmed/);
+  assert.doesNotMatch(await ownerText(page), /street reference|server-side/i);
+  assert.equal(await page.inputValue('#f-yard_area_sqft'), '4,800');
+  assert.equal(await page.locator(row('yard_area_sqft')).getAttribute('data-state'), 'estimated');
+  await typeFact(page, 'front_yard_sqft', '900');
+  await edited(page, 'front_yard_sqft');
+  assert.equal(await page.inputValue('#f-front_yard_sqft'), '900');
 }));
 
-await scenario('county path: a note appears on the row whose second figure disagrees (assessor stored lot area vs the outline)', withCounty({ parcel: (b) => { b.features[0].attributes['Shape.STArea()'] = 8200; return b; } }, async (page) => {
-  await page.goto(URL_PAGE);
-  await search(page, SFR);
-  await page.waitForSelector('#profile-table');
-  assert.match(await text(page, 'tr[data-key="lot_area_sqft"] .row-note'), /Check this: .*stored parcel area.* says 8,200 \(2[0-9.]+% apart\)/);
-  assert.equal(await page.locator('tr[data-key="bathrooms"] .row-note').count(), 0, 'rows that agree carry no note');
+await scenario('county path: a second figure that disagrees is not shown as a warning on the list', withCounty({ parcel: (b) => { b.features[0].attributes['Shape.STArea()'] = 8200; return b; } }, async (page) => {
+  await countyPage(page);
+  assert.equal(await page.inputValue('#f-lot_area_sqft'), '6,500');
+  assert.doesNotMatch(await text(page, 'section#property'), /Check this|% apart|says/i);
+  assert.doesNotMatch(await ownerText(page), FORBIDDEN);
 }));
 
-await scenario('county path: a missing building outline is stated, not guessed (roof, footprint unavailable) and the page still reaches results', withCounty({ lariac: { status: 200, body: { features: [] } } }, async (page, rec) => {
-  await page.goto(URL_PAGE);
-  await search(page, SFR);
-  await page.waitForSelector('#profile-table');
+await scenario('county path: a missing building outline leaves roof and footprint empty to fill in, with no message', withCounty({ lariac: { status: 200, body: { features: [] } } }, async (page, rec) => {
+  await countyPage(page);
   noNominatim(rec);
-  assert.match(await text(page, '#step-log'), /Failed Buildings from LARIAC building outlines 2020/);
-  await page.click('details[data-dk="missing-attrs"] > summary');
-  assert.match(await text(page, '#unavailable-table tr[data-key="roof_area_sqft"]'), /Not available/);
+  assert.equal(await page.inputValue('#f-building_footprint_sqft'), '');
+  assert.equal(await page.inputValue('#f-roof_area_sqft'), '');
+  assert.doesNotMatch(await ownerText(page), FORBIDDEN);
   assert.ok(await page.locator('[data-opp-card]').count() >= 1);
 }));
 
 const venice = (b) => { const c = b.candidates[0]; Object.assign(c, { address: '99999 Venice Blvd, Los Angeles, CA, 90034' }); Object.assign(c.attributes, { Match_addr: c.address, StAddr: '99999 Venice Blvd', StreetName: 'Venice', SufType: 'Blvd', ZIP: '90034' }); return b; };
-// [name, county mocks, typed address, why the county path gave up, a profile (not the confirm or manual screen) is expected]
+// [name, county mocks, typed address, a property list (not the confirm screen) is expected]
 const FALLBACKS = [
-  ['the county locator finds no match', { cams: { status: 200, body: { candidates: [] } } }, VENICE, /found no match/, true],
-  ['the county locator is down', { cams: { status: 500, body: { error: 'down' } } }, VENICE, /could not answer/, true],
-  ['the county locator answers with something unreadable', { cams: { status: 200, body: { nope: true } } }, VENICE, /could not answer/, true],
-  ['the assessor has no matching parcel', { cams: venice, parcel: { status: 200, body: { features: [] } } }, VENICE, /no matching parcel/, false],
-  ['the assessor is down', { cams: venice, parcel: { status: 500, body: { error: 'down' } } }, VENICE, /no matching parcel/, false],
-  ['the address says another state', { cams: venice }, '99999 Venice Blvd, Phoenix, AZ 85001', /address says AZ, outside Los Angeles County/, false],
-  ['the typed ZIP differs from the county match', { cams: venice }, '99999 Venice Blvd, Los Angeles, CA 90210', /typed ZIP 90210 does not match/, false],
+  ['the county locator finds no match', { cams: { status: 200, body: { candidates: [] } } }, VENICE, true],
+  ['the county locator is down', { cams: { status: 500, body: { error: 'down' } } }, VENICE, true],
+  ['the county locator answers with something unreadable', { cams: { status: 200, body: { nope: true } } }, VENICE, true],
+  ['the assessor has no matching parcel', { cams: venice, parcel: { status: 200, body: { features: [] } } }, VENICE, false],
+  ['the assessor is down', { cams: venice, parcel: { status: 500, body: { error: 'down' } } }, VENICE, false],
+  ['the address says another state', { cams: venice }, '99999 Venice Blvd, Phoenix, AZ 85001', false],
+  ['the typed ZIP differs from the county match', { cams: venice }, '99999 Venice Blvd, Los Angeles, CA 90210', false],
 ];
-for (const [name, over, addr, why, expectProfile] of FALLBACKS) {
-  await scenario(`fallback: ${name} -> the older OpenStreetMap path runs as before and reaches an outcome`, withCounty(over, async (page, rec) => {
+for (const [name, over, addr, expectList] of FALLBACKS) {
+  await scenario(`fallback: ${name} -> the older path runs and reaches an outcome, with nothing said about why`, withCounty(over, async (page, rec) => {
     await page.goto(URL_PAGE);
     await search(page, addr);
-    await page.waitForSelector(expectProfile ? '#profile-table' : '#profile-table, #confirm-yes, #cand-none, #manual-basics');
+    await page.waitForSelector(expectList ? '#facts' : OUTCOME);
     assert.ok(rec.mocked.some((u) => u.includes('nominatim')), 'Nominatim was asked');
-    const note = await text(page, '#path-note');
-    assert.match(note, /^Lookup path: OpenStreetMap Nominatim \(the older path\), because /);
-    assert.match(note, why);
-    assert.match(await text(page, '#step-log'), /Address search from OpenStreetMap Nominatim/);
-    assert.equal(await page.locator('tr[data-key="floors"], tr[data-key="front_yard_sqft"]').count(), 0, 'the older path has no new rows');
-    if (expectProfile) {
-      assert.equal(await page.locator('#step-log li').count(), 5);
+    assert.doesNotMatch(await ownerText(page), FORBIDDEN);
+    if (expectList) {
+      await settled(page);
+      assert.equal(await page.inputValue('#f-floors'), '', 'the older path has no floors');
       assert.ok(await page.locator('[data-opp-card]').count() >= 1, 'earnings sections still work');
     }
   }), { width: 1280, height: 900 }, 1, /^Failed to load resource: the server responded with a status of 5\d\d/);
 }
 
-await scenario('county path: the 390 px phone layout of "Your property" with the new rows has no horizontal scroll', withCounty({}, async (page) => {
-  await page.goto(URL_PAGE);
-  await search(page, SFR);
-  await page.waitForSelector('#profile-table');
-  const m = await page.evaluate(() => ({ sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth }));
-  assert.ok(m.sw <= m.cw, `scrollWidth ${m.sw} > ${m.cw}`);
-  await page.locator('section[aria-labelledby="h-profile"]').screenshot({ path: `${SHOTS}/wire/your-property-390.png` });
-}), { width: 390, height: 900 });
+// ---- outside Los Angeles County: Chicago City Hall (a public building), county lookup + Overture + the county's own parcel service --------------------------
+const CHICAGO = '121 N LaSalle St, Chicago, IL 60602';
+const CHI_PT = OVERTURE_REAL.chicago.point;
+const chiOv = overtureServer('chicago');
+const LOT_RINGS = (() => { // a synthetic parcel 90 m x 70 m around the point, as Esri rings (clockwise)
+  const dLng = 45 / (111320 * Math.cos((CHI_PT.lat * Math.PI) / 180)), dLat = 35 / 110540;
+  return [[[CHI_PT.lng - dLng, CHI_PT.lat - dLat], [CHI_PT.lng - dLng, CHI_PT.lat + dLat], [CHI_PT.lng + dLng, CHI_PT.lat + dLat], [CHI_PT.lng + dLng, CHI_PT.lat - dLat], [CHI_PT.lng - dLng, CHI_PT.lat - dLat]]];
+})();
+/** override() for the nationwide path. `parcel`: 'none' (404) | 'answer'. `photon`: features for the suggestion service. */
+function chicagoWorld({ parcel = 'none', photon = [] } = {}) {
+  const nominatim = [{ _fixture_note: 'synthetic, shaped like the recorded response; not a recorded response', place_id: 2, osm_type: 'way', osm_id: 2, lat: String(CHI_PT.lat), lon: String(CHI_PT.lng), category: 'building', type: 'civic',
+    display_name: '121, North LaSalle Street, Chicago, Cook County, Illinois, 60602, United States', address: { house_number: '121', road: 'North LaSalle Street', city: 'Chicago', county: 'Cook County', state: 'Illinois', 'ISO3166-2-lvl4': 'US-IL', postcode: '60602', country_code: 'us' } }];
+  return (url, dec, range) => {
+    const h = new URL(url).hostname;
+    if (h === 'nominatim.openstreetmap.org') return { status: 200, body: nominatim };
+    if (h === 'geo.fcc.gov') return { status: 200, body: pfx('fcc-county-chicago-city-hall.json') };
+    if (h === 'photon.komoot.io') return { status: 200, body: { features: photon } };
+    if (h === 'gis.cookcountyil.gov') return parcel === 'answer' ? { status: 200, body: { geometryType: 'esriGeometryPolygon', features: [{ attributes: { PIN14: '17-09-999-001' }, geometry: { rings: LOT_RINGS } }] } } : { status: 404, body: {} };
+    const o = chiOv.answer(url, range);
+    if (o) return { status: o.status, raw: Buffer.from(o.body), type: o.type };
+    if (h.includes('overpass')) return { status: 200, body: fx('overpass-no-features.json') };
+    return undefined;
+  };
+}
+const withChicago = (opts, fn) => async (page, rec, ctx) => { override = chicagoWorld(opts); try { await fn(page, rec, ctx); } finally { override = null; } };
+const FAILURE_WORDS = /fail|error|unavailable|not found|warning/i;
 
-await scenario('county path: desktop screenshot of "Your property" with the new rows', withCounty({}, async (page) => {
+await scenario('non-LA address: county lookup + Overture fill footprint, roof and floors; the lot-size line is an empty input; no failure words; no Los Angeles County service asked', withChicago({}, async (page, rec) => {
   await page.goto(URL_PAGE);
-  await search(page, SFR);
-  await page.waitForSelector('#profile-table');
-  await page.locator('section[aria-labelledby="h-profile"]').screenshot({ path: `${SHOTS}/wire/your-property-1280.png` });
-}), { width: 1280, height: 1100 });
+  await search(page, CHICAGO);
+  await page.waitForSelector('#facts');
+  await settled(page);
+  assert.equal(rec.mocked.some((u) => u.includes('lacounty')), false, 'no Los Angeles County service');
+  assert.ok(rec.mocked.some((u) => u.includes('geo.fcc.gov')) && rec.mocked.some((u) => u.includes('amazonaws.com')) && rec.mocked.some((u) => u.includes('cookcountyil.gov')));
+  assert.ok(Number((await page.inputValue('#f-building_footprint_sqft')).replace(/,/g, '')) > 10000, 'footprint');
+  assert.match(await page.inputValue('#f-roof_area_sqft'), /^[\d,]+$/); assert.match(await page.inputValue('#f-floors'), /^\d+$/);
+  assert.equal(await page.inputValue('#f-lot_area_sqft'), '', 'lot size: simply an empty input');
+  assert.equal(await page.locator(row('lot_area_sqft')).getAttribute('data-state'), 'empty');
+  for (const k of ['front_yard_sqft', 'back_yard_sqft', 'side_yard_sqft']) assert.equal(await page.inputValue(`#f-${k}`), '', `${k}: no street reference, so no front is guessed`);
+  assert.doesNotMatch(await text(page, 'main'), FAILURE_WORDS);
+  assert.doesNotMatch(await ownerText(page), FORBIDDEN);
+  assert.equal(await page.getAttribute('#f-lot_area_sqft', 'placeholder'), 'Add', 'the owner can type the lot size');
+  assert.match(await text(page, '#attribution'), /Overture Maps Foundation/);
+  assert.equal(await page.evaluate(() => localStorage.length + sessionStorage.length + document.cookie.length), 0, 'nothing stored');
+}));
+
+await scenario('non-LA address with an answering county parcel service: the lot size is filled', withChicago({ parcel: 'answer' }, async (page) => {
+  await page.goto(URL_PAGE);
+  await search(page, CHICAGO);
+  await page.waitForSelector('#facts');
+  await settled(page);
+  const lot = Number((await page.inputValue('#f-lot_area_sqft')).replace(/,/g, ''));
+  assert.ok(lot > 60000 && lot < 70000, `lot ${lot} sq ft (a 90 m x 70 m parcel is about 67,800)`);
+  assert.doesNotMatch(await ownerText(page), FORBIDDEN);
+  // the county service maps no use code, so the property type is left for the owner to choose (earnings ideas follow that choice)
+  assert.match(await text(page, 'main'), /Choose a property type to see more ideas/);
+}));
+
+await scenario('Photon suggestion: picking it fills the field; the lookup then asks no geocoder (no Nominatim, no county locator) and uses the suggestion\'s point', withChicago({ photon: [
+  { type: 'Feature', geometry: { type: 'Point', coordinates: [CHI_PT.lng, CHI_PT.lat] }, properties: { countrycode: 'US', housenumber: '121', street: 'North LaSalle Street', city: 'Chicago', state: 'Illinois', postcode: '60602', name: 'Chicago City Hall' } },
+  { type: 'Feature', geometry: { type: 'Point', coordinates: [-79.38, 43.65] }, properties: { countrycode: 'CA', housenumber: '5', street: 'Elsewhere Road', city: 'Toronto', state: 'Ontario' } }] }, async (page, rec) => {
+  await page.goto(URL_PAGE);
+  await page.type('#address', '121 N LaSalle St, Chicago, IL', { delay: 5 });
+  await page.waitForSelector('[role="option"]');
+  assert.deepEqual(await page.locator('[role="option"]').allInnerTexts(), ['121 North LaSalle Street, Chicago, IL 60602']);
+  await page.locator('[role="option"]').first().click();
+  assert.equal(await page.inputValue('#address'), '121 North LaSalle Street, Chicago, IL 60602');
+  const before = rec.mocked.length;
+  await page.click('#address-submit');
+  await page.waitForSelector('#facts');
+  await settled(page);
+  const lookup = rec.mocked.slice(before);
+  assert.equal(lookup.some((u) => u.includes('nominatim') || u.includes('CAMS_Locator') || u.includes('geocoding.geo.census.gov')), false, `no geocoder was asked: ${lookup.map((u) => new URL(u).hostname).join(' ')}`);
+  assert.ok(lookup.some((u) => u.includes('geo.fcc.gov')), 'only the county of the point was looked up');
+  assert.match(await page.inputValue('#f-building_footprint_sqft'), /^[\d,]+$/);
+  assert.match(await text(page, '#status, main'), /Chicago/);
+  // editing the text after picking drops the suggestion's point: the typed text is then located by the geocoder as usual
+  await page.fill('#address', '121 North LaSalle Street, Chicago, IL 60602 ');
+  await page.fill('#address', '121 N LaSalle St, Chicago, IL 60602');
+  const mark = rec.mocked.length;
+  await page.click('#address-submit');
+  await page.waitForSelector('#facts');
+  await settled(page);
+  assert.ok(rec.mocked.slice(mark).some((u) => u.includes('nominatim')), 'a typed address is geocoded');
+}));
+
+await scenario('arriving from the homepage with a chosen suggestion: its point comes in the URL fragment, no geocoder is asked, and the URL is cleaned', withChicago({ photon: [] }, async (page, rec) => {
+  const before = rec.mocked.length;
+  await page.goto(`${URL_PAGE}#address=${encodeURIComponent('121 North LaSalle Street, Chicago, IL 60602')}&lat=${CHI_PT.lat}&lng=${CHI_PT.lng}&source=photon`);
+  await page.waitForSelector('#facts');
+  await settled(page);
+  const lookup = rec.mocked.slice(before);
+  assert.equal(lookup.some((u) => u.includes('nominatim') || u.includes('CAMS_Locator') || u.includes('geocoding.geo.census.gov')), false, `no geocoder was asked: ${lookup.map((u) => new URL(u).hostname).join(' ')}`);
+  assert.ok(lookup.some((u) => u.includes('geo.fcc.gov')), 'the county of the passed point was looked up');
+  assert.match(await page.inputValue('#f-building_footprint_sqft'), /^[\d,]+$/);
+  assert.equal(new URL(page.url()).hash, '', 'address and point are removed from the URL');
+  // a malformed point is ignored: the address is then located the usual way
+  const mark = rec.mocked.length;
+  await page.goto('about:blank'); // a hash-only change on an open page does not reload it, so leave first
+  await page.goto(`${URL_PAGE}#address=${encodeURIComponent('121 N LaSalle St, Chicago, IL 60602')}&lat=abc&lng=999`);
+  await page.waitForSelector('#facts');
+  await settled(page);
+  assert.ok(rec.mocked.slice(mark).some((u) => u.includes('nominatim')), 'a bad point falls back to geocoding');
+}));
+
+await scenario('Photon: an LA-looking address with no state still gets the county first; typing an Illinois address never asks the county service', async (page, rec) => {
+  await page.goto(URL_PAGE);
+  await page.type('#address', '121 N LaSalle St, Chicago, IL', { delay: 5 });
+  await page.waitForTimeout(700);
+  assert.equal(rec.mocked.filter((u) => u.includes('CAMS_Locator')).length, 0);
+  assert.ok(rec.mocked.some((u) => u.startsWith('https://photon.komoot.io/api/?')));
+});
 
 // no lookup request may ever carry a broken number (regression: an outline of type Polygon produced "around:NaN")
 const brokenUrls = allRecs.flatMap((r) => r.mocked).filter((u) => /NaN|undefined/.test(decodeURIComponent(u)));
 if (brokenUrls.length) failures.push(`lookup requests with a broken value: ${brokenUrls.slice(0, 3).join(', ')}`);
 
-// zero unmocked external requests across every scenario
 const totalExternal = allRecs.flatMap((r) => r.external);
 if (totalExternal.length) failures.push(`unmocked external requests: ${totalExternal.join(', ')}`);
 

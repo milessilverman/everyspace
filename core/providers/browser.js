@@ -4,11 +4,22 @@
 // docs/property-data.md "Browser wiring"). So: the LA County locator, the LA County assessor parcel layer and the LARIAC
 // building outlines. NOT included: the Census geocoder (no CORS header), RentCast / Google Solar / Google Places (need keys).
 // No Google code is loaded from here.
+// Added 2026-11-27 (INTEGRATE): Photon address suggestions (suggestionSources) for addresses outside LA County; `tryUnverifiedParcelServices` is how the
+// page asks a county's own parcel service outside LA (short timeout, started in parallel, silent when it does not answer).
+// Added 2026-11-27 (REUSE-B): Overture buildings (the catalog host stac.overturemaps.org answers `access-control-allow-origin: *` and the
+// tile host overturemaps-extras-us-west-2.s3.us-west-2.amazonaws.com answers a ranged GET with `access-control-allow-origin: *` and exposes
+// Content-Range, both checked live 2026-11-27) and the nationwide parcel registry restricted to services whose CORS support was verified
+// (`corsStatus: 'verified'`; today only LA County, which the assessor provider serves, so outside LA the registry answers with the reason
+// "CORS not verified" instead of firing requests at 130 servers nobody tested). `createBrowserRegistry({tryUnverifiedParcelServices:true})`
+// tries a county's untested service anyway, with a 4 s timeout: a CORS block looks like a network error and costs one failed request.
 
 import { createRegistry } from './registry.js';
 import { laCamsAddress } from './la-cams-address.js';
 import { laAssessor } from './la-assessor.js';
 import { lariacBuildings } from './lariac-buildings.js';
+import { overtureBuildings, withOvertureFallback } from './overture-buildings.js';
+import { createParcelRegistryProvider } from './parcel-registry.js';
+import { photonAddress, ATTRIBUTION_TEXT as PHOTON_ATTRIBUTION } from './photon-address.js';
 import { pointInPolygon } from '../geometry.js';
 import { distanceToPolygonM } from '../property-profile.js';
 
@@ -32,9 +43,34 @@ export const countyLocator = {
   },
 };
 
-/** Fresh registry: county locator, then assessor records + parcel polygon, then LARIAC footprints. Nothing else. */
-export function createBrowserRegistry() {
-  return createRegistry().register(countyLocator).register(laAssessor).register(lariacBuildings);
+/**
+ * Fresh registry: county locator; assessor records + parcel polygon (LA County) and the nationwide parcel registry (CORS-verified services
+ * only unless `tryUnverifiedParcelServices`); footprints: LARIAC with an Overture fallback in LA County, Overture elsewhere.
+ * Two flags tell the assembler (core/property-profile.js) what a provider needs before it can start: the parcel registry finds a parcel only
+ * from a point INSIDE it (`needsPointInParcel`), and the LARIAC search is made on the parcel polygon (`needsParcel`); everything else starts at once.
+ * @param {{tryUnverifiedParcelServices?:boolean}} [opts]
+ */
+export function createBrowserRegistry(opts = {}) {
+  const parcels = { ...createParcelRegistryProvider({ corsMode: opts.tryUnverifiedParcelServices ? 'try-unverified' : 'verified-only' }), needsPointInParcel: true };
+  return createRegistry().register(countyLocator).register(laAssessor).register(parcels).register({ ...withOvertureFallback(lariacBuildings), needsParcel: true }).register(overtureBuildings);
+}
+
+/** Where the next suggestion search should lean: the last place the owner looked up (set by the page), or null. */
+let suggestionBias = /** @type {{lat:number,lng:number}|null} */ (null);
+/** @param {{lat:number,lng:number}|null} point */
+export function setSuggestionBias(point) { suggestionBias = point && Number.isFinite(point.lat) && Number.isFinite(point.lng) ? { lat: point.lat, lng: point.lng } : null; }
+
+/** Footer attribution lines for the sources that need one (the page shows these in its footer only). */
+export const SUGGESTION_ATTRIBUTION = PHOTON_ATTRIBUTION;
+
+/**
+ * Extra address-suggestion sources for the address field (estimate/address-suggest.js reads this if present, and asks them AFTER the Los Angeles
+ * County source, only when that returns nothing). Each entry is `{id, label, suggest(text, deps), appliesTo?(text)}`; `deps` = {fetch, now, signal}.
+ * Photon (OpenStreetMap, US addresses with a house number, coordinates included) is the nationwide source.
+ * @returns {Array<{id:string, label:string, suggest:Function, appliesTo?:(text:string)=>boolean}>}
+ */
+export function suggestionSources() {
+  return [{ id: 'photon', label: photonAddress.label, appliesTo: (t) => String(t ?? '').trim().length >= 4, suggest: (text, deps) => photonAddress.suggest(text, { ...deps, bias: suggestionBias }) }];
 }
 
 /**

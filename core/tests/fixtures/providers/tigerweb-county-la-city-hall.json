@@ -1,0 +1,46 @@
+{
+ "displayFieldName": "NAME",
+ "fieldAliases": {
+  "STATE": "STATE",
+  "COUNTY": "COUNTY",
+  "BASENAME": "BASENAME",
+  "NAME": "NAME"
+ },
+ "fields": [
+  {
+   "name": "STATE",
+   "type": "esriFieldTypeString",
+   "alias": "STATE",
+   "length": 2
+  },
+  {
+   "name": "COUNTY",
+   "type": "esriFieldTypeString",
+   "alias": "COUNTY",
+   "length": 3
+  },
+  {
+   "name": "BASENAME",
+   "type": "esriFieldTypeString",
+   "alias": "BASENAME",
+   "length": 100
+  },
+  {
+   "name": "NAME",
+   "type": "esriFieldTypeString",
+   "alias": "NAME",
+   "length": 100
+  }
+ ],
+ "features": [
+  {
+   "attributes": {
+    "STATE": "06",
+    "COUNTY": "037",
+    "BASENAME": "Los Angeles",
+    "NAME": "Los Angeles County"
+   }
+  }
+ ],
+ "_fixture_note": "recorded 2026-11-27 from the live Census TIGERweb State_County layer 1 (point query, outFields STATE,COUNTY,BASENAME,NAME) for a PUBLIC building (Los Angeles City Hall); answered access-control-allow-origin: https://milessilverman.github.io for that Origin"
+}

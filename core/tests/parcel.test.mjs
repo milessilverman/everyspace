@@ -113,8 +113,8 @@ test('parcelAt: queries the LA service with the exact field list, returns apn, b
 });
 
 test('parcelAt: no service for the county/state -> ok:false with the named reason', async () => {
-  const r = await parcelAt({ ...PT, jurisdiction: { state: 'IL', countyFips: '17031', county: 'Cook County' } }, { fetch: router([]), now: NOW });
-  assert.deepEqual(r, { ok: false, reason: 'no parcel service for Cook County, IL' });
+  const r = await parcelAt({ ...PT, jurisdiction: { state: 'IL', countyFips: '17113', county: 'McLean County' } }, { fetch: router([]), now: NOW });
+  assert.deepEqual(r, { ok: false, reason: 'no parcel service for McLean County, IL' }); // Cook County gained a service when the registry was extended (REUSE-B)
 });
 
 test('parcelAt: zero matches, HTTP error, service error, malformed JSON and timeout all fail with a reason', async () => {
@@ -318,10 +318,10 @@ test('parcel failure: no parcel -> ok:false, parcel attributes unavailable with 
 
 test('jurisdiction without a service: reason names the county and state', async () => {
   const f = router([['census.gov', json({ result: { addressMatches: [{ matchedAddress: '1 TEST RD, CHICAGO, IL, 60601', coordinates: { x: -87.6, y: 41.9 }, addressComponents: { city: 'CHICAGO', state: 'IL' },
-    geographies: { Counties: [{ GEOID: '17031', NAME: 'Cook County' }] } }] } })], ['overpass', json(fx('overpass-no-features.json'))]]);
+    geographies: { Counties: [{ GEOID: '17113', NAME: 'McLean County' }] } }] } })], ['overpass', json(fx('overpass-no-features.json'))]]);
   const r = await resolveAddress('1 Test Rd, Chicago, IL 60601', { fetch: f, now: NOW });
   assert.equal(r.ok, false);
-  assert.equal(r.steps.find((s) => s.step === 'parcel').reason, 'no parcel service for Cook County, IL');
+  assert.equal(r.steps.find((s) => s.step === 'parcel').reason, 'no parcel service for McLean County, IL');
 });
 
 test('geocode failure: ok:false, location unavailable, no parcel or OSM requests made', async () => {

@@ -21,36 +21,46 @@
 <main class="wrap" id="main">
   <div>
     <h1>How much more could your property be earning?</h1>
-    <p class="lede">Enter your address and we will look up your parcel in public records and show a planning range for each way it could earn. Free, no sign-up.</p>
+    <p class="lede">Enter your address to see what is on your property and the ways it could earn. Free, no sign-up.</p>
     <form id="home-form" action="estimate/" method="get">
       <label class="f" for="address">Property address</label>
       <div class="row">
         <div class="suggest-wrap">
-          <input id="address" name="address" type="text" autocomplete="street-address" required maxlength="300" pattern=".*\S.*" title="Type your street address" placeholder="123 Main St, Los Angeles, CA 90001" aria-describedby="address-suggest-note">
+          <input id="address" name="address" type="text" autocomplete="street-address" required maxlength="300" pattern=".*\S.*" title="Type your street address" placeholder="123 Main St, Los Angeles, CA 90001" aria-describedby="address-help">
         </div>
         <button class="btn primary" type="submit">Find my property</button>
       </div>
-      <p id="address-suggest-note" class="small muted" style="margin-top:10px">Suggestions come from Los Angeles County's public address service and cover Los Angeles County only. They appear after you type 5 characters, and what you have typed so far is sent to that service to get them. No property lookup happens until you press the button.</p>
-      <p class="small muted" style="margin-top:6px">When you press the button, your address is sent to Los Angeles County's public address, parcel and building-outline services. Only if those cannot answer (for example, the address is outside Los Angeles County) is it sent to OpenStreetMap Nominatim. Nothing you enter is saved.</p>
+      <p id="address-help" class="small muted" style="margin-top:10px">Start typing and pick your address</p>
     </form>
   </div>
 </main>
 <footer>
   <div class="wrap">
     <p><a href="https://milessilverman.github.io/everyspace-demo/">See the earlier demo</a> · <a href="host/">Manage your spaces</a></p>
-    <p>Address search, suggestions, parcel records and building outlines: Los Angeles County public services. Outside Los Angeles County: address search © OpenStreetMap contributors (ODbL) via Nominatim, with parcel data from the county assessor's public service. Pools and transit stops: © OpenStreetMap contributors.</p>
+    <p id="privacy-line">Nothing you enter is saved. While you type, the text is sent to Los Angeles County's public address service to suggest matches. Your property is looked up only when you press the button: the address goes to Los Angeles County's public map services, and addresses they cannot find go to OpenStreetMap's public search. For addresses outside Los Angeles County, the text you type is also sent to Photon, an OpenStreetMap address search, to suggest matches.</p>
+    <p id="attribution">Property data: Los Angeles County public GIS services. Map data © OpenStreetMap contributors (ODbL). Address suggestions © OpenStreetMap contributors (via Photon).</p>
   </div>
 </footer>
 <script type="module">
-import { attachAddressSuggest } from './estimate/address-suggest.js';
+import { attachAddressSuggest, getPickedLocation } from './estimate/address-suggest.js';
 attachAddressSuggest(document.getElementById('address'));
+window.everyspacePicked = getPickedLocation; // lets the plain submit script below pass a chosen suggestion's coordinates along
 </script>
 <script>
 document.getElementById('home-form').addEventListener('submit', function (e) {
   var v = document.getElementById('address').value.trim();
   if (!v) return;
   e.preventDefault();
-  try { location.href = 'estimate/#address=' + encodeURIComponent(v); } catch (err) { e.preventDefault(); }
+  var to = 'estimate/#address=' + encodeURIComponent(v);
+  try {
+    var p = window.everyspacePicked && window.everyspacePicked(v);
+    if (p && isFinite(p.lat) && isFinite(p.lng)) {
+      to += '&lat=' + Number(p.lat).toFixed(6) + '&lng=' + Number(p.lng).toFixed(6);
+      if (p.precision) to += '&precision=' + encodeURIComponent(p.precision);
+      if (p.source) to += '&source=' + encodeURIComponent(p.source);
+    }
+  } catch (err) { /* fall back to the address alone */ }
+  try { location.href = to; } catch (err) { e.preventDefault(); }
 });
 </script>
 </body>
