@@ -731,3 +731,17 @@ document.addEventListener('toggle', (ev) => {
 }, true);
 
 renderAll();
+
+// An address submitted on the homepage arrives in the URL fragment (#address=...) or, without JavaScript there,
+// the query (?address=...). Start the lookup once, as if the button had been pressed, then clear it from the address bar.
+(function startFromUrl() {
+  let addr = '';
+  try {
+    addr = new URLSearchParams(location.hash.replace(/^#/, '')).get('address') || new URLSearchParams(location.search).get('address') || '';
+  } catch { addr = ''; }
+  addr = addr.trim();
+  if (!addr) return;
+  try { history.replaceState(null, '', location.pathname); } catch { /* ignore */ }
+  els.input.value = addr;
+  els.form.requestSubmit();
+})();

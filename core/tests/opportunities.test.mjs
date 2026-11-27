@@ -211,7 +211,7 @@ test('data: every category has all fields and valid enums', () => {
     assert.ok(c.requires && typeof c.requires === 'object');
     assert.ok(Array.isArray(c.conflictsWith));
     for (const v of Object.values(c.resourceUse)) assert.ok(Number.isInteger(v) && v > 0);
-    assert.match(c.sourceRef, /^index\.html:\d+$/);
+    assert.match(c.sourceRef, /^everyspace-demo index\.html:\d+$/);
   }
 });
 
@@ -224,13 +224,8 @@ test('data: every conflictsWith key exists, no self-conflict, stored symmetric',
   }
 });
 
-test('data: category keys match index.html CATEGORIES key lines', async () => {
-  const { readFileSync } = await import('node:fs');
-  const lines = readFileSync(new URL('../../index.html', import.meta.url), 'utf8').split('\n');
-  for (const c of CATEGORIES) {
-    const n = Number(c.sourceRef.split(':')[1]);
-    assert.ok(lines[n - 1].startsWith(`  ${c.key}: c(`), `${c.key} @ ${n}`);
-  }
+test('data: category sourceRef lines are positive integers (the demo file now lives in everyspace-demo)', () => {
+  for (const c of CATEGORIES) assert.ok(Number(c.sourceRef.split(':')[1]) > 0, c.key);
 });
 
 test('adding a category as data works without code changes', () => {

@@ -12,7 +12,7 @@
 //  useCodeScheme?: 'la-assessor' enables LA use-code rules in property_type classification
 //  publisher, termsUrl, license
 //
-// Provenance of this file: the LA entry is copied from index.html:19399-19400 (url + field names). The other CA
+// Provenance of this file: the LA entry is copied from everyspace-demo index.html:19399-19400 (url + field names). The other CA
 // entries are the county services listed in City Pretty app/data/parcel_services.json at commit ac7faf3, with only
 // the APN and address fields (the rest were not mapped). Their termsUrl is City Pretty's `terms`, which is a
 // service page, not a licence grant. Licences were not verified.
