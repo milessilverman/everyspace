@@ -6,7 +6,7 @@ Updated 2026-11-27. Read this first. Detail lives in the files named here.
 | work | status | where |
 |---|---|---|
 | Demo split into its own repository | done, live | `milessilverman/everyspace-demo`, https://milessilverman.github.io/everyspace-demo/ |
-| Homepage = address input that starts the property flow | done, live | `index.html`; merged in PR #10 |
+| Homepage = address input that starts the property flow | done, live | `index.html` + `home.css` + `assets/home-lot-map.svg` ("Lot Map" design, PR #22, built by a second agent); the estimator and `404.html` share its look (PR #23) |
 | Site audit, fixes, browser tests (Part 2) | done on branch | `claude/part2-site-audit`, findings in `docs/audit.md` |
 | Property-data providers, yard split, profile storage, accuracy run | done on branch (keyless path) | `claude/trusting-cannon-yynabw`; `docs/property-data.md`, `docs/phase1-accuracy.md` |
 | Property-data wired into the homepage flow | done on branch (keyless path) | same branch; LA County addresses use the county locator, assessor and building outlines first, earlier lookup as fallback; address suggestions from the county service, each house-numbered one checked against the county's address matcher (its suggest call offers numbers that do not exist) |
@@ -52,7 +52,7 @@ Live backend functions (checked read-only 2026-11-27): `calendar-feed`, `calenda
 | Embedded script | Leaflet 1.9.4 (BSD-2-Clause) inlined |
 | Browser storage | `everyspace-demo-v13`, `everyspace:<key>` in localStorage |
 | External hosts | Google Fonts, CARTO and Esri tiles, Nominatim, Overpass, LA County GIS |
-| Left in this repo | `everyspace.html` (redirect to the demo), a footer link on the homepage |
+| Left in this repo | `everyspace.html` (redirect to the demo); the homepage no longer links to the demo (PR #22) |
 | Shared code | none: nothing in `core/`, `estimate/`, `host/` or `platform/` imported from the demo. `core/data/*.js` cite the demo's line numbers as the origin of copied planning defaults, now written as `everyspace-demo index.html:<line>` |
 
 ## Stubs and out-of-phase items (Part 2)
