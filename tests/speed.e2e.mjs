@@ -259,6 +259,7 @@ await scenario('Next does not wait for late facts; facts arriving while on page 
   const ms = await page.evaluate(() => { const t0 = performance.now(); document.getElementById('next-earn').click(); return { sync: performance.now() - t0, ready: Boolean(document.getElementById('earn-headline')) }; });
   assert.ok(ms.ready && ms.sync < 300, `page 2 rendered in ${Math.round(ms.sync)} ms`);
   const head0 = await page.evaluate(() => document.getElementById('earn-headline').textContent);
+  await page.click('details[data-dk="earn-settings"] > summary');
   await page.click('#max-upfront');
   await page.keyboard.type('5000');
   await page.waitForFunction(() => document.getElementById('progress').hidden, null, { timeout: 15000 });

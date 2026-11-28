@@ -203,7 +203,7 @@ async function assertHeadline(page, core, label) {
   if (hi <= 0) return;
   assert.equal(Number(await el.getAttribute('data-low-cents')), lo, `${label}: headline low`);
   assert.equal(Number(await el.getAttribute('data-high-cents')), hi, `${label}: headline high`);
-  assert.equal(await text(page, '#earn-headline'), `Your property could earn about ${usd0.format(lo / 100)} to ${usd0.format(hi / 100)} a year`, `${label}: headline text`);
+  assert.equal(await text(page, '#earn-headline'), `${usd0.format(lo / 100)} to ${usd0.format(hi / 100)} a year`, `${label}: headline text`);
 }
 /** every baseline-year figure on the page equals the one computed by /core */
 async function assertMatchesCore(page, core, label) {
@@ -278,14 +278,15 @@ await scenario('happy path: the property list, three scenarios, numbers equal co
   assert.match(await text(page, 'details[data-dk="as-pool"]'), /Price per hour.*Estimated.*Everyspace planning default \(uncited\)/);
   assert.equal(await page.locator('table[data-assumptions="pool"] tbody tr').count(), 12);
   assert.match(await text(page, '[data-opp-card="pool"]'), /Local rules not checked — confirm with your city/);
-  assert.match(await text(page, '[data-opp-card="pool"] [data-confidence]'), /^Low: price and bookings are Everyspace planning defaults, not market data/);
-  assert.match(await text(page, '#h-incl'), /Ways in your best combination/);
-  assert.match(await text(page, '#h-inv'), /Needs a permit or building work first/);
+  assert.match(await text(page, '[data-opp-card="pool"] [data-confidence]'), /^How sure we are: low\. Price and bookings are Everyspace planning defaults, not market data/);
+  assert.match(await text(page, '#h-incl'), /Included in this total/);
+  assert.equal(await text(page, '#h-inv'), 'Needs a permit or building work');
   assert.match(await text(page, '[data-opp-card="entire_home"]'), /Allowed with conditions/);
   await toProperty(page);
   assert.doesNotMatch(await ownerText(page), FORBIDDEN);
   await typeFact(page, 'bedrooms', 4);
   await toEarn(page);
+  await ensureOpen(page, 'earn-settings');
   await page.selectOption('#goal', 'min_effort');
   await page.waitForFunction(() => /Estimates updated: \d+ ways? to earn found\./.test(document.querySelector('#status').textContent));
 });
@@ -330,11 +331,11 @@ await scenario('combination: caution by default, naive-vs-real sentence, goal ch
   await page.fill('#max-upfront', '');
   await page.locator('#max-upfront').blur();
   await page.check('#only-known');
-  await page.waitForFunction(() => !document.querySelector('#rules-caution'));
+  await page.waitForFunction(() => document.querySelector('#rules-caution')?.innerText.includes('Confirm the rules for any use with your city'));
   assert.deepEqual(await sel(), labelsOf(corePipeline(r.profile, { constraints: { allowUnknownRegulatory: false } }).opt, byId));
   await page.uncheck('#only-known');
-  await page.waitForSelector('#rules-caution');
-  assert.ok((await page.locator('a[href="../host/"]').count()) >= 3);
+  await page.waitForFunction(() => document.querySelector('#rules-caution')?.innerText.includes('Local rules were not checked'));
+  assert.equal(await page.getByRole('link', { name: 'Already renting? Manage your spaces in the Host Console' }).count(), 1);
 });
 
 await scenario('editing: owner correction, answers, price override and investment ideas all recompute at once and equal core', async (page, rec) => {
@@ -384,6 +385,7 @@ await scenario('editing: owner correction, answers, price override and investmen
   await assertMatchesCore(page, corePipeline(p, { overrides: ov }), 'after answering a question');
   // 5. investment ideas
   const beforeCount = await page.locator('[data-opp-card]').count();
+  await ensureOpen(page, 'earn-settings');
   await page.check('#include-investments');
   await page.waitForFunction((n) => document.querySelectorAll('[data-opp-card]').length > n, beforeCount);
   await assertMatchesCore(page, corePipeline(p, { overrides: ov, includeInvestmentIdeas: true }), 'with investment ideas');
@@ -447,7 +449,7 @@ await scenario('nothing found: one sentence, empty list, owner basics still give
   assert.doesNotMatch(await ownerText(page), FORBIDDEN);
   await toEarn(page);
   assert.equal(await page.getAttribute('#earn-headline', 'data-empty'), 'true');
-  assert.match(await text(page, '#earn-headline'), /^We have not found a way to earn yet\. Add a few details about your property and we can show what it could earn\./);
+  assert.match(await text(page, '#earn-headline'), /^No estimate yet$/);
   assert.ok(await page.locator('#back-property').count() >= 1, 'points back to page 1');
   await toProperty(page);
   await page.click('#own-house');
@@ -530,6 +532,7 @@ await scenario('mobile 390px: no horizontal scroll at any stage; screenshot', as
   await fits('page 2');
   await ensureOpen(page, 'as-pool');
   await ensureOpen(page, 'bd-pool');
+  await ensureOpen(page, 'earn-settings');
   await page.click('#include-investments');
   await page.waitForSelector('[data-opp-card="adu"]', { state: 'attached' });
   await openAll(page);
@@ -622,6 +625,7 @@ await scenario('double submit and submit during a lookup: one lookup, the first 
   await page.waitForTimeout(500);
   assert.equal(nominatimQs(rec).length, 1, 'geocoded once');
   await settled(page);
+  await page.getByRole('button', { name: 'Change address' }).click();
   await page.fill('#address', FAIL);
   await page.evaluate(() => { document.getElementById('address-form').requestSubmit(); document.getElementById('manual-start').click(); document.getElementById('address-form').requestSubmit(); });
   await page.waitForSelector('#not-found');
@@ -684,7 +688,7 @@ await scenario('no-JavaScript notice; range per selected idea', async (page, rec
   await happy(page, rec);
   await toEarn(page);
   assert.match(await text(page, '#combo-selected [data-range]'), /^About \$[\d,]+ to \$[\d,]+ a year$/, 'a range, not a lone number');
-  assert.match(await text(page, '#earn-headline'), /^Your property could earn about \$[\d,]+ to \$[\d,]+ a year$/, 'the headline is a range too');
+  assert.match(await text(page, '#earn-headline'), /^\$[\d,]+ to \$[\d,]+ a year$/, 'the headline is a range too');
 });
 
 // ---- the county path (first choice): Los Angeles County's public services, mocked from synthetic fixtures ----------------
@@ -885,6 +889,7 @@ await scenario('Photon suggestion: picking it fills the field; the lookup then a
   assert.match(await page.inputValue('#f-building_footprint_sqft'), /^[\d,]+$/);
   assert.match(await text(page, '#status, main'), /Chicago/);
   // editing the text after picking drops the suggestion's point: the typed text is then located by the geocoder as usual
+  await page.getByRole('button', { name: 'Change address' }).click();
   await page.fill('#address', '121 North LaSalle Street, Chicago, IL 60602 ');
   await page.fill('#address', '121 N LaSalle St, Chicago, IL 60602');
   const mark = rec.mocked.length;
@@ -965,7 +970,7 @@ await scenario('two pages: Next is disabled before a property, page 1 has no mon
   await assertHeadline(page, core, 'page 2');
   const [lo0, hi0] = await headlineCents(page);
   assert.ok(lo0 <= hi0);
-  assert.match(await text(page, '#earn-headline'), /^Your property could earn about \$[\d,]+ to \$[\d,]+ a year$/);
+  assert.match(await text(page, '#earn-headline'), /^\$[\d,]+ to \$[\d,]+ a year$/);
   assert.equal(await page.locator('#plan-note').count(), 1, 'the planning-estimates line is kept');
   assert.equal(await page.locator('#rules-caution').count(), 1, 'the local-rules caution is kept');
   assert.ok(await page.locator('#combo-selected [data-opp-card]').count() >= 1, 'the included ways are cards');
@@ -986,6 +991,7 @@ await scenario('two pages: Next is disabled before a property, page 1 has no mon
   await assertMatchesCore(page, corePipeline(p), 'after Back and Next again');
   assert.equal(await page.locator('[data-opp-card="pool"]').count(), 0);
   // goal change changes the headline to core's range for that goal
+  await ensureOpen(page, 'earn-settings');
   await page.selectOption('#goal', 'min_upfront');
   await page.waitForFunction(() => document.querySelector('#goal').value === 'min_upfront');
   await assertHeadline(page, corePipeline(p, { goal: 'min_upfront' }), 'goal min_upfront');
