@@ -139,7 +139,17 @@ const settled = (page) => page.waitForFunction(() => document.getElementById('pr
 async function open(page, place = HOUSE) { await page.goto(entry(place)); await page.waitForSelector('#qcard #q-body'); await settled(page); }
 const curKey = (page) => page.getAttribute('#q-body', 'data-key');
 const waitKey = (page, k) => page.waitForFunction((x) => document.getElementById('q-body')?.dataset.key === x, k);
-async function toEarn(page) { if (!(await page.locator('#view-earn').isVisible())) await page.click('#next-earn'); await page.waitForSelector('#earn-headline'); }
+async function clickInView(button) {
+  // A screenshot or smooth scroll can leave the button in the viewport but behind the pinned header.
+  await button.evaluate((el) => {
+    const { x, y, width, height } = el.getBoundingClientRect();
+    if (!el.contains(document.elementFromPoint(x + width / 2, y + height / 2))) {
+      el.scrollIntoView({ block: 'center', behavior: 'instant' });
+    }
+  });
+  await button.click();
+}
+async function toEarn(page) { if (!(await page.locator('#view-earn').isVisible())) await clickInView(page.locator('#next-earn')); await page.waitForSelector('#earn-headline'); }
 async function toProperty(page) { if (await page.locator('#view-earn').isVisible()) await page.click('#back-property'); await page.waitForSelector('#facts'); }
 /** Answer the question showing: 'yes' | 'no' | 'dk' | a number typed in. */
 async function answer(page, v) {
@@ -156,7 +166,7 @@ async function walk(page) {
     const k = await curKey(page);
     if (!k) break;
     seen.push(k);
-    await page.click('#q-skip');
+    await clickInView(page.locator('#q-skip'));
     await page.waitForFunction((x) => document.getElementById('q-body')?.dataset.key !== x, k);
   }
   return seen;
@@ -209,7 +219,12 @@ await scenario('answering moves to the next question by itself: focus on the new
 
 await scenario('the page scrolls only when the card is not fully on screen, and never when it already is', async (page) => {
   await open(page);
-  await page.evaluate(() => document.getElementById('qcard').scrollIntoView({ block: 'center', behavior: 'instant' }));
+  await page.locator('#q-body').evaluate((body) => body.scrollIntoView({ block: 'center', behavior: 'instant' }));
+  await page.waitForFunction(() => {
+    const body = document.getElementById('q-body').getBoundingClientRect();
+    return body.top >= document.querySelector('header.top').getBoundingClientRect().bottom + 6
+      && body.bottom <= window.innerHeight - 6;
+  });
   assert.equal(await inView(page, '#q-body'), true);
   const y0 = await scrollY(page);
   await page.evaluate(() => { window.__scrolls.length = 0; });
@@ -275,7 +290,8 @@ await scenario('"I don\'t know": remembered for the visit, shown in the summary,
   assert.ok(!(await page.locator('[data-opp-card="attic_storage"]').count()), 'never treated as Yes');
   const held = page.locator('#needs-your-answer li[data-held="attic_present"]');
   assert.equal(await held.count(), 1);
-  assert.match(await held.innerText(), /^Tell us if you have an attic to see storage income\. Answer it$/);
+  assert.match(await held.textContent(), /^Tell us if you have an attic to see storage income\. Answer it$/);
+  assert.ok(await held.getByRole('link', { name: 'Answer it' }).isVisible());
   assert.doesNotMatch(await ownerText(page), FORBIDDEN);
   await held.locator('a').click();
   await page.waitForSelector('#q-body[data-key="attic_present"]');

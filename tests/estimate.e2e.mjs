@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
-import { launchBrowser } from './support/browser.mjs';
+import { launchBrowser, tabKey } from './support/browser.mjs';
 import { resolveAddress, BROWSER_GEOCODERS } from '../core/parcel.js';
 import { applyOwnerCorrection } from '../core/profile.js';
 import { identifyOpportunities, defaultResourceCapacity } from '../core/opportunities.js';
@@ -157,6 +157,19 @@ async function toEarn(page) {
 async function toProperty(page) {
   if (await onEarn(page)) await page.click('#back-property');
   await page.waitForSelector('#facts');
+}
+// Long, fully expanded estimates can exceed the browser's bitmap limit.
+async function captureExpanded(page, file) {
+  const { width, height } = await page.evaluate(() => ({
+    width: document.documentElement.scrollWidth,
+    height: document.documentElement.scrollHeight,
+  }));
+  const tileHeight = 12000;
+  if (height <= tileHeight) return page.screenshot({ path: file, fullPage: true, scale: 'css' });
+  for (let y = 0, part = 1; y < height; y += tileHeight, part++) {
+    await page.screenshot({ path: file.replace(/\.png$/, `-${part}.png`), fullPage: true, scale: 'css',
+      clip: { x: 0, y, width, height: Math.min(tileHeight, height - y) } });
+  }
 }
 /** Open every "Details" on page 2 (the breakdowns, assumptions and editors sit inside them). */
 async function openAll(page) {
@@ -531,7 +544,7 @@ await scenario('mobile 390px: no horizontal scroll at any stage; screenshot', as
   await page.waitForSelector('[data-opp-card="adu"]', { state: 'attached' });
   await openAll(page);
   await fits('page 2 all open');
-  await page.screenshot({ path: `${SHOTS}/estimate-phone-earn.png`, fullPage: true });
+  await captureExpanded(page, `${SHOTS}/estimate-phone-earn.png`);
 }, { width: 390, height: 844 }, 2);
 
 await scenario('dark mode renders (colour scheme follows the console)', async (page, rec) => {
@@ -654,7 +667,7 @@ await scenario('reload mid-flow starts clean and the page says nothing is saved'
 
 await scenario('keyboard only: type, Enter, focus lands on the property heading, edit with Enter, status announces', async (page) => {
   await page.goto(URL_PAGE);
-  await page.keyboard.press('Tab');
+  await page.keyboard.press(tabKey());
   assert.equal(await page.evaluate(() => document.activeElement.className), 'skip');
   await page.focus('#address');
   await page.keyboard.type(VENICE);
@@ -1044,7 +1057,7 @@ await scenario('two pages: keyboard only, Next by Enter, focus on the page headi
   await page.keyboard.press('Enter');
   await page.waitForSelector('#earn-headline');
   assert.equal(await page.evaluate(() => document.activeElement.id), 'h-earn');
-  await page.keyboard.press('Shift+Tab');
+  await page.keyboard.press(tabKey(true));
   assert.equal(await page.evaluate(() => document.activeElement.id), 'back-property', 'the Back link is just before the heading');
   await page.keyboard.press('Enter');
   await page.waitForSelector('#facts');
@@ -1157,7 +1170,7 @@ await scenario('two pages on a phone (390 px) and desktop, light and dark: no ho
       await page.screenshot({ path: `${out}/${tag}-${scheme}-page2.png`, fullPage: true });
       await openAll(page);
       await fits(`${tag} ${scheme} page 2 open`);
-      await page.screenshot({ path: `${out}/${tag}-${scheme}-page2-open.png`, fullPage: true });
+      await captureExpanded(page, `${out}/${tag}-${scheme}-page2-open.png`);
     }
   }
 });

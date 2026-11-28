@@ -12,7 +12,7 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
-import { launchBrowser } from './support/browser.mjs';
+import { launchBrowser, tabKey } from './support/browser.mjs';
 import { PLACES, unitList, fakeLookup, withQuantity, withPerUnit } from './support/mf-contract.mjs';
 import { parseUnit, withUnit, sameAddress, CONDO_FACTS, BUILDING_FACTS, LAND_FACTS } from '../estimate/unit-adapter.js';
 import { identifyOpportunities as realIdentify, defaultResourceCapacity } from '../core/opportunities.js';
@@ -246,7 +246,7 @@ await scenario('the unit list filters as you type, keeps working with the keyboa
   // keyboard only: Tab reaches the separate choice
   await fresh(page, entry(COMPLEX.address, COMPLEX));
   await page.waitForSelector('#unit-filter');
-  await page.keyboard.press('Tab');
+  await page.keyboard.press(tabKey());
   assert.equal(await page.evaluate(() => document.activeElement.id), 'unit-whole');
 });
 

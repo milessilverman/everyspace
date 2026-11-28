@@ -299,7 +299,7 @@ try {
     await c2.page.route('**/rest/v1/**', (r) => r.abort());
     await c2.page.goto(PAGE); await c2.page.waitForSelector('[data-load-error]');
     check(/couldn.t reach everyspace/i.test(await c2.page.locator('[data-load-error]').innerText()), 'a network failure on load says it could not reach Everyspace');
-    expected(/Failed to load resource|ERR_FAILED/);
+    expected(/Failed to load resource|ERR_FAILED|supabase\.co\/rest\/v1\/[^\n]*CORS request did not succeed/);
     // sign out from the error screen
     await c2.page.click('[data-act=signout]'); await c2.page.waitForSelector('#authForm'); check(true, 'Sign out works from the error screen');
     await c2.context.close();
@@ -326,10 +326,19 @@ try {
     const url0 = page.url(); await goTab(page, 'today'); await page.click('main a[data-tab=requests]'); await page.waitForSelector('button[data-tab=requests][aria-current=page]');
     check(page.url() === url0, 'in-page links do not change the address');
     // copy button, and fallback when the clipboard is refused
-    await goTab(page, 'places'); await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: base });
+    await goTab(page, 'places');
+    // Observe the native write's result without requiring permission to read the system clipboard.
+    await page.evaluate(() => {
+      const clipboard = navigator.clipboard;
+      const write = clipboard.writeText.bind(clipboard);
+      clipboard.writeText = async (text) => {
+        await write(text);
+        window.__copiedCalendarLink = text;
+      };
+    });
     await page.locator('details.more > summary').first().click(); // the link sits in the collapsed "Calendar connection" section
     await page.locator('[data-act=copy]').first().click(); await page.waitForSelector('.toast');
-    const copied = await page.evaluate(() => navigator.clipboard.readText());
+    const copied = await page.evaluate(() => window.__copiedCalendarLink ?? '');
     check(/\/functions\/v1\/calendar-feed\/a{64}\.ics$/.test(copied) && /link copied/i.test(await page.locator('.toast').innerText()), 'Copy puts the Everyspace calendar link on the clipboard');
     await page.evaluate(() => { Object.defineProperty(navigator, 'clipboard', { value: { writeText: () => Promise.reject(new Error('denied')) }, configurable: true }); });
     await page.locator('[data-act=copy]').first().click(); await page.waitForFunction(() => /select the link/i.test(document.querySelector('.toast')?.textContent ?? ''));
@@ -379,7 +388,9 @@ try {
     await page.click('[data-act=syncall]'); await page.waitForFunction(() => /isn.t switched on/i.test(document.querySelector('.toast')?.textContent ?? ''));
     check(true, 'a missing backend function is reported as not switched on, not as "no calendars"');
     delete b.fn['calendar-sync']; // unknown function -> aborted by the harness, i.e. a network failure
-    await page.click('[data-act=syncall]'); await page.waitForFunction(() => /couldn.t reach everyspace/i.test(document.querySelector('.toast')?.textContent ?? '')); expected(/Failed to load resource|ERR_FAILED/); b.unmocked.length = 0; // the abort above is the injected failure
+    await page.click('[data-act=syncall]'); await page.waitForFunction(() => /couldn.t reach everyspace/i.test(document.querySelector('.toast')?.textContent ?? ''));
+    expected(/Failed to load resource|ERR_FAILED|supabase\.co\/functions\/v1\/calendar-sync\. \(Reason: CORS request did not succeed\)/);
+    b.unmocked.length = 0; // the abort above is the injected failure
     check(true, 'a network failure in a function call is reported plainly');
     // new request flow: hold + verdict, with an error answer
     b.fn['booking-guard'] = async (body) => body.action === 'hold' ? { body: { safe: true, step: 'accept', message: 'Dates locked.', hold_id: 'h9' } } : { status: 404, body: { error: 'Request not found' } };

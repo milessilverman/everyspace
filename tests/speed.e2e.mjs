@@ -32,7 +32,6 @@ const BUILDING_ROWS = ['floors', 'roof_area_sqft', 'building_footprint_sqft', 'f
 const OTHER_SOURCES = /(^|\.)(geo\.fcc\.gov|tigerweb\.geo\.census\.gov|stac\.overturemaps\.org|amazonaws\.com|imagery\.nationalmap\.gov|planetarycomputer\.microsoft\.com)$/;
 
 let world = 'county';
-let slowOutlines = 0; // extra delay for the building outlines in one scenario
 function answer(urlStr, range = null) {
   const u = new URL(urlStr);
   const dec = decodeURIComponent(urlStr);
@@ -77,11 +76,13 @@ const failures = [];
 let passed = 0;
 const allExternal = [];
 const timings = [];
-async function scenario(name, fn, { viewport = { width: 1280, height: 900 }, reducedMotion = 'no-preference' } = {}) {
+async function scenario(name, fn, { viewport = { width: 1280, height: 900 }, reducedMotion = 'no-preference', holdOutlines = false } = {}) {
   const ctx = await browser.newContext({ viewport, reducedMotion });
   const page = await ctx.newPage();
   page.setDefaultTimeout(20000);
-  const rec = { external: [], mocked: [], pending: [], consoleErrors: [], pageErrors: [] };
+  let releaseOutlines;
+  const outlines = new Promise((resolve) => { releaseOutlines = resolve; });
+  const rec = { releaseOutlines, external: [], mocked: [], pending: [], consoleErrors: [], pageErrors: [] };
   page.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource: the server responded with a status of 404/.test(m.text())) rec.consoleErrors.push(m.text()); });
   page.on('pageerror', (e) => rec.pageErrors.push(String(e)));
   // The progress bar's every value, recorded in the page as it changes.
@@ -100,8 +101,9 @@ async function scenario(name, fn, { viewport = { width: 1280, height: 900 }, red
     if (!a) { rec.external.push(url); allExternal.push(url); return route.abort('failed'); }
     rec.mocked.push(url);
     if (a === 'never') { rec.pending.push(url); return undefined; } // Overpass: never answers
-    const extraDelay = url.includes('LARIAC') ? slowOutlines : 0;
-    return new Promise((r) => setTimeout(r, DELAY + extraDelay)).then(() => route.fulfill({ status: a.status, contentType: a.type ?? 'application/json', headers: { 'access-control-allow-origin': '*', 'access-control-expose-headers': 'content-range' }, body: a.raw ?? JSON.stringify(a.body) }).catch(() => {}));
+    const delay = new Promise((resolve) => setTimeout(resolve, DELAY));
+    const ready = holdOutlines && url.includes('LARIAC') ? Promise.all([delay, outlines]) : delay;
+    return ready.then(() => route.fulfill({ status: a.status, contentType: a.type ?? 'application/json', headers: { 'access-control-allow-origin': '*', 'access-control-expose-headers': 'content-range' }, body: a.raw ?? JSON.stringify(a.body) }).catch(() => {}));
   });
   try {
     await fn(page, rec);
@@ -115,19 +117,21 @@ async function scenario(name, fn, { viewport = { width: 1280, height: 900 }, red
     failures.push(`${name}: ${e.stack ?? e}`);
     console.log(`  FAIL ${name}\n       ${String(e.message).split('\n')[0]}`);
     try { await page.screenshot({ path: `${SHOTS}/speed-fail-${failures.length}.png`, fullPage: true }); } catch { /* ignore */ }
-  } finally { await ctx.close(); }
+  } finally { releaseOutlines(); await ctx.close(); }
 }
 
-/** Submit and time the stages from the click, measured in the page. */
+/** Submit and time the stages from when the form receives the submit, measured in the page. */
 async function timedLookup(page, address, { shots = null } = {}) {
   await page.goto(URL_PAGE);
-  await page.fill('#address', address);
-  const t0 = await page.evaluate(() => { window.__t0 = performance.now(); return window.__t0; });
+  await page.locator('#address[role="combobox"]').fill(address);
+  await page.locator('#address-form').evaluate((form) => {
+    form.addEventListener('submit', () => { window.__t0 = performance.now(); }, { capture: true, once: true });
+  });
   await page.click('#address-submit');
-  await page.waitForSelector('#facts .fact', { state: 'visible' });
+  await page.locator('#facts .fact').first().waitFor({ state: 'visible' });
   const main = await page.evaluate(() => performance.now() - window.__t0);
   if (shots) await page.screenshot({ path: `${SHOTS}/${shots}-partial.png`, fullPage: true });
-  return { t0, main };
+  return { main };
 }
 const filled = (page, keys) => page.evaluate((ks) => ks.every((k) => {
   const row = document.querySelector(`.fact[data-key="${k}"]`);
@@ -220,13 +224,14 @@ await scenario('older path: screen < 2.5 s and settled < 8 s with Overpass never
   timings.push(`older path (mocked 400 ms, Overpass never answers): screen ${Math.round(main)} ms, settled ${Math.round(settled)} ms`);
 });
 
-await scenario('late values never move focus or replace what the owner is typing; an applied value wins over a late one', async (page) => {
-  world = 'county'; slowOutlines = 2500;
+await scenario('late values never move focus or replace what the owner is typing; an applied value wins over a late one', async (page, rec) => {
+  world = 'county';
   await timedLookup(page, SFR);
   assert.ok(await page.locator('.fact[data-key="floors"][data-state="loading"]').count() === 1, 'floors still loading');
   // type into a still-loading line, and leave it unapplied while the late value arrives
   await page.click('#f-floors');
   await page.keyboard.type('3');
+  rec.releaseOutlines();
   await page.waitForFunction(() => document.querySelector('.fact[data-key="roof_area_sqft"]').dataset.state !== 'loading', null, { timeout: 8000 });
   assert.equal(await page.evaluate(() => document.activeElement.id), 'f-floors', 'focus stayed');
   assert.equal(await page.inputValue('#f-floors'), '3', 'typed text kept');
@@ -242,11 +247,10 @@ await scenario('late values never move focus or replace what the owner is typing
   assert.equal(await page.evaluate(() => document.activeElement.id), 'f-parking_spaces');
   assert.equal(await page.inputValue('#f-parking_spaces'), '2');
   assert.equal(await page.inputValue('#f-floors'), '3', 'owner value still wins after everything arrived');
-  slowOutlines = 0;
-});
+}, { holdOutlines: true });
 
-await scenario('Next does not wait for late facts; facts arriving while on page 2 update it without moving focus or typed text', async (page) => {
-  world = 'county'; slowOutlines = 2500;
+await scenario('Next does not wait for late facts; facts arriving while on page 2 update it without moving focus or typed text', async (page, rec) => {
+  world = 'county';
   await timedLookup(page, SFR);
   assert.ok(await page.locator('.fact[data-key="floors"][data-state="loading"]').count() === 1, 'floors still loading');
   assert.equal(await page.locator('#next-earn').isEnabled(), true, 'Next is enabled while facts are still arriving');
@@ -256,6 +260,7 @@ await scenario('Next does not wait for late facts; facts arriving while on page 
   await page.click('details[data-dk="earn-settings"] > summary');
   await page.click('#max-upfront');
   await page.keyboard.type('5000');
+  rec.releaseOutlines();
   await page.waitForFunction(() => document.getElementById('progress').hidden, null, { timeout: 15000 });
   await page.waitForFunction(() => /Estimates updated/.test(document.getElementById('status').textContent), null, { timeout: 8000 });
   assert.equal(await page.evaluate(() => document.activeElement.id), 'max-upfront', 'focus stayed where the owner was');
@@ -265,8 +270,7 @@ await scenario('Next does not wait for late facts; facts arriving while on page 
   await page.click('#back-property');
   await page.waitForSelector('#facts');
   assert.notEqual(await page.inputValue('#f-floors'), '', 'the late fact is on page 1 now');
-  slowOutlines = 0;
-});
+}, { holdOutlines: true });
 
 await scenario('progress bar under reduced motion: same semantics, no animation', async (page) => {
   world = 'county';
@@ -282,14 +286,15 @@ await scenario('progress bar under reduced motion: same semantics, no animation'
   checkProgress(await page.evaluate(() => window.__pv), 'reduced motion');
 }, { reducedMotion: 'reduce' });
 
-await scenario('phone 390 px: partially loaded screen fits, no horizontal scroll', async (page) => {
+await scenario('phone 390 px: partially loaded screen fits, no horizontal scroll', async (page, rec) => {
   world = 'county';
   await timedLookup(page, SFR, { shots: 'property-phone' });
   const m = await page.evaluate(() => ({ sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth }));
   assert.ok(m.sw <= m.cw, `scrollWidth ${m.sw} > ${m.cw}`);
+  rec.releaseOutlines();
   await waitSettled(page);
   await page.screenshot({ path: `${SHOTS}/property-phone-loaded.png`, fullPage: true });
-}, { viewport: { width: 390, height: 844 } });
+}, { viewport: { width: 390, height: 844 }, holdOutlines: true });
 
 if (allExternal.length) failures.push(`unmocked external requests: ${allExternal.join(', ')}`);
 await browser.close();

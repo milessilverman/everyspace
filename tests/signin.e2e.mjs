@@ -216,7 +216,7 @@ try {
     await page.route('**/auth/v1/token**', (r) => r.abort()); // browser-level network failure (takes precedence over the context route)
     await page.click('#authForm button[type=submit]');
     await page.waitForFunction(() => /couldn.t reach everyspace/i.test(document.querySelector('#authMsg')?.textContent ?? ''));
-    check(true, 'network failure on sign-in shows "Couldn\'t reach Everyspace"'); expected(/Failed to load resource|ERR_FAILED/);
+    check(true, 'network failure on sign-in shows "Couldn\'t reach Everyspace"'); expected(/Failed to load resource|ERR_FAILED|supabase\.co\/auth\/v1\/token[^\n]*CORS request did not succeed/);
     await page.unroute('**/auth/v1/token**');
 
     // ---------------------------------------------------------------- 5. create account
@@ -288,7 +288,7 @@ try {
     // sign-out while offline still signs out locally
     await page.fill('#authForm input[name=email]', EMAIL); await page.fill('#authForm input[name=password]', PASSWORD); await page.click('#authForm button[type=submit]'); await dashboard(page);
     await page.route('**/auth/v1/logout**', (r) => r.abort()); await page.click('[data-act=signout]'); await page.waitForSelector('#authForm');
-    check(await signedOut(page), 'sign-out works even when the network call fails'); expected(/Failed to load resource|ERR_FAILED/); await page.unroute('**/auth/v1/logout**');
+    check(await signedOut(page), 'sign-out works even when the network call fails'); expected(/Failed to load resource|ERR_FAILED|supabase\.co\/auth\/v1\/logout[^\n]*CORS request did not succeed/); await page.unroute('**/auth/v1/logout**');
     await context.close();
   }
 

@@ -312,13 +312,17 @@ await scenario('overlay lines up with the photo frame: the corner of the synthet
   const ring = (await modelOf(page)).lot; const near = ring.reduce((a, q) => (Math.abs(q[0] - MARK[0]) + Math.abs(q[1] - MARK[1]) < Math.abs(a[0] - MARK[0]) + Math.abs(a[1] - MARK[1]) ? q : a));
   await page.locator('#lot-map .lm-frame').scrollIntoViewIfNeeded(); await frames(page);
   const box = await page.locator('#lot-map .lm-frame').boundingBox();
-  const sp0 = await screenOf(page, near[0], near[1]); const h0 = { x: sp0.x - box.x - 1, y: sp0.y - box.y - 1 }; // frame-relative, inside its 1 px border
-  const shotBuf = await page.screenshot({ clip: { x: box.x, y: box.y, width: box.width, height: box.height } }); if (process.env.DBG) { fs.writeFileSync(`${SHOTS}/dbg-mark.png`, shotBuf); await page.screenshot({ path: `${SHOTS}/dbg-page.png` }); console.log('BOX', JSON.stringify(box)); }
+  // Give each engine the same integer crop origin when comparing pixels to a CSS coordinate.
+  const x = Math.floor(box.x), y = Math.floor(box.y);
+  const clip = { x, y, width: Math.ceil(box.x + box.width) - x, height: Math.ceil(box.y + box.height) - y };
+  const sp0 = await screenOf(page, near[0], near[1]);
+  const h0 = { x: sp0.x - x, y: sp0.y - y };
+  const shotBuf = await page.screenshot({ clip }); if (process.env.DBG) { fs.writeFileSync(`${SHOTS}/dbg-mark.png`, shotBuf); await page.screenshot({ path: `${SHOTS}/dbg-page.png` }); console.log('BOX', JSON.stringify(box)); }
   const shot = decodePng(shotBuf);
   let n = 0, sx = 0, sy = 0;
   for (let y = 0; y < shot.H; y++) for (let x = 0; x < shot.W; x++) { const k = (y * shot.W + x) * shot.bpp; if (shot.data[k] > 200 && shot.data[k + 1] < 60 && shot.data[k + 2] < 60) { n++; sx += x + 0.5; sy += y + 0.5; } }
   assert.ok(n > 8, `mark visible (${n} px)`);
-  const dx = sx / n - (h0.x + 1), dy = sy / n - (h0.y + 1); // the frame has a 1 px border
+  const dx = sx / n - h0.x, dy = sy / n - h0.y;
   assert.ok(Math.abs(dx) <= 1 && Math.abs(dy) <= 1, `corner at (${h0.x}, ${h0.y}), mark centred at (${(sx / n).toFixed(2)}, ${(sy / n).toFixed(2)})`);
   // and the picture is the true ground shape: the world's width/height equals the box's metres east-west over north-south
   const m = await viewOf(page);
@@ -1088,15 +1092,25 @@ await scenario('the list drives the picture: focusing or hovering a line lights 
   assert.equal((await hl()).svg, false, 'nothing lit at rest');
   await page.focus('#f-back_yard_sqft');
   let s1 = await hl(); assert.equal(s1.svg, true); assert.ok(s1.lit.includes('back') && !s1.lit.includes('lot') && !s1.lit.includes('front'), `lit: ${s1.lit}`);
-  const op = await page.evaluate(() => [Number(getComputedStyle(document.querySelector('#lot-map .lm-svg .lm-lot')).opacity), Number(getComputedStyle(document.querySelector('#lot-map .lm-zone[data-area="back"]')).opacity)]);
-  await page.waitForFunction(() => Number(getComputedStyle(document.querySelector('#lot-map .lm-svg .lm-lot')).opacity) < 0.6); const op2 = await page.evaluate(() => [Number(getComputedStyle(document.querySelector('#lot-map .lm-svg .lm-lot')).opacity), Number(getComputedStyle(document.querySelector('#lot-map .lm-zone[data-area="back"]')).opacity)]);
+  const op2 = await page.waitForFunction(() => {
+    const lot = Number(getComputedStyle(document.querySelector('#lot-map .lm-svg .lm-lot')).opacity);
+    const back = Number(getComputedStyle(document.querySelector('#lot-map .lm-zone[data-area="back"]')).opacity);
+    return lot < 0.6 && back > 0.9 ? [lot, back] : false;
+  }).then((value) => value.jsonValue());
   assert.ok(op2[0] < 0.6 && op2[1] > 0.9, `others fade (${op2})`);
   await page.focus('#f-lot_area_sqft'); assert.deepEqual((await hl()).lit.filter((a) => a === 'lot'), ['lot', 'lot'].slice(0, (await hl()).lit.filter((a) => a === 'lot').length)); assert.ok((await hl()).lit.includes('lot'));
   await page.focus('#f-usable_yard_sqft'); assert.equal((await hl()).canvas, true, 'the usable hatch is lit for the usable yard');
-  await page.evaluate(() => { document.activeElement.blur(); window.scrollTo(0, 0); }); await page.mouse.move(5, 5); await page.waitForFunction(() => !document.querySelector('#lot-map .lm-svg').classList.contains('has-hl'));
+  const clearHighlight = async () => {
+    await page.mouse.move(5, 5);
+    await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
+    await page.waitForFunction(() => window.scrollY === 0 && !document.querySelector('#lot-map .lm-svg').classList.contains('has-hl'));
+  };
+  await page.evaluate(() => document.activeElement.blur());
+  await page.waitForFunction(() => document.activeElement === document.body);
+  await clearHighlight();
   assert.equal((await hl()).svg, false, 'leaving restores');
   await page.hover('.fact[data-key="roof_area_sqft"]'); assert.ok((await hl()).lit.includes('house'));
-  await page.evaluate(() => window.scrollTo(0, 0)); await page.mouse.move(5, 5); await page.waitForFunction(() => !document.querySelector('#lot-map .lm-svg').classList.contains('has-hl'));
+  await clearHighlight();
   // tapping an area on the picture brings its line to the middle of the screen and flashes it
   await page.evaluate(() => window.scrollTo(0, 0));
   const zb = await page.locator('#lot-map .lm-zone[data-area="back"]').evaluate((e) => { const b = e.getBoundingClientRect(); return { x: b.x + b.width / 2, y: b.y + b.height * 0.25 }; });

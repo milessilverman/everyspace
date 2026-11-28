@@ -18,3 +18,7 @@ if (!['chromium', 'webkit', 'firefox'].includes(browserName)) {
 }
 
 export const launchBrowser = () => loadPlaywright()[browserName].launch();
+
+// Safari uses Option–Tab to visit links and controls with its default keyboard settings.
+export const tabKey = (backwards = false) =>
+  `${browserName === 'webkit' ? 'Alt+' : ''}${backwards ? 'Shift+' : ''}Tab`;
