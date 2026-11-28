@@ -765,8 +765,8 @@ function whyConfidence(o, e) {
   if (fee.tag === 'estimated') reasons.push('the listing-site fee is an unverified estimate');
   if ((o.unit === 'night' || o.unit === 'hour') && e.inputs.seasonality.tag === 'estimated') reasons.push('busy and quiet months are not set (flat year assumed)');
   if (o.evidenceConfidence < 0.4) reasons.push('the property details behind it are estimated');
-  if (!reasons.length) return `${CONF_WORDS[e.confidenceLabel]}: you entered your own price and bookings and the local rules are on file.`;
-  return `${CONF_WORDS[e.confidenceLabel]}: ${reasons.join(', and ')}.`;
+  const reason = reasons.length ? reasons.join(', and ') : 'you entered your own price and bookings and the local rules are on file';
+  return `How sure we are: ${e.confidenceLabel}. ${cap(reason)}.`;
 }
 
 function scenarioTable(o, e) {
@@ -926,6 +926,7 @@ function earnCard(o, e, { suffix = '', reason = '' } = {}) {
 // ---- page 2: what it could earn -------------------------------------------------------------------------------------
 
 function nameize(text, byId) {
+  if (text === 'Conflicts with backyard, which scores better for this goal') return 'Uses the same space as the backyard.';
   let t = text.replace(/(\d+) cents/g, (_, n) => money(Number(n)));
   for (const id of Object.keys(byId).sort((a, b) => b.length - a.length)) t = t.replace(new RegExp(`\\b${id}\\b`, 'g'), byId[id].label.toLowerCase());
   return t;
@@ -1104,7 +1105,12 @@ function showProperty(fix) {
   els.earn.hidden = true; els.viewProperty.hidden = false; els.earn.innerHTML = '';
   document.title = TITLE_PROPERTY;
   if (fix) { try { if (location.hash === '#earn') history.replaceState(null, '', location.pathname); } catch { /* ignore */ } }
-  if (was === 'earn') { announce('Back to your property. Everything you entered is still here.'); S.keepStatus = true; S.focusId = S.afterBack ?? 'h-address'; S.afterBack = null; }
+  if (was === 'earn') {
+    announce('Back to your property. Everything you entered is still here.');
+    S.keepStatus = true;
+    S.focusId = S.afterBack ?? ($('#h-address').getClientRects().length ? 'h-address' : 'h-profile');
+    S.afterBack = null;
+  }
   renderAll();
   if (was === 'earn') window.scrollTo(0, 0);
 }

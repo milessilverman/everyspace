@@ -278,7 +278,7 @@ await scenario('happy path: the property list, three scenarios, numbers equal co
   assert.match(await text(page, 'details[data-dk="as-pool"]'), /Price per hour.*Estimated.*Everyspace planning default \(uncited\)/);
   assert.equal(await page.locator('table[data-assumptions="pool"] tbody tr').count(), 12);
   assert.match(await text(page, '[data-opp-card="pool"]'), /Local rules not checked — confirm with your city/);
-  assert.match(await text(page, '[data-opp-card="pool"] [data-confidence]'), /^Low: price and bookings are Everyspace planning defaults, not market data/);
+  assert.match(await text(page, '[data-opp-card="pool"] [data-confidence]'), /^How sure we are: low\. Price and bookings are Everyspace planning defaults, not market data/);
   assert.match(await text(page, '#h-incl'), /Included in this total/);
   assert.equal(await text(page, '#h-inv'), 'Needs a permit or building work');
   assert.match(await text(page, '[data-opp-card="entire_home"]'), /Allowed with conditions/);
