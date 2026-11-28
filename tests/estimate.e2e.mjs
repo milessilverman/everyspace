@@ -46,6 +46,7 @@ let override = null; // a scenario may replace one host's answer: (url, decodedU
 function answer(urlStr, range = null) {
   const u = new URL(urlStr);
   const dec = decodeURIComponent(urlStr);
+  if (dec.includes('CAMS_Locator') && dec.includes('findAddressCandidates') && dec.includes('maxLocations=20')) return { status: 200, body: {} }; // the suggestion list's address check gets no usable answer here, so suggestions show as the mocked service sent them (the check itself is tested in address-suggest.e2e.mjs)
   const o = override?.(urlStr, dec, range);
   if (o) return o;
   if (u.hostname === 'nominatim.openstreetmap.org') {
@@ -668,7 +669,7 @@ await scenario('keyboard only: type, Enter, focus lands on the property heading,
   assert.equal(await page.getAttribute('#status', 'aria-atomic'), 'true');
   await settled(page);
   await page.focus('#f-bedrooms');
-  await page.keyboard.press('Control+A');
+  await page.keyboard.press('ControlOrMeta+A'); // select all: Control on Linux and Windows, Command on a Mac (plain Control+A there moves to the start of the line)
   await page.keyboard.type('4');
   await page.keyboard.press('Enter');
   await page.waitForFunction(() => document.activeElement.id === 'f-bedrooms' && document.querySelector('.fact[data-key="bedrooms"]').dataset.state === 'edited');
@@ -717,7 +718,7 @@ await scenario('county path: an LA address uses the county services; floors, bat
   await countyPage(page);
   noNominatim(rec);
   assert.ok(countyReqs(rec).some((u) => u.includes('CAMS_Locator')) && countyReqs(rec).some((u) => u.includes('LACounty_Parcel')) && countyReqs(rec).some((u) => u.includes('LARIAC')));
-  assert.equal(countyReqs(rec).filter((u) => u.includes('findAddressCandidates')).length, 1, 'the address is asked once, not twice');
+  assert.equal(countyReqs(rec).filter((u) => u.includes('findAddressCandidates') && !u.includes('maxLocations=20')).length, 1, 'the address is asked once, not twice');
   assert.equal(countyReqs(rec).filter((u) => u.includes('LACounty_Parcel')).length, 1, 'the parcel is asked once');
   assert.equal(await page.inputValue('#f-floors'), '2');
   assert.equal(await page.inputValue('#f-bathrooms'), '2');
