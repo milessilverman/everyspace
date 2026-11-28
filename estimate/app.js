@@ -489,6 +489,56 @@ function dKey(key, label, body, _unused = false, cls = 'panel') {
 }
 
 function renderLookup() {
+  const found = S.phase === 'results' && S.result?.kind === 'ok' && !S.notFound;
+  const heading = $('#h-address');
+  const headingRow = heading.parentElement;
+  let changeAddress = $('#change-address');
+  if (found && !changeAddress) {
+    changeAddress = document.createElement('button');
+    changeAddress.type = 'button';
+    changeAddress.id = 'change-address';
+    changeAddress.className = 'linkbtn address-change';
+    changeAddress.setAttribute('aria-controls', els.form.id);
+    changeAddress.setAttribute('aria-expanded', 'false');
+    headingRow.append(changeAddress);
+    changeAddress.addEventListener('click', () => {
+      const expand = els.form.hidden;
+      changeAddress.setAttribute('aria-expanded', String(expand));
+      renderLookup();
+      if (expand) els.input.focus();
+    });
+    $('.skip').addEventListener('click', (event) => {
+      if (!els.form.hidden || els.viewProperty.hidden) return;
+      event.preventDefault();
+      changeAddress.click();
+    });
+  }
+  if (changeAddress) {
+    if (!found) changeAddress.setAttribute('aria-expanded', 'false');
+    const collapsed = found && changeAddress.getAttribute('aria-expanded') !== 'true';
+    if (collapsed) {
+      const address = S.profile?.attributes.address;
+      const full = String(hasValue(address) ? address.value : S.address);
+      const comma = full.indexOf(',');
+      heading.textContent = comma < 0 ? full : full.slice(0, comma);
+      if (comma >= 0) {
+        const locality = document.createElement('span');
+        locality.className = 'address-locality';
+        locality.textContent = full.slice(comma);
+        heading.append(locality);
+      }
+      heading.title = full;
+    } else {
+      heading.textContent = 'Your property';
+      heading.removeAttribute('title');
+    }
+    changeAddress.hidden = !found;
+    changeAddress.textContent = collapsed ? 'Change address' : 'Hide address form';
+    els.form.hidden = collapsed;
+    els.status.classList.toggle('sr-only', collapsed);
+    headingRow.parentElement.classList.toggle('address-compact', collapsed);
+  }
+
   const parts = [];
   if (S.phase === 'confirm' && S.result) {
     parts.push(`<section class="card" aria-labelledby="h-confirm"><h2 id="h-confirm">Is this your property?</h2>

@@ -358,6 +358,7 @@ await scenario('re-searching does not silently drop the owner\'s changes', async
   await typeFact(page, 'bedrooms', '6');
   await page.waitForSelector(`${row('bedrooms')}[data-state="edited"]`);
   const calls = nominatim(rec);
+  await page.getByRole('button', { name: 'Change address' }).click();
   await page.click('#address-submit');
   assert.match(await text(page, '#status'), /You have changes on this page/);
   assert.equal(nominatim(rec), calls, 'nothing looked up on the first press');

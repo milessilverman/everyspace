@@ -347,6 +347,18 @@ footer a { font-weight: 650; text-underline-offset: .2em; }
   #property.has-pic > #lot-map-slot { position: sticky; top: var(--lm-top, 56px); z-index: 6; background: var(--surface); margin: 0 -4px 6px; padding: 2px 0; }
 }
 
+/* Compact address after a successful lookup. */
+.address-compact { padding: 4px 14px; }
+.address-compact > .section-title { flex-wrap: nowrap; align-items: center; margin: 0; }
+.address-compact > p.muted { display: none; }
+.address-compact #h-address { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; letter-spacing: normal; }
+.address-change { flex: none; white-space: nowrap; min-height: 44px; }
+.address-change[hidden] { display: none; }
+@media (max-width: 560px) {
+  .address-compact #h-address { font-size: 14px; }
+  .address-compact .address-locality { display: none; }
+}
+
 /* Earnings overview and idea groups */
 main.wrap:has(> #view-earn:not([hidden])) {
   width: calc(100% - var(--site-inset));

@@ -625,6 +625,7 @@ await scenario('double submit and submit during a lookup: one lookup, the first 
   await page.waitForTimeout(500);
   assert.equal(nominatimQs(rec).length, 1, 'geocoded once');
   await settled(page);
+  await page.getByRole('button', { name: 'Change address' }).click();
   await page.fill('#address', FAIL);
   await page.evaluate(() => { document.getElementById('address-form').requestSubmit(); document.getElementById('manual-start').click(); document.getElementById('address-form').requestSubmit(); });
   await page.waitForSelector('#not-found');
@@ -888,6 +889,7 @@ await scenario('Photon suggestion: picking it fills the field; the lookup then a
   assert.match(await page.inputValue('#f-building_footprint_sqft'), /^[\d,]+$/);
   assert.match(await text(page, '#status, main'), /Chicago/);
   // editing the text after picking drops the suggestion's point: the typed text is then located by the geocoder as usual
+  await page.getByRole('button', { name: 'Change address' }).click();
   await page.fill('#address', '121 North LaSalle Street, Chicago, IL 60602 ');
   await page.fill('#address', '121 N LaSalle St, Chicago, IL 60602');
   const mark = rec.mocked.length;
