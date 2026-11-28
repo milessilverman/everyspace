@@ -27,6 +27,7 @@ let override = null; // a scenario may replace the county services' answers: (ur
 function answer(urlStr) {
   const u = new URL(urlStr);
   const dec = decodeURIComponent(urlStr);
+  if (dec.includes('CAMS_Locator') && dec.includes('findAddressCandidates') && dec.includes('maxLocations=20')) return { status: 200, body: {} }; // the suggestion list's address check gets no usable answer here, so suggestions show as the mocked service sent them (the check itself is tested in address-suggest.e2e.mjs)
   const o = override?.(urlStr, dec);
   if (o) return o;
   if (u.hostname === 'nominatim.openstreetmap.org') {
@@ -308,7 +309,7 @@ await scenario('keyboard only: Tab through the list, type, Tab applies and moves
   await page.keyboard.press('Tab'); // home size
   await page.keyboard.press('Tab'); // bedrooms
   assert.equal(await page.evaluate(() => document.activeElement.id), 'f-bedrooms');
-  await page.keyboard.press('Control+A');
+  await page.keyboard.press('ControlOrMeta+A'); // select all: Control on Linux and Windows, Command on a Mac (plain Control+A there moves to the start of the line)
   await page.keyboard.type('5');
   await page.keyboard.press('Tab');
   await page.waitForSelector(`${row('bedrooms')}[data-state="edited"]`);

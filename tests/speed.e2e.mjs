@@ -35,6 +35,7 @@ let world = 'county';
 function answer(urlStr, range = null) {
   const u = new URL(urlStr);
   const dec = decodeURIComponent(urlStr);
+  if (dec.includes('CAMS_Locator') && dec.includes('findAddressCandidates') && dec.includes('maxLocations=20')) return { status: 200, body: {} }; // the suggestion list's address check gets no usable answer here, so suggestions show as the mocked service sent them (the check itself is tested in address-suggest.e2e.mjs)
   if (u.hostname.includes('overpass')) return 'never';
   if (world === 'chicago') {
     if (u.hostname === 'nominatim.openstreetmap.org') return { status: 200, body: nominatimChicago };

@@ -35,14 +35,17 @@ let suggestMode = null; // ({q, n}) => {status, body, delay}
 /** What the mocked Photon service (addresses outside LA County) does; by default it finds nothing. */
 let photonMode = null; // ({q, n}) => {status, body, delay}
 const photonFeature = (house, street, city, state, zip, lng, lat) => ({ type: 'Feature', geometry: { type: 'Point', coordinates: [lng, lat] }, properties: { countrycode: 'US', housenumber: house, street, city, state, postcode: zip } });
+/** What the mocked address matcher answers when the suggestion list checks a street address; by default nothing usable, so suggestions show as sent. */
+let checkMode = null; // ({street, n}) => {status, body, delay}
+const candidate = (address, score = 100) => ({ address, score, location: { x: -118.3, y: 34.1 }, attributes: {} });
 const defaultSuggest = ({ q }) => ({ status: 200, delay: 0, body: { suggestions: [1, 2, 3, 4, 5].map((i) => ({ text: `${q} #${i}, Los Angeles, CA`, magicKey: `k${i}`, isCollection: false })) } });
 
-async function scenario(name, url, fn, { viewport = { width: 1280, height: 900 }, allowConsole = null, mode = null, photon = null } = {}) {
+async function scenario(name, url, fn, { viewport = { width: 1280, height: 900 }, allowConsole = null, mode = null, photon = null, check = null } = {}) {
   const ctx = await browser.newContext({ viewport });
   const page = await ctx.newPage();
   page.setDefaultTimeout(15000);
-  const rec = { photonLive: 0, photonMax: 0, external: [], other: [], photon: [], suggests: [], live: 0, maxLive: 0, failed: 0, consoleErrors: [], pageErrors: [] };
-  suggestMode = mode; photonMode = photon;
+  const rec = { photonLive: 0, photonMax: 0, external: [], other: [], photon: [], suggests: [], checks: [], live: 0, maxLive: 0, failed: 0, consoleErrors: [], pageErrors: [] };
+  suggestMode = mode; photonMode = photon; checkMode = check;
   page.on('console', (m) => { if (m.type() === 'error') rec.consoleErrors.push(m.text()); });
   page.on('pageerror', (e) => rec.pageErrors.push(String(e)));
   const isSuggest = (r) => r.url().includes('CAMS_Locator/GeocodeServer/suggest');
@@ -68,6 +71,14 @@ async function scenario(name, url, fn, { viewport = { width: 1280, height: 900 }
       const q = parsed.searchParams.get('q') ?? '';
       rec.photon.push({ q, at: Date.now(), url: u });
       const a = (photonMode ?? (() => ({ status: 200, delay: 0, body: { features: [] } })))({ q, n: rec.photon.length });
+      if (a.delay) await new Promise((r) => setTimeout(r, a.delay));
+      try { return await route.fulfill({ status: a.status, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(a.body) }); } catch { return undefined; }
+    }
+    if (parsed.hostname === 'public.gis.lacounty.gov' && u.includes('CAMS_Locator/GeocodeServer/findAddressCandidates') && parsed.searchParams.get('maxLocations') === '20') {
+      // the suggestion list checking that a suggested street address exists (not a lookup)
+      const street = parsed.searchParams.get('Single Line Input') ?? '';
+      rec.checks.push({ street, at: Date.now() });
+      const a = (checkMode ?? (() => ({ status: 200, delay: 0, body: {} })))({ street, n: rec.checks.length });
       if (a.delay) await new Promise((r) => setTimeout(r, a.delay));
       try { return await route.fulfill({ status: a.status, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(a.body) }); } catch { return undefined; }
     }
@@ -380,6 +391,54 @@ for (const [label, url] of PAGES) {
     assert.equal(await page.inputValue('#address'), '1 <img src=x onerror=window.__pwn=1> Road, <b>Town</b>, IL 60602');
     assert.equal(await page.evaluate(() => window.__pwn), undefined);
   }, { photon: () => ({ status: 200, delay: 0, body: { features: [photonFeature('1', '<img src=x onerror=window.__pwn=1> Road', '<b>Town</b>', 'Illinois', '60602', -87.6, 41.9)] } }) });
+}
+
+// ---- the county suggests a house number in every community its street runs through; only real addresses are shown --------
+const CORBIN = ['Chatsworth', 'Los Angeles', 'Northridge', 'Porter Ranch'].map((c) => ({ text: `5741 Corbin Avenue, ${c}, CA`, magicKey: 'k', isCollection: false }));
+const corbinSuggest = () => ({ status: 200, delay: 0, body: { suggestions: CORBIN } });
+const corbinCheck = () => ({ status: 200, delay: 0, body: { candidates: [candidate('5741 Corbin Avenue, Los Angeles, CA, 91356'), candidate('5741 Corbin Avenue, Tarzana, CA, 91356'), candidate('5742 Corbin Avenue, Los Angeles, CA, 91356', 79)] } });
+for (const [label, url] of PAGES) {
+  await scenario(`${label}: only addresses the county can match are offered (a house number is not shown in communities where it does not exist)`, url, async (page, rec) => {
+    await typeSlow(page, '5741 Corbin Ave');
+    await page.waitForSelector('[role="option"]');
+    assert.deepEqual(await opts(page).allInnerTexts(), ['5741 Corbin Avenue, Los Angeles, CA 91356', '5741 Corbin Avenue, Tarzana, CA 91356'], 'no Chatsworth, Northridge or Porter Ranch; the neighbouring number is not offered either');
+    assert.deepEqual([...new Set(rec.checks.map((c) => c.street))], ['5741 Corbin Avenue'], 'one check for the one street address, without a city');
+    assert.equal(rec.other.length, 0, 'the check is not a lookup');
+    // typing on: the same street address is not checked a second time
+    const before = rec.checks.length;
+    await typeSlow(page, 'nue');
+    await page.waitForFunction(() => document.querySelectorAll('[role="option"]').length === 2 && !document.querySelector('.suggest-list.stale'));
+    assert.equal(rec.checks.length, before, 'a street address is checked once per visit');
+    await page.locator('#address').press('ArrowDown');
+    await page.locator('#address').press('Enter');
+    assert.equal(await page.inputValue('#address'), '5741 Corbin Avenue, Los Angeles, CA 91356');
+  }, { mode: corbinSuggest, check: corbinCheck });
+
+  await scenario(`${label}: a house number that exists nowhere on the street is not offered at all`, url, async (page, rec) => {
+    await typeSlow(page, '99999 Corbin Ave');
+    await page.waitForTimeout(700);
+    assert.ok(rec.checks.length >= 1, 'the street address was checked');
+    assert.equal(await opts(page).count(), 0, 'no suggestion for an address that does not exist');
+    assert.equal(await page.inputValue('#address'), '99999 Corbin Ave', 'the field keeps what was typed');
+  }, { mode: () => ({ status: 200, delay: 0, body: { suggestions: CORBIN.map((s) => ({ ...s, text: s.text.replace('5741', '99999') })) } }), check: () => ({ status: 200, delay: 0, body: { candidates: [] } }) });
+
+  await scenario(`${label}: when the check cannot be made, the suggestions are shown as the county sent them`, url, async (page, rec) => {
+    await typeSlow(page, '5741 Corbin Ave');
+    await page.waitForSelector('[role="option"]');
+    assert.equal(await opts(page).count(), 4);
+    assert.equal(await opts(page).first().innerText(), '5741 Corbin Avenue, Chatsworth, CA');
+    assert.ok(rec.checks.length >= 1);
+  }, { mode: corbinSuggest, check: () => ({ status: 503, delay: 0, body: {} }), allowConsole: /Failed to load resource/ });
+
+  await scenario(`${label}: several streets are each checked, and suggestions without a house number pass through`, url, async (page, rec) => {
+    await typeSlow(page, '200 N Sp');
+    await page.waitForSelector('[role="option"]');
+    assert.deepEqual(await opts(page).allInnerTexts(), ['200 North Spring St, Los Angeles, CA 90012', 'Spring Street Park, Los Angeles, CA', '200 North Springdale Drive, Long Beach, CA 90803']);
+    assert.deepEqual(rec.checks.map((c) => c.street).sort(), ['200 North Spring Avenue', '200 North Spring St', '200 North Springdale Drive', '200 North Spruce St'], 'one check per street address');
+  }, {
+    mode: () => ({ status: 200, delay: 0, body: { suggestions: ['200 North Spring Avenue, Compton, CA', '200 North Spring St, East Rancho Dominguez, CA', 'Spring Street Park, Los Angeles, CA', '200 North Springdale Drive, Carson, CA', '200 North Spruce St, Los Angeles, CA', '200 North Spring St, Los Angeles, CA'].map((text) => ({ text })) } }),
+    check: ({ street }) => ({ status: 200, delay: 0, body: { candidates: street === '200 North Spring St' ? [candidate('200 North Spring St, Los Angeles, CA, 90012'), candidate('200 South Spring St, Los Angeles, CA, 90012', 80)] : street === '200 North Springdale Drive' ? [candidate('200 North Springdale Drive, Long Beach, CA, 90803', 98)] : [] } }),
+  });
 }
 
 await scenario('homepage: after a suggestion is chosen, submitting (Enter again) is what starts the lookup', PAGES[0][1], async (page) => {
