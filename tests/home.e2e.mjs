@@ -83,21 +83,25 @@ console.log('home e2e');
 await scenario('homepage renders: no console errors, no requests off localhost, nothing stored', async (page, rec) => {
   await page.goto(`${ORIGIN}/`);
   await page.waitForSelector('#address');
-  assert.equal(await page.locator('h1').innerText(), 'How much more could your property be earning?');
+  assert.equal(await page.locator('h1').innerText(), 'What could your property earn?');
   assert.equal(await page.locator('form').count(), 1);
   assert.equal(await page.locator('label[for="address"]').count(), 1);
   assert.equal(await page.getAttribute('#address', 'autocomplete'), 'street-address');
   assert.equal(await page.getAttribute('#address', 'required'), '');
+  const map = page.getByRole('img', { name: /example lot/i });
+  assert.ok(await map.evaluate((image) => image.complete && image.naturalWidth > 0), 'local lot drawing loaded');
+  const formBounds = await page.locator('#home-form').boundingBox();
+  assert.ok((await map.boundingBox()).x > formBounds.x + formBounds.width, 'desktop map beside the form');
   assert.equal(rec.external.length + rec.mocked.length, 0, 'no external or mocked request');
   assert.ok(rec.local.every((u) => !/everyspace\.html/.test(u)));
   assert.equal(await storageEmpty(page), true, 'no storage or cookies');
   assert.match(await page.title(), /Everyspace/);
 });
 
-await scenario('footer links and attribution', async (page) => {
+await scenario('Host Console link and attribution', async (page) => {
   await page.goto(`${ORIGIN}/`);
-  assert.equal(await page.getAttribute('footer a:text("See the earlier demo")', 'href'), DEMO);
-  assert.equal(await page.getAttribute('footer a:text("Manage your spaces")', 'href'), 'host/');
+  assert.equal(await page.getByRole('link', { name: 'Manage your spaces' }).getAttribute('href'), 'host/');
+  assert.equal(await page.getByRole('link', { name: 'See the earlier demo' }).count(), 0);
   assert.match(await page.locator('#attribution').innerText(), /Property data: Los Angeles County public GIS services\. Map data © OpenStreetMap contributors \(ODbL\)\./);
 });
 
@@ -163,12 +167,15 @@ await scenario('homepage says where the address goes and promises nothing it doe
   const t = (await page.locator('body').innerText()).replace(/\s+/g, ' ');
   assert.match(t, /Start typing and pick your address/);
   assert.match(t, /Nothing you enter is saved\. While you type, the text is sent to Los Angeles County's public address service to suggest matches\. Your property is looked up only when you press the button: the address goes to Los Angeles County's public map services, and addresses they cannot find go to OpenStreetMap's public search\./);
-  assert.match(t, /Free, no sign-up/);
+  assert.match(t, /Free · No sign-up · Nothing is saved/);
   assert.doesNotMatch(t, /sign in|log in|your account|save your|we will email|subscribe/i, 'no account or save promise');
-  const demoMentions = t.match(/demo/gi) ?? [];
-  assert.equal(demoMentions.length, 1, 'the only "demo" is the footer link to the earlier demo');
-  assert.equal(await page.locator('footer a:has-text("earlier demo")').count(), 1);
-  assert.equal(await page.locator('a[href^="http"]').count(), 1, 'one external link only');
+  assert.doesNotMatch(t, /earlier demo/i);
+  assert.equal(await page.locator('a[href^="http"]').count(), 0, 'homepage links are local');
+  assert.match(t, /surfboards/);
+  assert.match(t, /weekdays could rent by the hour/);
+  const earnings = page.getByRole('region', { name: 'What can earn' });
+  assert.equal(await earnings.getByRole('listitem').count(), 7);
+  assert.equal(await earnings.locator('a, button, [role="button"], [tabindex]').count(), 0, 'earnings labels are static');
 });
 
 await scenario('typed markup reaches the estimator as text', async (page, rec) => {
@@ -181,11 +188,17 @@ await scenario('typed markup reaches the estimator as text', async (page, rec) =
   assert.equal(await page.locator('img[src="x"]').count(), 0);
 });
 
-await scenario('390 px wide: no horizontal scroll', async (page) => {
+await scenario('390 px wide: the full-width form and privacy note come before the map', async (page) => {
   await page.goto(`${ORIGIN}/`);
   const m = await page.evaluate(() => ({ sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth, left: document.querySelector('h1').getBoundingClientRect().left }));
   assert.ok(m.sw <= m.cw, `scrollWidth ${m.sw} > ${m.cw}`);
-  assert.equal(m.left, 16, '16 px gutter');
+  assert.equal(m.left, 20, '20 px gutter');
+  const form = await page.locator('#home-form').boundingBox();
+  const button = await page.getByRole('button', { name: 'Find my property' }).boundingBox();
+  const note = await page.getByText('Free · No sign-up · Nothing is saved').boundingBox();
+  const map = await page.getByRole('img', { name: /example lot/i }).boundingBox();
+  assert.equal(button.width, form.width, 'submit button spans the form');
+  assert.ok(button.y + button.height < note.y && note.y + note.height < map.y, 'form and note appear above the map');
 }, { viewport: { width: 390, height: 800 } });
 
 await scenario('dark mode follows the colour scheme', async (page) => {

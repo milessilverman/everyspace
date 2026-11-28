@@ -1,14 +1,14 @@
 /* "Your lot from above" (estimate/lot-map.js). Outline colours are the same in light and dark: they sit on a photo, and each one also has a pattern or a label. */
-.lm { margin: 4px 0 16px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2);
+.lm { margin: 4px 0 16px; padding: 12px; border: 1px solid var(--line); border-radius: var(--card-radius); background: var(--surface);
   --lm-bg: #dfe6ea; --lm-lot: #ffc400; --lm-house: #ff4d6d; --lm-other: #ff4d6d; --lm-drv: #00e5ff; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .lm { --lm-bg: #1b252e; } }
 :root[data-theme="dark"] .lm { --lm-bg: #1b252e; }
 .lm[hidden], .lm-body[hidden], .lm [hidden] { display: none !important; }
 .lm-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
-.lm-title { font-size: 16px; }
+.lm-title { font-size: 1.125rem; }
 .lm-sub { margin-top: 2px; }
 .lm-stage { margin-top: 10px; text-align: center; }
-.lm-frame { position: relative; display: block; margin: 0 auto; max-width: 100%; background: var(--lm-bg); border-radius: 10px; overflow: hidden; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; border: 1px solid var(--line); }
+.lm-frame { position: relative; display: block; margin: 0 auto; max-width: 100%; background: var(--lm-bg); border-radius: .75rem; overflow: hidden; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; border: 1px solid var(--line); }
 .lm-img, .lm-canvas, .lm-svg { position: absolute; left: 0; top: 0; width: 100%; height: 100%; display: block; }
 .lm-img { object-fit: fill; image-rendering: auto; }
 .lm-canvas { pointer-events: none; }
@@ -89,7 +89,7 @@
 .lm-h.is-snap .lm-ring { stroke: #fff; stroke-width: 3; }
 .lm-h.is-free .lm-dot { stroke-dasharray: 3 2; }
 .lm-h.is-sel .lm-ring, .lm-h:focus-visible .lm-ring { stroke: #2dd4bf; stroke-width: 4; }
-.lm-pick, .lm-editbar { margin-top: 10px; padding: 8px 10px; border: 1px solid var(--accent-line); background: var(--accent-soft); border-radius: 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+.lm-pick, .lm-editbar { margin-top: 10px; padding: 8px 10px; border: 1px solid var(--accent-line); background: var(--accent-soft); border-radius: .75rem; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
 .lm-editbar { flex-direction: column; align-items: stretch; }
 .lm-edithead { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 .lm-editmsg { margin: 0; font-weight: 600; font-size: 14px; }
