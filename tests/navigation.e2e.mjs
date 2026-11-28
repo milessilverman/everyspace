@@ -142,9 +142,9 @@ for (const { name, origin, base } of SITES) {
     await page.click('footer a:has-text("Host Console")');
     await page.waitForURL(`${origin}${base}/host/`);
     await page.waitForSelector('#authForm');
-    // and from the homepage footer
+    // and from the homepage
     await page.goto(`${origin}${base}/`);
-    await page.click('footer a:text("Manage your spaces")');
+    await page.getByRole('link', { name: 'Manage your spaces' }).click();
     await page.waitForURL(`${origin}${base}/host/`);
     await page.waitForSelector('#authForm');
   });
@@ -231,11 +231,10 @@ await scenario('everyspace.html redirects to the earlier demo (target asserted, 
   assert.doesNotMatch(html.replace(/(https:\/\/)?milessilverman\.github\.io\/everyspace-demo\/?/g, ''), /demo/i, 'no "demo" wording on the page except the address it points to');
 });
 
-await scenario('footer links on the homepage and estimator', async (page) => {
+await scenario('homepage and estimator links to the Host Console', async (page) => {
   await page.goto(`${ROOT_ORIGIN}/`);
-  assert.equal(await page.getAttribute('footer a:text("See the earlier demo")', 'href'), DEMO);
-  assert.equal(await page.getAttribute('footer a:text("See the earlier demo")', 'target'), null);
-  assert.equal(await page.getAttribute('footer a:text("Manage your spaces")', 'href'), 'host/');
+  assert.equal(await page.getByRole('link', { name: 'See the earlier demo' }).count(), 0);
+  assert.equal(await page.getByRole('link', { name: 'Manage your spaces' }).getAttribute('href'), 'host/');
   await page.goto(`${ROOT_ORIGIN}/estimate/`);
   assert.equal(await page.locator('footer a').count(), 1);
   assert.equal(await page.getAttribute('footer a', 'href'), '../host/');
