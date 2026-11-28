@@ -346,6 +346,7 @@ await scenario('owner questions: a yes answer becomes a line in the list; a type
     await page.waitForSelector('#q-err');
   }
   await toEarn(page);
+  await page.click('details[data-dk="earn-settings"] > summary');
   await page.fill('#max-upfront', '-100');
   await page.locator('#max-upfront').blur();
   await page.waitForSelector('#input-error');
