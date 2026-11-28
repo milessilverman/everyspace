@@ -1,11 +1,5 @@
 .home { font-size: 1rem; }
 
-.home .wrap {
-  width: calc(100% - clamp(40px, 7vw, 80px));
-  max-width: 68rem;
-  padding-inline: 0;
-}
-
 .home-symbols {
   position: absolute;
   width: 0;
@@ -24,30 +18,14 @@
   stroke-linejoin: round;
 }
 
-.home-brand {
-  display: flex;
-  align-items: center;
-  gap: .625rem;
-  padding-block: 1.375rem .9375rem;
-  font-size: 1.25rem;
-  font-weight: 750;
-  letter-spacing: -.04em;
-}
+.home-brand { padding-block: 1.375rem .9375rem; }
 
-.home-brand-mark, .home-idea-icon, .home-step-number {
+.home-idea-icon, .home-step-number {
   display: inline-grid;
   place-items: center;
   background: var(--accent-soft);
   color: var(--accent);
 }
-
-.home-brand-mark {
-  width: 1.875rem;
-  height: 1.875rem;
-  border-radius: .4375rem;
-}
-
-.home-brand-mark .home-icon { width: 1.375rem; height: 1.375rem; }
 
 .home main { padding-block: 0 2.625rem; }
 .home main > section { margin-top: 0; }
@@ -62,9 +40,9 @@
 
 .home-hero h1 {
   max-width: 15ch;
-  font-size: clamp(2.625rem, 5.15vw, 4.125rem);
-  line-height: 1.025;
-  letter-spacing: -.055em;
+  font-size: var(--display-hero);
+  line-height: var(--display-leading);
+  letter-spacing: var(--display-tracking);
   text-wrap: balance;
 }
 
@@ -117,12 +95,10 @@
 }
 
 .home h2 {
-  font-size: clamp(1.75rem, 3.125vw, 2.5rem);
+  font-size: var(--display-section);
   line-height: 1.1;
-  letter-spacing: -.045em;
 }
 
-.home h3 { font-size: 1.125rem; letter-spacing: -.025em; }
 .home-section-intro { margin-top: .5625rem; color: var(--ink-2); }
 
 .home-ideas, .home-steps {
@@ -135,7 +111,7 @@
 .home-idea {
   padding: 1.1875rem;
   border: 1px solid var(--line);
-  border-radius: .875rem;
+  border-radius: var(--card-radius);
   background: var(--surface);
 }
 
@@ -178,7 +154,7 @@
 .home-estimate-note {
   padding: clamp(1.125rem, 2.4vw, 1.5rem);
   border: 1px solid var(--accent-line);
-  border-radius: .875rem;
+  border-radius: var(--card-radius);
   background: var(--accent-soft);
 }
 
@@ -187,7 +163,6 @@
 .home-estimate-note a { display: inline-block; margin-top: .875rem; font-weight: 700; text-underline-offset: .2em; }
 
 .home footer { padding-block: 1.5rem 1.875rem; }
-.home footer p { max-width: 48rem; }
 
 @media (max-width: 900px) {
   .home-address-entry { grid-template-columns: minmax(0, 1fr); }
