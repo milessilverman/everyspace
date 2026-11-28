@@ -7,36 +7,127 @@
 <meta name="description" content="Type your address and get a free planning estimate of what your property could earn from rentable space. No sign-up.">
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="./estimate/app.css">
-<style>
-  .home { min-height: 100vh; display: flex; flex-direction: column; }
-  .home main { flex: 1; display: flex; align-items: center; padding-top: 40px; padding-bottom: 40px; }
-  .home main > div { margin-top: 0; width: 100%; }
-  .home h1 { font-size: clamp(26px, 6vw, 38px); }
-  .home .lede { margin-top: 12px; font-size: 17px; color: var(--ink-2); }
-  .home form { margin-top: 22px; }
-  .home .row .suggest-wrap { flex: 1 1 260px; min-width: 0; }
-</style>
+<link rel="stylesheet" href="./home.css">
 </head>
 <body class="home">
+<svg class="home-symbols" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">
+  <symbol id="icon-lot" viewBox="0 0 24 24">
+    <path d="M4 4h16v16H4zM4 11h7v9m0-9 4-3 5 4"/>
+  </symbol>
+  <symbol id="icon-pool" viewBox="0 0 24 24">
+    <rect x="3" y="4" width="18" height="16" rx="4"/>
+    <path d="M8 8v6m4-6v6m-4-4h4m-6 6c1.4-1.4 2.6-1.4 4 0s2.6 1.4 4 0 2.6-1.4 4 0"/>
+  </symbol>
+  <symbol id="icon-storage" viewBox="0 0 24 24">
+    <path d="m3 21 0-13 9-6 9 6v13M1 21h22M7 21v-9h10v9M7 16h10m-6-4V9h4v3"/>
+  </symbol>
+  <symbol id="icon-driveway" viewBox="0 0 24 24">
+    <path d="M5 21V4h14v17M2 21h20"/>
+    <rect x="8" y="7" width="8" height="11" rx="1.5"/>
+    <path d="M8 10h8m-8 5h8"/>
+  </symbol>
+  <symbol id="icon-yard" viewBox="0 0 24 24">
+    <path d="M2 21h20m-12 0v-7m7 7v-5M6 15a4 4 0 0 1-1-7.9 5.2 5.2 0 0 1 10.2.9A4 4 0 0 1 14 16H7m9-7a3.5 3.5 0 0 1 2 6.7h-1"/>
+  </symbol>
+  <symbol id="icon-garage" viewBox="0 0 24 24">
+    <path d="M2 21h20M3 21V9l9-7 9 7v12M7 21V10h10v11M7 14h10m-10 4h10"/>
+  </symbol>
+  <symbol id="icon-room" viewBox="0 0 24 24">
+    <path d="M2 20V9a3 3 0 0 1 3-3h14a3 3 0 0 1 3 3v11M2 17h20M2 13h20M6 13v-2a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v2m2 0v-2a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v2"/>
+  </symbol>
+  <symbol id="icon-house" viewBox="0 0 24 24">
+    <path d="m2 11 10-8 10 8M5 9v12h14V9m-9 12v-7h4v7m3-14V3h3v6"/>
+  </symbol>
+</svg>
+
+<header class="wrap home-brand">
+  <span class="home-brand-mark"><svg class="home-icon" aria-hidden="true"><use href="#icon-lot"/></svg></span>
+  <span>Everyspace</span>
+</header>
+
 <main class="wrap" id="main">
-  <div>
-    <h1>How much more could your property be earning?</h1>
-    <p class="lede">Enter your address to see what is on your property and the ways it could earn. Free, no sign-up.</p>
-    <form id="home-form" action="estimate/" method="get">
-      <label class="f" for="address">Property address</label>
-      <div class="row">
-        <div class="suggest-wrap">
-          <input id="address" name="address" type="text" autocomplete="street-address" required maxlength="300" pattern=".*\S.*" title="Type your street address" placeholder="123 Main St, Los Angeles, CA 90001" aria-describedby="address-help">
+  <section class="home-hero" aria-labelledby="home-title">
+    <div>
+      <h1 id="home-title">What could your property <span>earn?</span></h1>
+      <p class="home-lede">See what’s on your property and explore the ways it could earn.</p>
+      <form id="home-form" action="estimate/" method="get">
+        <label class="f" for="address">Property address</label>
+        <div class="home-address-entry">
+          <div class="suggest-wrap">
+            <input id="address" name="address" type="text" autocomplete="street-address" required maxlength="300" pattern=".*\S.*" title="Type your street address" placeholder="Street address, city, state" aria-describedby="address-help">
+          </div>
+          <button class="btn primary" type="submit">Find my property</button>
         </div>
-        <button class="btn primary" type="submit">Find my property</button>
-      </div>
-      <p id="address-help" class="small muted" style="margin-top:10px">Start typing and pick your address</p>
-    </form>
-  </div>
+        <p class="home-form-note">Free · No sign-up · Nothing is saved</p>
+        <p id="address-help" class="home-address-help">Start typing and pick your address</p>
+      </form>
+    </div>
+    <img class="home-lot-map" src="./assets/home-lot-map.svg" width="512" height="412" alt="Example lot with a home, front yard, backyard, pool and driveway marked.">
+  </section>
+
+  <section class="home-section" aria-labelledby="examples-title">
+    <h2 id="examples-title">What an idea looks like</h2>
+    <p class="home-section-intro">A few ideas you could check with your estimate.</p>
+    <div class="home-ideas">
+      <article class="home-idea">
+        <span class="home-idea-icon"><svg class="home-icon" aria-hidden="true"><use href="#icon-pool"/></svg></span>
+        <h3>A quiet pool</h3>
+        <p>A pool you don’t use on weekdays could rent by the hour.</p>
+      </article>
+      <article class="home-idea">
+        <span class="home-idea-icon"><svg class="home-icon" aria-hidden="true"><use href="#icon-storage"/></svg></span>
+        <h3>Room for surfboards</h3>
+        <p>An empty corner of your garage could store a neighbor’s surfboards by the month.</p>
+      </article>
+      <article class="home-idea">
+        <span class="home-idea-icon"><svg class="home-icon" aria-hidden="true"><use href="#icon-driveway"/></svg></span>
+        <h3>Game-day parking</h3>
+        <p>A driveway near a stadium could be a parking spot on event days.</p>
+      </article>
+    </div>
+  </section>
+
+  <section class="home-section" aria-labelledby="steps-title">
+    <h2 id="steps-title">How it works</h2>
+    <ol class="home-steps" role="list">
+      <li>
+        <span class="home-step-number" aria-hidden="true">1</span>
+        <div><h3>Type your address</h3><p>Start with your street address.</p></div>
+      </li>
+      <li>
+        <span class="home-step-number" aria-hidden="true">2</span>
+        <div><h3>Check your property</h3><p>See what we found and fix anything that’s wrong.</p></div>
+      </li>
+      <li>
+        <span class="home-step-number" aria-hidden="true">3</span>
+        <div><h3>See what it could earn</h3><p>Adjust the numbers to fit your plans.</p></div>
+      </li>
+    </ol>
+  </section>
+
+  <section class="home-section home-earnings" aria-labelledby="earnings-title">
+    <h2 id="earnings-title">What can earn</h2>
+    <p class="home-section-intro">Works for houses, condos and apartment buildings.</p>
+    <ul class="home-earnings-list" role="list">
+      <li><svg class="home-icon" aria-hidden="true"><use href="#icon-driveway"/></svg>Driveway</li>
+      <li><svg class="home-icon" aria-hidden="true"><use href="#icon-yard"/></svg>Backyard</li>
+      <li><svg class="home-icon" aria-hidden="true"><use href="#icon-garage"/></svg>Garage</li>
+      <li><svg class="home-icon" aria-hidden="true"><use href="#icon-room"/></svg>Spare room</li>
+      <li><svg class="home-icon" aria-hidden="true"><use href="#icon-house"/></svg>Whole home</li>
+      <li><svg class="home-icon" aria-hidden="true"><use href="#icon-pool"/></svg>Pool</li>
+      <li><svg class="home-icon" aria-hidden="true"><use href="#icon-storage"/></svg>Storage</li>
+    </ul>
+  </section>
+
+  <section class="home-estimate-note" aria-labelledby="estimate-note-title">
+    <h2 id="estimate-note-title">An estimate you can change</h2>
+    <p>Change the numbers to see what fits. This estimate is private and for planning only. Nothing you type here is saved.</p>
+    <a href="host/">Manage your spaces</a>
+  </section>
 </main>
+
 <footer>
   <div class="wrap">
-    <p><a href="https://milessilverman.github.io/everyspace-demo/">See the earlier demo</a> · <a href="host/">Manage your spaces</a></p>
     <p id="privacy-line">Nothing you enter is saved. While you type, the text is sent to Los Angeles County's public address service to suggest matches. Your property is looked up only when you press the button: the address goes to Los Angeles County's public map services, and addresses they cannot find go to OpenStreetMap's public search. For addresses outside Los Angeles County, the text you type is also sent to Photon, an OpenStreetMap address search, to suggest matches.</p>
     <p id="attribution">Property data: Los Angeles County public GIS services. Map data © OpenStreetMap contributors (ODbL). Address suggestions © OpenStreetMap contributors (via Photon).</p>
   </div>
