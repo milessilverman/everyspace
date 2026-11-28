@@ -1,8 +1,8 @@
 // Address suggestions for the homepage and the estimator: an accessible combobox that only enhances a plain text input
 // (without JavaScript, or when every source fails, the field works as before, and the browser's own address autofill,
 // autocomplete="street-address", keeps working alongside it).
-// Rules: nothing is sent before MIN_CHARS characters; requests are debounced (DEBOUNCE_MS); at most one request in flight
-// (a new keystroke cancels the old one); the previous list stays visible while the next one loads; answers are cached per
+// Rules: nothing is sent before MIN_CHARS characters; requests are debounced (DEBOUNCE_MS); at most one suggest request in
+// flight (a new keystroke cancels the old one and its address checks); the previous list stays visible while the next one loads; answers are cached per
 // typed text for the session, in memory only; at most MAX_ITEMS suggestions, the typed part highlighted; every failure is
 // silent. Choosing a suggestion only fills the field: submitting the form is still the only thing that starts a lookup.
 // Suggestion text is shown as text, never as markup. Nothing is stored.
@@ -22,9 +22,82 @@ const qs = (params) => new URLSearchParams(params).toString().replace(/\+/g, '%2
 const US_STATES = new Set('AL AK AZ AR CA CO CT DE DC FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY'.split(' '));
 /** The US state the typed text ends with (", IL" or ", IL 60602"), or null. */
 const typedState = (t) => { const m = /,\s*([A-Za-z]{2})\b(?:\s+\d{5}(?:-\d{4})?)?\s*$/.exec(String(t).trim()); const st = m?.[1].toUpperCase(); return st && US_STATES.has(st) ? st : null; };
-const COUNTY_SUGGEST = 'https://public.gis.lacounty.gov/public/rest/services/CAMS_Locator/GeocodeServer/suggest';
+const COUNTY_LOCATOR = 'https://public.gis.lacounty.gov/public/rest/services/CAMS_Locator/GeocodeServer';
+const COUNTY_SUGGEST = `${COUNTY_LOCATOR}/suggest`;
+const COUNTY_FIND = `${COUNTY_LOCATOR}/findAddressCandidates`;
 
-/** Los Angeles County's public address service (the CAMS locator `suggest` call; CORS verified for the site origin). */
+// The county's `suggest` call does not check that the house number exists: for "5741 Corbin Ave" it offers that number in
+// every community the street runs through (Chatsworth, Northridge, ...), and only one of them is a real address (seen live
+// 2026-11-28; choosing a wrong one ended in "address not found"). So a suggestion that starts with a house number is checked
+// against the county's address matcher, the same call the lookup makes, and the list shows the addresses that really match.
+/** Fewest points the county matcher must give a candidate (the lookup's own cutoff, core/providers/la-cams-address.js). */
+export const MIN_MATCH_SCORE = 85;
+/** A check that takes longer than this is given up and the suggestion is shown as the county sent it. */
+export const CHECK_TIMEOUT_MS = 2500;
+
+/** "5741 Corbin Avenue, Chatsworth, CA" -> "5741 Corbin Avenue"; null when the suggestion has no house number (a street, a place). */
+export function streetPart(suggestion) {
+  const m = /^\s*(\d+[A-Za-z]?(?:\s+\d\/\d)?\s+[^,]+?)\s*,/.exec(String(suggestion ?? ''));
+  return m ? m[1].replace(/\s+/g, ' ') : null;
+}
+const houseNumber = (s) => String(s ?? '').trim().split(/\s+/)[0].toLowerCase();
+/** The matcher writes "…, Los Angeles, CA, 91356"; shown as "…, Los Angeles, CA 91356". */
+const tidyMatch = (a) => a.trim().replace(/\s+/g, ' ').replace(/,\s*(\d{5}(?:-\d{4})?)$/, ' $1');
+
+/**
+ * The real addresses among the matcher's candidates for one street address: same house number, score at or above the cutoff,
+ * best first, no repeats. Pure (exported for tests).
+ * @param {string} street  e.g. "5741 Corbin Avenue"
+ * @param {any} json       the findAddressCandidates answer
+ * @returns {string[]|null} null when the answer is not usable
+ */
+export function realAddresses(street, json) {
+  if (!Array.isArray(json?.candidates)) return null;
+  const no = houseNumber(street);
+  const ok = json.candidates.filter((c) => Number.isFinite(Number(c?.score)) && Number(c.score) >= MIN_MATCH_SCORE && typeof c?.address === 'string' && houseNumber(c.address) === no);
+  ok.sort((a, b) => Number(b.score) - Number(a.score));
+  return [...new Set(ok.map((c) => tidyMatch(c.address).slice(0, 200)))];
+}
+
+/** Street address (lower case) -> its real addresses. Session memory only; a failed check is not remembered. */
+const checked = new Map();
+async function checkStreet(street, signal) {
+  const key = street.toLowerCase();
+  if (checked.has(key)) return checked.get(key);
+  let timer;
+  const late = new Promise((resolve) => { timer = setTimeout(() => resolve(null), CHECK_TIMEOUT_MS); });
+  const ask = (async () => {
+    const res = await fetch(`${COUNTY_FIND}?${qs({ 'Single Line Input': street, outSR: '4326', maxLocations: '20', f: 'json' })}`, { signal, headers: { Accept: 'application/json' } });
+    if (!res.ok) return null;
+    const list = realAddresses(street, await res.json());
+    if (list && !signal?.aborted) checked.set(key, list);
+    return list;
+  })().catch(() => null);
+  try { return await Promise.race([ask, late]); } finally { clearTimeout(timer); }
+}
+
+/**
+ * Replace each house-numbered suggestion by the addresses that really exist for its street address (in the order the
+ * streets were suggested). A street whose check found nothing real is dropped; a check that failed leaves its suggestions
+ * as they were; suggestions without a house number pass through.
+ * @param {string[]} suggestions
+ * @param {(street:string)=>Promise<string[]|null>} check
+ */
+export async function onlyRealAddresses(suggestions, check) {
+  const streets = [...new Set(suggestions.map(streetPart).filter((s) => s !== null).map((s) => s.toLowerCase()))]; // at most MAX_ITEMS suggestions, so at most that many checks
+  const answers = new Map(await Promise.all(streets.map(async (k) => /** @type {[string, string[]|null]} */ ([k, await check(suggestions.map(streetPart).find((s) => s?.toLowerCase() === k)).catch(() => null)]))));
+  const out = [], done = new Set();
+  for (const s of suggestions) {
+    const k = streetPart(s)?.toLowerCase();
+    if (!k) { out.push(s); continue; }
+    const real = answers.get(k) ?? null;
+    if (real === null) { out.push(s); continue; }
+    if (!done.has(k)) { done.add(k); out.push(...real); }
+  }
+  return [...new Set(out)];
+}
+
+/** Los Angeles County's public address service (the CAMS locator `suggest` call, checked by its address matcher; CORS verified for the site origin). */
 export const countySource = {
   id: 'la-county',
   // The county service only knows Los Angeles County: when the typed text names another state (", IL", "Chicago, IL 60602") it is not asked.
@@ -33,7 +106,8 @@ export const countySource = {
     const res = await fetch(`${COUNTY_SUGGEST}?${qs({ text: text.slice(0, 200), maxSuggestions: String(MAX_ITEMS), f: 'json' })}`, { signal, headers: { Accept: 'application/json' } });
     if (!res.ok) return [];
     const j = await res.json();
-    return Array.isArray(j?.suggestions) ? j.suggestions.map((s) => s?.text).filter((t) => typeof t === 'string') : [];
+    const raw = Array.isArray(j?.suggestions) ? j.suggestions.map((s) => s?.text).filter((t) => typeof t === 'string') : [];
+    return onlyRealAddresses(raw, (street) => checkStreet(street, signal));
   },
 };
 
