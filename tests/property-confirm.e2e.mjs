@@ -220,7 +220,7 @@ await scenario('inline edit: type over a value, Enter applies, commas accepted, 
   await happy(page);
   const before = await figures(page);
   assert.ok(before.length > 0);
-  assert.equal(await page.locator('#facts button:text("Edit"), #facts .btn').count(), 0, 'no Edit buttons');
+  assert.equal(await page.locator('#facts button:text("Edit"):not(.lm-listedit), #facts .btn').count(), 0, 'no Edit buttons');
   await page.click('#f-bedrooms');
   await page.fill('#f-bedrooms', '9');
   await page.press('#f-bedrooms', 'Enter');

@@ -24,7 +24,8 @@
 .q-btn kbd { display: none; font: 600 11px/1 var(--font); opacity: .55; border: 1px solid currentColor; border-radius: 4px; padding: 1px 4px; }
 @media (hover: hover) and (pointer: fine) { .q-btn kbd { display: inline-block; } }
 .q-number .q-numrow { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
-.q-number input { width: 9em; min-height: 48px; font-size: 18px; text-align: right; font-variant-numeric: tabular-nums; }
+.q-number .q-numrow { flex-wrap: wrap; min-width: 0; }
+.q-number input { width: 9em; max-width: 100%; min-width: 0; box-sizing: border-box; min-height: 48px; font-size: 18px; text-align: right; font-variant-numeric: tabular-nums; }
 .q-unit { color: var(--muted); font-size: 14px; }
 .q-row2 { grid-template-columns: 1fr 1fr; }
 .q-err { margin: 0 0 8px; font-size: 13px; font-weight: 600; color: var(--bad); }

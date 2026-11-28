@@ -106,7 +106,7 @@
 .lm-listedit { white-space: nowrap; }
 .lm-headbtns { display: flex; gap: 6px; flex-wrap: wrap; }
 .lm-img { transform-origin: 0 0; }
-.lm-frame .lm-img { transition: transform .18s ease; }
+.lm-img { max-width: none; }
 /* phone: a compact pinned strip, bigger on request and while an area is edited */
 .lm-compact { padding: 6px 8px; margin: 0; border-radius: 10px; }
 .lm-compact .lm-sub, .lm-compact .lm-actions, .lm-compact .lm-legend, .lm-compact .lm-tip, .lm-compact .lm-note, .lm-compact .lm-pick, .lm-compact .lm-editbar { display: none; }
@@ -118,7 +118,9 @@
 .lm-phone.lm-big { max-height: calc(100vh - var(--lm-top, 56px) - 10px); overflow-y: auto; margin: 0; }
 .lm-phone .lm-editbtns .btn, .lm-phone .lm-ctl .btn { min-height: 40px; }
 @media (prefers-reduced-motion: reduce) {
-  .lm-svg [data-area]:not(.lm-area), .lm-canvas, .lm-frame .lm-img { transition: none !important; }
+  .lm-svg [data-area]:not(.lm-area), .lm-canvas { transition: none !important; }
   .lm-val.lm-tick { animation: none !important; }
   .fact.lm-flash { animation: none !important; background: var(--accent-soft); }
 }
+
+.lm.lm-phone.is-editing .lm-sub { display: none; }

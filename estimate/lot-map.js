@@ -224,12 +224,27 @@ export function frameFor(ring) {
 }
 
 /** Page layout hooks shared with the read-only picture: mark the property card as having a picture (two columns / pinned strip) and tell CSS how tall the header is. */
-export function syncPicLayout(shown) {
+export function syncPicLayout(shown, editing = false) {
   try {
     document.getElementById('property')?.classList.toggle('has-pic', Boolean(shown));
+    document.getElementById('property')?.classList.toggle('pic-editing', Boolean(shown && editing));
     const h = document.querySelector('header.top')?.getBoundingClientRect().height;
     document.documentElement.style.setProperty('--lm-top', `${Math.round(h || 56)}px`);
   } catch { /* layout only */ }
+}
+
+/**
+ * The photo's box for a display of a given width/height ratio: the lot's box (plus 15 m) widened so the frame, whatever its shape, is filled
+ * with photo, and tall enough for a tall frame (a phone, a taller strip) too. Never smaller than frameFor(ring).
+ */
+export function frameForDisplay(ring, containerAspect) {
+  const f = frameFor(ring);
+  const wm = (f.bbox[2] - f.bbox[0]) * f.kx, hm = (f.bbox[3] - f.bbox[1]) * f.ky;
+  const A = Math.max(Number.isFinite(containerAspect) ? containerAspect : 1.2, 2.0);
+  const W = Math.max(wm, hm * A), H = Math.max(hm, wm / 0.7);
+  const cx = (f.bbox[0] + f.bbox[2]) / 2, cy = (f.bbox[1] + f.bbox[3]) / 2;
+  const bbox = [cx - W / 2 / f.kx, cy - H / 2 / f.ky, cx + W / 2 / f.kx, cy + H / 2 / f.ky];
+  return { bbox, aspect: W / H, kx: f.kx, ky: f.ky };
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -313,7 +328,8 @@ export function initLotMap(opts) {
       rest.roof = { yearBuilt: num(v('year_built')) ? v('year_built') : null, propertyType: typeof v('property_type') === 'string' ? v('property_type') : null, stories: num(v('floors')) ? v('floors') : null, state: rest.roof?.state ?? null };
     }
     const g = { ...rest, parcel: M.lot ? toGeo(M.lot) : null, buildings: live().map((b) => ({ polygon: toGeo(b), main: b.main, kind: b.what ?? null })) };
-    if (M.yards.front || M.yards.back) g.yards = { ...(M.yards.front ? { front: toGeo(M.yards.front) } : {}), ...(M.yards.back ? { back: toGeo(M.yards.back) } : {}), later: M.yardLater };
+    const yf = M.yards.front && !M.yards.front.inert ? M.yards.front : null, yb = M.yards.back && !M.yards.back.inert ? M.yards.back : null;
+    if (yf || yb) g.yards = { ...(yf ? { front: toGeo(yf) } : {}), ...(yb ? { back: toGeo(yb) } : {}), later: M.yardLater };
     if (M.drv) { const dg = toGeo(M.drv); g.driveway = dg; if (!core.aware && M.drv.touched) g.exclude = [...(rest.exclude ?? []), dg]; } // core without driveway support: keep the owner's driveway out of the usable yard here
     if (M.frontIds && M.lot) { const l = frontLine(M.frontIds); if (l) { g.streets = []; g.streetName = null; g.frontPoint = null; g.frontEdge = { coordinates: l }; } }
     return g;
@@ -415,7 +431,7 @@ export function initLotMap(opts) {
       }
     } catch { M = null; return false; }
     if (!M.lot) { M = null; return false; }
-    M.frame = frameFor(M.lot.verts.map((v) => [v.lng, v.lat]));
+    M.frame = frameFor(M.lot.verts.map((v) => [v.lng, v.lat])); M.wm = (M.frame.bbox[2] - M.frame.bbox[0]) * M.frame.kx;
     const hasRef = (M.rest.streets && M.rest.streets.length) || M.rest.frontEdge || M.rest.frontPoint;
     if (!hasRef && !M.starter) { const ids = inferFront(); if (ids) { M.frontIds = ids; M.baseFront = ids; } }
     M.base = snap();
@@ -434,7 +450,7 @@ export function initLotMap(opts) {
     mount.className = 'lm';
     mount.setAttribute('role', 'region');
     mount.setAttribute('aria-labelledby', `${uid}-title`);
-    const head = html('div', { class: 'lm-head' }, null, mount);
+    const head = html('div', { class: 'lm-head' }, null, mount); D.head = head;
     const tw = html('div', { class: 'lm-titlewrap' }, null, head);
     html('h3', { id: `${uid}-title`, class: 'lm-title' }, 'Your lot from above', tw);
     D.sub = html('p', { class: 'lm-sub small muted', id: `${uid}-sub` }, '', tw);
@@ -545,61 +561,88 @@ export function initLotMap(opts) {
   }
 
   // ----- layout / structure ------------------------------------------------------------------------------------
+  // THE PICTURE'S SPACES. The photo covers a "world" of WW x HH units (HH = 1000, WW from the box's true ground aspect); one world unit is the
+  // same length east-west and north-south. The frame (what is on screen, Wd x Hd px) shows a window onto it: M.view = {cx, cy, sc} = the world
+  // point at the frame's middle and screen pixels per world unit. Screen x = (X - cx) * sc + Wd / 2, and the same for y.
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  const headerH = () => Math.round(document.querySelector('header.top')?.getBoundingClientRect().height || 56);
+  /** how tall the frame can be: the room under the header, less the title row and (while editing) the bar */
+  function frameHeight() {
+    const ph = phone(), ih = window.innerHeight || 800, top = headerH();
+    const headH = (D.head?.offsetHeight || 44), barH = M.edit && !D.editBar.hidden ? D.editBar.offsetHeight + 12 : 0, creditH = D.credit && !D.credit.hidden ? D.credit.offsetHeight + 10 : 0;
+    if (M.edit) return Math.round(clamp(ih - top - headH - barH - creditH - (ph ? 78 : 42), 240, 880)); // the whole picture and the bar fit the screen together
+    if (ph) return Math.round(M.big ? Math.max(260, ih * 0.5) : Math.max(110, ih * 0.3 - 46));
+    return Math.round(clamp(ih - top - 200, 300, 760));
+  }
   function layout() {
     if (!M) return;
-    const ph = phone(), ih = window.innerHeight || 800;
-    mount.classList.toggle('lm-phone', ph); mount.classList.toggle('lm-compact', ph && !M.big); mount.classList.toggle('lm-big', ph && M.big);
+    const ph = phone();
+    mount.classList.toggle('lm-phone', ph); mount.classList.toggle('lm-compact', ph && !M.big && !M.edit); mount.classList.toggle('lm-big', ph && (M.big || Boolean(M.edit)));
     const cw = D.stage.clientWidth || mount.clientWidth || 600;
     M.stageW = cw;
-    const maxH = ph ? (M.big ? Math.max(260, ih * 0.5) : Math.max(110, ih * 0.3 - 46)) : Math.min(620, Math.max(280, ih * 0.55));
-    const Wd = Math.max(80, Math.floor(Math.min(cw, maxH * M.frame.aspect)));
-    const Hd = Math.round(Wd / M.frame.aspect);
+    const Wd = Math.max(80, Math.floor(cw)), Hd = frameHeight();
     M.Wd = Wd; M.Hd = Hd; M.proj = null;
+    M.WW = Math.round(1000 * M.frame.aspect * 100) / 100; M.HH = 1000; M.upm = M.WW / M.wm;
     D.frame.style.width = `${Wd}px`; D.frame.style.height = `${Hd}px`;
     D.svg.setAttribute('viewBox', `0 0 ${Wd} ${Hd}`);
     D.svg.setAttribute('width', String(Wd)); D.svg.setAttribute('height', String(Hd));
     D.maskBg.setAttribute('width', String(Wd)); D.maskBg.setAttribute('height', String(Hd));
-    D.img.style.width = `${Wd}px`; D.img.style.height = `${Hd}px`;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     D.canvas.width = Math.round(Wd * dpr); D.canvas.height = Math.round(Hd * dpr);
     D.frame.dataset.bbox = M.frame.bbox.map((v) => v.toFixed(9)).join(',');
-    D.frame.dataset.size = `${Wd}x${Hd}`;
+    D.frame.dataset.size = `${Wd}x${Hd}`; D.frame.dataset.world = `${M.WW},${M.HH}`;
     D.bSize.hidden = !ph;
-    if (!M.edit) M.view = restView();
+    M.view = M.edit && M.edit.area !== 'street' && M.edit.zoomed !== false && areaShape(M.edit.area) ? viewFor(areaShape(M.edit.area)) : restView();
     applyView();
   }
 
-  const proj = () => M.proj ?? (M.proj = frameProject(NAIP_BACKDROP.frame, M.frame.bbox, M.Wd, M.Hd));
-  /** lng/lat <-> pixels of the VIEW: the whole frame, or (while one area is edited) a zoomed window onto it */
-  const px = (lng, lat) => { const [X, Y] = proj().toPx(lng, lat); const v = M.view; return [(X - v.x * M.Wd) * v.z, (Y - v.y * M.Hd) * v.z]; };
-  const inv = (x, y) => { const v = M.view; return proj().toLngLat(x / v.z + v.x * M.Wd, y / v.z + v.y * M.Hd); };
-  /** the picture when nothing is being edited: the whole frame, or on a phone's compact strip the photo cropped to the lot */
-  const restView = () => (phone() && !M.big && M.lot && M.Wd ? viewFor(M.lot, 10) : { x: 0, y: 0, z: 1 });
+  const proj = () => M.proj ?? (M.proj = frameProject(NAIP_BACKDROP.frame, M.frame.bbox, M.WW, M.HH));
+  /** lng/lat <-> screen pixels of the frame, through the world and the current view */
+  const px = (lng, lat) => { const [X, Y] = proj().toPx(lng, lat); const v = M.view; return [(X - v.cx) * v.sc + M.Wd / 2, (Y - v.cy) * v.sc + M.Hd / 2]; };
+  const inv = (x, y) => { const v = M.view; return proj().toLngLat((x - M.Wd / 2) / v.sc + v.cx, (y - M.Hd / 2) / v.sc + v.cy); };
+  const worldBox = (sh) => { const pts = sh.verts.map((q) => proj().toPx(q.lng, q.lat)); const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]); return { x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys), pts }; };
+  /** the window that shows a box with a margin (world units), no more than `capPxPerM` pixels per metre, kept inside the photo where it fits */
+  function windowFor(box, marginW, capPxPerM, minSc = 0) {
+    const bw = Math.max(1e-6, box.x1 - box.x0), bh = Math.max(1e-6, box.y1 - box.y0);
+    let sc = Math.min(M.Wd / (bw + 2 * marginW), M.Hd / (bh + 2 * marginW));
+    if (capPxPerM) sc = Math.min(sc, capPxPerM / M.upm);
+    sc = Math.max(sc, minSc);
+    const ww = M.Wd / sc, wh = M.Hd / sc;
+    let cx = (box.x0 + box.x1) / 2, cy = (box.y0 + box.y1) / 2;
+    cx = ww >= M.WW ? M.WW / 2 : clamp(cx, ww / 2, M.WW - ww / 2); cy = wh >= M.HH ? M.HH / 2 : clamp(cy, wh / 2, M.HH - wh / 2);
+    return { cx, cy, sc };
+  }
+  /** nothing being edited: the lot with 15 m round it; on a phone's compact strip the photo cropped close to the lot */
+  const restView = () => (M.lot && M.Wd ? windowFor(worldBox(M.lot), (phone() && !M.big ? 3 : 15) * M.upm) : { cx: (M.WW ?? 1000) / 2, cy: 500, sc: 1 });
+  const zoomed = () => M.view.sc > restView().sc * 1.06;
   function applyView() {
     const v = M.view;
-    D.img.style.transform = v.z === 1 && v.x === 0 && v.y === 0 ? '' : `scale(${v.z}) translate(${(-v.x * M.Wd).toFixed(2)}px, ${(-v.y * M.Hd).toFixed(2)}px)`;
-    D.frame.dataset.zoom = v.z.toFixed(2); D.frame.dataset.view = `${v.x.toFixed(5)},${v.y.toFixed(5)},${v.z.toFixed(4)}`;
+    D.img.style.width = `${M.WW}px`; D.img.style.height = `${M.HH}px`;
+    D.img.style.transform = `translate(${(M.Wd / 2 - v.cx * v.sc).toFixed(2)}px, ${(M.Hd / 2 - v.cy * v.sc).toFixed(2)}px) scale(${v.sc})`;
+    D.frame.dataset.zoom = (v.sc / restView().sc).toFixed(2); D.frame.dataset.view = `${v.cx.toFixed(3)},${v.cy.toFixed(3)},${v.sc.toFixed(5)}`;
   }
-  /** the window that fits one area with a margin (fractions of the frame) */
-  function viewFor(sh, padPx) {
-    const pts = sh.verts.map((q) => proj().toPx(q.lng, q.lat));
-    const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
-    const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
-    const bw = Math.max(8, x1 - x0), bh = Math.max(8, y1 - y0), pad = padPx ?? (Math.max(bw, bh) * 0.3 + 24);
-    const z = Math.max(1, Math.min(5, M.Wd / (bw + 2 * pad), M.Hd / (bh + 2 * pad)));
-    const Ww = M.Wd / z, Hh = M.Hd / z;
-    const vx = Math.max(0, Math.min(M.Wd - Ww, (x0 + x1) / 2 - Ww / 2)), vy = Math.max(0, Math.min(M.Hd - Hh, (y0 + y1) / 2 - Hh / 2));
-    return { x: vx / M.Wd, y: vy / M.Hd, z };
+  /** the window that fits one area with a margin; if two corners would sit closer than ~46 px, zoom in further (as far as the whole area still fits) */
+  function viewFor(sh) {
+    const box = worldBox(sh), bw = Math.max(1e-6, box.x1 - box.x0), bh = Math.max(1e-6, box.y1 - box.y0);
+    const pad = Math.max(bw, bh) * 0.14 + 1.5 * M.upm;
+    let v = windowFor(box, pad, 45);
+    let minD = Infinity;
+    for (let i = 0; i < box.pts.length; i++) for (let j = i + 1; j < box.pts.length; j++) minD = Math.min(minD, Math.hypot(box.pts[i][0] - box.pts[j][0], box.pts[i][1] - box.pts[j][1]));
+    if (Number.isFinite(minD) && minD > 0 && minD * v.sc < 46) {
+      const areaFit = Math.min(M.Wd / (bw * 1.08), M.Hd / (bh * 1.08));
+      v = windowFor(box, pad, 0, Math.max(v.sc, Math.min(46 / minD, areaFit)));
+    }
+    return v;
   }
   function setView(target) {
-    const to = target ?? { x: 0, y: 0, z: 1 };
+    const to = target ?? restView();
     cancelAnimationFrame(M.viewRaf);
     if (reduced() || !M.Wd || D.body.hidden) { M.view = { ...to }; applyView(); if (D.els) paint(false); return; }
     const from = { ...M.view }, t0 = performance.now();
     const step = (t) => {
       if (!M) return;
       const k = Math.min(1, (t - t0) / 180), e = 1 - Math.pow(1 - k, 3);
-      M.view = { x: from.x + (to.x - from.x) * e, y: from.y + (to.y - from.y) * e, z: from.z + (to.z - from.z) * e };
+      M.view = { cx: from.cx + (to.cx - from.cx) * e, cy: from.cy + (to.cy - from.cy) * e, sc: from.sc * Math.pow(to.sc / from.sc, e) };
       applyView(); paint(false);
       if (k < 1) M.viewRaf = requestAnimationFrame(step);
     };
@@ -607,7 +650,7 @@ export function initLotMap(opts) {
   }
   function toggleZoom() {
     if (!M.edit || M.edit.area === 'street') return;
-    if (M.view.z > 1.001) setView(null); else { const sh = areaShape(M.edit.area); if (sh) setView(viewFor(sh)); }
+    if (zoomed()) { M.edit.zoomed = false; setView(restView()); } else { M.edit.zoomed = true; const sh = areaShape(M.edit.area); if (sh) setView(viewFor(sh)); }
     updateActions();
   }
   function setBig(big, user) {
@@ -615,9 +658,14 @@ export function initLotMap(opts) {
     M.big = big;
     D.bSize.textContent = big ? 'Smaller' : 'Bigger'; D.bSize.setAttribute('aria-pressed', big ? 'true' : 'false');
     layout();
-    if (M.edit && M.edit.area !== 'street' && M.view.z > 1.001) { const sh = areaShape(M.edit.area); if (sh) { M.view = viewFor(sh); applyView(); } }
     paint(true);
     if (user) D.bSize.focus({ preventScroll: true });
+  }
+  /** wide screens: while an area is edited the picture takes the whole width and the list steps aside; the scroll position comes back after */
+  function setEditLayout(on) {
+    const prop = document.getElementById('property'); if (!prop || phone()) return;
+    if (on) { M.scrollBefore = window.scrollY; prop.classList.add('pic-editing'); const slot = document.getElementById('lot-map-slot'); window.scrollTo(0, Math.max(0, (slot ?? prop).getBoundingClientRect().top + window.scrollY - headerH() - 10)); }
+    else { prop.classList.remove('pic-editing'); if (M.scrollBefore != null) window.scrollTo(0, M.scrollBefore); M.scrollBefore = null; }
   }
 
   const shapes = () => [M.lot, ...(M.yards.front ? [M.yards.front] : []), ...(M.yards.back ? [M.yards.back] : []), ...(M.drv ? [M.drv] : []), ...live()];
@@ -773,6 +821,12 @@ export function initLotMap(opts) {
       g.style.display = len < 52 ? 'none' : '';
     }
     for (const [id, g] of D.els.handles) g.classList.toggle('is-sel', Boolean(M.sel && M.sel.type === 'v' && M.sel.vid === id));
+    // corners close together share the room: each corner's grab area is at most half the distance to its nearest neighbour, so two never overlap
+    const hs = [...D.els.handles.values()];
+    if (hs.length > 1) {
+      const pts = hs.map((g) => [Number(g.dataset.x), Number(g.dataset.y)]);
+      hs.forEach((g, i) => { let d = Infinity; pts.forEach((p, j) => { if (j !== i) d = Math.min(d, Math.hypot(p[0] - pts[i][0], p[1] - pts[i][1])); }); g.firstChild?.setAttribute('r', clamp(d / 2 - 0.5, 8, 22).toFixed(1)); });
+    }
   }
 
   function paint(full) {
@@ -788,7 +842,7 @@ export function initLotMap(opts) {
     paintLegend(m);
     paintUsable(m);
     applyHl(); updateLive(m);
-    if (full) D.frame.dataset.model = JSON.stringify({ lot: M.lot.verts.map((v) => [v.lng, v.lat]), blds: live().map((b) => ({ main: b.main, what: b.what, geo: toGeo(b) })), drv: M.drv ? toGeo(M.drv) : null, drvTouched: Boolean(M.drv && M.drv.touched), yards: M.yards.front || M.yards.back ? { ...(M.yards.front ? { front: toGeo(M.yards.front) } : {}), ...(M.yards.back ? { back: toGeo(M.yards.back) } : {}), later: M.yardLater } : null });
+    if (full) D.frame.dataset.model = JSON.stringify({ lot: M.lot.verts.map((v) => [v.lng, v.lat]), blds: live().map((b) => ({ main: b.main, what: b.what, geo: toGeo(b) })), drv: M.drv ? toGeo(M.drv) : null, drvTouched: Boolean(M.drv && M.drv.touched), yards: (M.yards.front && !M.yards.front.inert) || (M.yards.back && !M.yards.back.inert) ? { ...(M.yards.front && !M.yards.front.inert ? { front: toGeo(M.yards.front) } : {}), ...(M.yards.back && !M.yards.back.inert ? { back: toGeo(M.yards.back) } : {}), later: M.yardLater } : null });
     D.frame.dataset.front = M.frontIds && M.lot ? JSON.stringify(frontLine(M.frontIds)) : '';
     updateActions();
   }
@@ -872,7 +926,8 @@ export function initLotMap(opts) {
       ring = [at(a0, d0), at(a1, d0), at(a1, d1), at(a0, d1)];
     }
     const poly = { type: 'Polygon', coordinates: [[...ring.map((v) => [v.lng, v.lat]), [ring[0].lng, ring[0].lat]]] };
-    return makeShape(poly, 'yard', false, which);
+    const ys = makeShape(poly, 'yard', false, which); ys.inert = true; // drawn, but not measured until a corner is actually moved: opening an edit changes no number
+    return ys;
   }
 
   function paintZones(m) {
@@ -1018,7 +1073,7 @@ export function initLotMap(opts) {
       D.bRmDrv.hidden = ed.area !== 'drv';
       D.bUndo.hidden = street; D.bResetArea.hidden = street; D.bZoom.hidden = street;
       D.bUndo.disabled = !ed.undo.length;
-      D.bZoom.textContent = M.view.z > 1.001 ? 'Zoom out' : 'Zoom in';
+      D.bZoom.textContent = zoomed() ? 'Zoom out' : 'Zoom in';
       const bsh = !street && ed.area !== 'lot' && ed.area !== 'drv' && ed.area !== 'house' && ed.area !== 'front' && ed.area !== 'back' ? shapeOf(ed.area) : null;
       D.kindWrap.hidden = !bsh;
       const kkey = bsh ? `${bsh.id}:${bsh.what ?? ''}:${bsh.whatSrc ?? ''}` : '';
@@ -1039,6 +1094,7 @@ export function initLotMap(opts) {
   const beginGesture = () => {
     if (M.gestureBefore) return;
     M.gestureBefore = snap();
+    if (M.edit && M.yards[M.edit.area]) M.yards[M.edit.area].inert = false; // from the first move on, the yard follows the owner's outline
     if (M.edit) { M.edit.undo.push(M.gestureBefore); M.edit.changed = true; if (M.edit.area === 'front' || M.edit.area === 'back') M.yardLater = M.edit.area; }
   };
   const kindOf = (sh) => (sh.kind === 'lot' ? 'lot' : sh.kind === 'drv' ? 'drv' : sh.kind === 'yard' ? 'yard' : 'bld');
@@ -1221,17 +1277,26 @@ export function initLotMap(opts) {
     const sh = areaShape(M.edit.area);
     paint(true); if (sh) commit(kindOf(sh));
   }
+  /** the picture's space changed (edit layout on or off, the bar shown or hidden): resize the frame and glide the view to where it should be */
+  function relayout(enter) {
+    const from = { ...M.view };
+    updateActions(); // the bar, or its absence, decides how tall the frame can be
+    setEditLayout(enter);
+    layout();
+    const to = M.view; M.view = from; applyView();
+    structure();
+    setView(to);
+  }
   function enterEdit(areaIn) {
     if (!M || !areaIn) return;
     if (M.edit) { flushEdit(); M.edit = null; }
     let area = areaIn;
     if (area === 'garage' || area === 'adu') { const b = live().find((x) => x.what === area); if (!b) return; area = b.id; }
     M.pick = null; M.hl = null; M.sel = null; D.kindKey = null;
+    try { const slot = mount.closest('#lot-map-slot'); if (slot) slot.scrollTop = 0; } catch { /* layout only */ } // the picture, not the legend, is what shows while editing
     if (area === 'street') {
-      M.edit = { area, undo: [], changed: false, msg: '' };
-      try { const slot = mount.closest('#lot-map-slot'); if (slot) slot.scrollTop = 0; } catch { /* layout only */ }
-      if (phone()) { M.bigBefore = M.big; if (!M.big) setBig(true, false); }
-      structure(); setView(null); paint(true);
+      M.edit = { area, undo: [], changed: false, msg: '', zoomed: false };
+      relayout(true); paint(true);
       (D.els.edges.find((x) => x.sh.kind === 'lot')?.line)?.focus({ preventScroll: true });
       return;
     }
@@ -1242,12 +1307,8 @@ export function initLotMap(opts) {
       M.yards[area] = sh; created = true;
     }
     if (!sh) return;
-    M.edit = { area, undo: [], created, changed: false, msg: '' };
-    try { const slot = mount.closest('#lot-map-slot'); if (slot) slot.scrollTop = 0; } catch { /* layout only */ } // the picture, not the legend, is what shows while editing
-    if (phone()) { M.bigBefore = M.big; if (!M.big) setBig(true, false); }
-    structure();
-    setView(viewFor(sh));
-    paint(true);
+    M.edit = { area, undo: [], created, changed: false, msg: '', zoomed: true };
+    relayout(true); paint(true);
     D.els.handles.values().next().value?.focus({ preventScroll: true });
     announce(`Editing ${areaName(area)}. Drag a corner, or use the arrow keys.`);
   }
@@ -1257,8 +1318,7 @@ export function initLotMap(opts) {
     const { area, created, changed } = M.edit;
     if (created && !changed && (area === 'front' || area === 'back')) M.yards[area] = null; // looked at, not changed: back to the automatic split
     M.edit = null; M.sel = null; D.kindKey = null;
-    if (phone() && M.bigBefore === false && M.big) setBig(false, false);
-    structure(); setView(restView()); paint(true);
+    relayout(false); paint(true);
     if (focusBack && area !== 'street') (document.getElementById(`${uid}-edit-${area}`) ?? D.bAddBld)?.focus({ preventScroll: true });
   }
   function undoEdit() {
@@ -1542,7 +1602,7 @@ export function initLotMap(opts) {
     if (!M || M.imgState !== 'idle') return;
     M.imgState = 'loading';
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const long = Math.max(SIDE_PX.min, Math.min(SIDE_PX.max, Math.round(Math.max(M.Wd, M.Hd) * dpr)));
+    const long = Math.round(clamp(M.wm * 9 * (dpr > 1 ? 1.15 : 1), 700, 1800)); // about 9 px per metre across the whole box: enough for the picture at its largest
     const url = photoUrl(M.frame.bbox, long, core.usgs);
     D.frame.dataset.photoUrl = url;
     D.img.src = url;
@@ -1573,7 +1633,10 @@ export function initLotMap(opts) {
         if (suspended) return;
         const s2 = readSource();
         if (!s2 || !setup(s2)) { mount.hidden = true; return; }
-        build(); mount.hidden = false; layout(); structure(); D.sub.textContent = subline(); paint(true); afterRender();
+        build(); mount.hidden = false;
+        // the photo's box follows the shape of the space it will fill, so the picture is as large as the column allows
+        M.frame = frameForDisplay(M.lot.verts.map((v) => [v.lng, v.lat]), (D.stage.clientWidth || 600) / frameHeight()); M.wm = (M.frame.bbox[2] - M.frame.bbox[0]) * M.frame.kx;
+        layout(); structure(); D.sub.textContent = subline(); paint(true); afterRender();
         setTimeout(() => { if (M) loadPhoto(); }, 0);
       }, 0); });
       return;
@@ -1651,16 +1714,16 @@ export function initLotMap(opts) {
     for (const row of document.querySelectorAll('#facts .fact[data-key]')) {
       const area = LINE_EDIT[row.dataset.key];
       if (!area || row.querySelector('.lm-listedit') || !canEdit(area)) continue;
-      const ctl = row.querySelector('.fact-ctl'); if (!ctl) continue;
+      const ctl = row.querySelector('.fact-meta') ?? row.querySelector('.fact-ctl'); if (!ctl) continue;
       const label = row.querySelector('.flabel')?.textContent?.trim() || row.dataset.key;
       const b = document.createElement('button');
-      b.type = 'button'; b.className = 'linkbtn lm-listedit'; b.dataset.lmEdit = area; b.textContent = 'Edit on photo'; b.setAttribute('aria-label', `Edit ${label} on the photo`);
+      b.type = 'button'; b.tabIndex = -1; /* typing down the list stays a straight run of inputs; the same Edit buttons sit in the picture's legend */ b.className = 'linkbtn lm-listedit'; b.dataset.lmEdit = area; b.textContent = 'Edit on photo'; b.setAttribute('aria-label', `Edit ${label} on the photo`);
       ctl.append(b);
     }
   }
   function afterRender() {
     const shown = Boolean(M && !mount.hidden && !suspended);
-    syncPicLayout(shown);
+    syncPicLayout(shown, Boolean(M?.edit) && !phone());
     if (shown) { try { injectListButtons(); observeRows(); } catch { /* the buttons are a convenience */ } }
   }
   const hdr = document.querySelector('header.top');

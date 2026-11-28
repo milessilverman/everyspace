@@ -264,14 +264,37 @@ footer p + p { margin-top: 6px; }
 }
 
 /* ---- property layout (MAP) -------------------------------------------------------------------------------------------------------------------
-   Page 1: on wide screens the list and the questions scroll on the left and the picture of the lot stays pinned on the right; on a phone the
-   picture is a compact strip pinned under the header. lot-map.js marks #property with .has-pic and sets --lm-top to the header's height. */
+   Page 1. Wide screens (900 px and up): the property section uses up to 1280 px; the list takes about 41% on the left and the picture of the lot
+   about 59% on the right, pinned below the header while the section scrolls. While an area is being edited the picture takes the whole width
+   (.pic-editing) and the list steps aside. A phone gets a compact strip pinned under the header. lot-map.js marks #property with .has-pic
+   (and .pic-editing) and sets --lm-top to the header's height. */
 .fact.lm-flash { border-radius: 8px; }
+/* A line in the list: label, then the input with its unit and the "≈" on the first row; the quiet controls (Edit on photo, Edited by you, Undo)
+   on a second row under the input, left-aligned, each one whole (never broken across lines, never on top of another). */
+.fact { grid-template-columns: minmax(7em, 11.5em) minmax(0, 1fr); grid-template-areas: "label ctl" ". meta"; column-gap: 12px; row-gap: 2px; }
+.fact > .flabel { grid-area: label; min-width: 0; }
+.fact > .fact-ctl { grid-area: ctl; min-width: 0; }
+.fact > .fact-meta { grid-area: meta; justify-content: flex-start; flex-wrap: wrap; gap: 2px 12px; min-width: 0; }
+.fact > .fact-meta:empty { display: none; }
+.fact > .fact-meta > *, .fact-ctl > .unit, .fact-ctl > .approx, .fact-ctl > .yn-b { white-space: nowrap; }
+.fact > .fact-meta > .linkbtn { padding: 2px; }
+.fact-ctl input[type=text] { max-width: 100%; }
+@media (max-width: 680px) {
+  .fact { grid-template-columns: minmax(0, 1fr); grid-template-areas: "label" "ctl" "meta"; padding: 9px 0; }
+  .fact:not([data-state="edited"]) > .fact-meta:not(:empty) { display: flex; }
+  .fact:not([data-state="edited"]) > .fact-meta:empty { display: none; }
+  .fact > .fact-ctl { grid-column: auto; }
+}
 @media (min-width: 900px) {
-  #property.has-pic { display: grid; grid-template-columns: minmax(0, 1fr) minmax(380px, 40%); column-gap: 24px; align-items: start; }
+  #property.has-pic { display: grid; grid-template-columns: minmax(330px, 7fr) minmax(0, 10fr); column-gap: 24px; align-items: start;
+    margin-left: calc((100% - min(1280px, 100vw - 48px)) / 2); margin-right: calc((100% - min(1280px, 100vw - 48px)) / 2); }
   #property.has-pic > * { grid-column: 1; min-width: 0; }
   #property.has-pic > #lot-map-slot { grid-column: 2; grid-row: 1 / span 40; position: sticky; top: calc(var(--lm-top, 64px) + 12px); align-self: start; z-index: 4; max-height: calc(100vh - var(--lm-top, 64px) - 28px); overflow-y: auto; }
   #property.has-pic #lot-map-slot .lm { margin: 0; }
+  /* an area is being edited: the picture takes the whole width, the list waits behind it */
+  #property.has-pic.pic-editing { grid-template-columns: minmax(0, 1fr); }
+  #property.has-pic.pic-editing > *:not(#lot-map-slot):not(.prop-head) { display: none; }
+  #property.has-pic.pic-editing > #lot-map-slot { grid-column: 1; grid-row: auto; max-height: none; overflow: visible; }
 }
 @media (max-width: 899px) {
   #property.has-pic > #lot-map-slot { position: sticky; top: var(--lm-top, 56px); z-index: 6; background: var(--surface); margin: 0 -4px 6px; padding: 2px 0; }
