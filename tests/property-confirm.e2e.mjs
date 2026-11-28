@@ -8,13 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
-import { createRequire } from 'node:module';
-import { execSync } from 'node:child_process';
-
-const require = createRequire(import.meta.url);
-let pw;
-try { pw = require('playwright'); } catch { pw = createRequire(path.join(execSync('npm root -g').toString().trim(), 'x.js'))('playwright'); }
-const { chromium } = pw;
+import { launchBrowser } from './support/browser.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const FX = path.join(ROOT, 'core/tests/fixtures/parcel');
@@ -71,7 +65,7 @@ await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const ORIGIN = `http://127.0.0.1:${server.address().port}`;
 const URL_PAGE = `${ORIGIN}/estimate/`;
 
-const browser = await chromium.launch();
+const browser = await launchBrowser();
 const failures = [];
 let passed = 0;
 const allExternal = [];

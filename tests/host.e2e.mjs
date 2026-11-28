@@ -4,12 +4,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createRequire } from 'node:module';
-import { execSync } from 'node:child_process';
-const require = createRequire(import.meta.url);
-let pw;
-try { pw = require('playwright'); } catch { pw = createRequire(path.join(execSync('npm root -g').toString().trim(), 'x.js'))('playwright'); }
-const { chromium } = pw;
+import { launchBrowser } from './support/browser.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const TOKEN = 'SECRETTOKEN123';
@@ -89,7 +84,7 @@ const base = `http://127.0.0.1:${server.address().port}`;
 const failures = []; const check = (ok, msg) => { console.log(`${ok ? 'ok  ' : 'FAIL'} ${msg}`); if (!ok) failures.push(msg); };
 const consoleErrors = []; const unmocked = []; const supabaseHits = [];
 
-const browser = await chromium.launch();
+const browser = await launchBrowser();
 try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   page.on('console', (m) => { if (m.type() === 'error') consoleErrors.push(m.text()); });

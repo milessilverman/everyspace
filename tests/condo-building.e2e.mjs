@@ -12,8 +12,7 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
-import { createRequire } from 'node:module';
-import { execSync } from 'node:child_process';
+import { launchBrowser } from './support/browser.mjs';
 import { PLACES, unitList, fakeLookup, withQuantity, withPerUnit } from './support/mf-contract.mjs';
 import { parseUnit, withUnit, sameAddress, CONDO_FACTS, BUILDING_FACTS, LAND_FACTS } from '../estimate/unit-adapter.js';
 import { identifyOpportunities as realIdentify, defaultResourceCapacity } from '../core/opportunities.js';
@@ -22,11 +21,6 @@ import { optimize } from '../core/optimizer.js';
 import { toSourcedProfile } from '../core/property-profile.js';
 import { applyOwnerCorrection, setAttribute } from '../core/profile.js';
 import { sourced } from '../core/provenance.js';
-
-const require = createRequire(import.meta.url);
-let pw;
-try { pw = require('playwright'); } catch { pw = createRequire(path.join(execSync('npm root -g').toString().trim(), 'x.js'))('playwright'); }
-const { chromium } = pw;
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SHOTS = '/tmp/claude-0/-home-user/bbdf9db1-6a70-50d8-8c4a-2fe889e65e9c/scratchpad/mf';
@@ -91,7 +85,7 @@ await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const ORIGIN = `http://127.0.0.1:${server.address().port}`;
 const URL_PAGE = `${ORIGIN}/estimate/`;
 
-const browser = await chromium.launch();
+const browser = await launchBrowser();
 const failures = [];
 let passed = 0;
 const allExternal = [];

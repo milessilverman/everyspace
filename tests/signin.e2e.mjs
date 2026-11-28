@@ -5,12 +5,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createRequire } from 'node:module';
-import { execSync } from 'node:child_process';
-const require = createRequire(import.meta.url);
-let pw;
-try { pw = require('playwright'); } catch { pw = createRequire(path.join(execSync('npm root -g').toString().trim(), 'x.js'))('playwright'); }
-const { chromium } = pw;
+import { launchBrowser } from './support/browser.mjs';
 
 // ======================================================================= shared mock harness (copied into each test file)
 // Nothing here may reach a real Supabase project: every request to *.supabase.co is answered by `Backend`, and anything it does not know is aborted and recorded.
@@ -170,7 +165,7 @@ const baseData = () => ({
 const { server, base } = await startServer();
 const PAGE = `${base}/everyspace/host/`; // served under a sub-path like GitHub Pages
 const errors = []; const seen = { supabase: 0, other: [], blockCdn: false };
-const browser = await chromium.launch();
+const browser = await launchBrowser();
 async function fresh(backend, { viewport = { width: 1280, height: 900 } } = {}) {
   const context = await browser.newContext({ viewport }); await wire(context, backend, seen);
   const page = await context.newPage(); watch(page, errors); return { context, page };
