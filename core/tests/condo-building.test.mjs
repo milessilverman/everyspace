@@ -389,7 +389,7 @@ test('condo options: the unit and a private room; never yard, pool, driveway, ro
   assert.ok(!ids(identifyOpportunities(condo({ storage_unit_present: S(true, 'estimated', 0.3) }), { now: NOW })).includes('basement_storage'));
   // the question asked for the missing owner facts is the condo question, not the house one
   const q = missingEvidence(condo(), {});
-  assert.match(q.find((x) => x.categoryKey === 'parking_spot').question, /assigned to your unit/); assert.match(q.find((x) => x.categoryKey === 'basement_storage').question, /storage unit or locker/);
+  assert.match(q.find((x) => x.categoryKey === 'parking_spot').question, /assigned to your unit/); assert.match(q.find((x) => x.categoryKey === 'basement_storage').question, /storage unit/);
   assert.ok(!q.some((x) => ['backyard', 'pool', 'rooftop_solar', 'garage_storage', 'adu'].includes(x.categoryKey)));
   // capacity: a condo owner has exactly the assigned spaces
   assert.equal(defaultResourceCapacity(condo({ assigned_parking_spaces: OWN(2), driveway_area_sqft: S(300) })).parking, 2);
@@ -439,7 +439,7 @@ const BUILDING = (extra = {}) => profile({ property_type: S('multi_family', 'est
 test('multi-family options: apartment_unit with the owner\'s quantity (or listed as needing the answer); parking with parking_spaces; roof only with access or an owner roof type', () => {
   const none = identifyOpportunities(BUILDING(), { now: NOW });
   const a0 = by(none, 'apartment_unit');
-  assert.ok(a0); assert.equal(a0.quantity, undefined); assert.equal(a0.quantityNeeded.key, 'units_available_to_rent'); assert.match(a0.quantityNeeded.question, /how many of the units/i); assert.ok(a0.notes.some((n) => /no number is assumed/.test(n)));
+  assert.ok(a0); assert.equal(a0.quantity, undefined); assert.equal(a0.quantityNeeded.key, 'units_available_to_rent'); assert.match(a0.quantityNeeded.question, /how many units could you rent out/i); assert.ok(a0.notes.some((n) => /no number is assumed/.test(n)));
   assert.ok(!ids(none).includes('rooftop_solar'), 'no roof access and no roof type: no roof option');
   assert.ok(ids(none).includes('backyard'), 'yard-based options as for a house');
   const a = (n) => by(identifyOpportunities(BUILDING({ units_available_to_rent: OWN(n) }), { now: NOW }), 'apartment_unit');

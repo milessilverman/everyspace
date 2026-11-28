@@ -412,11 +412,13 @@ await scenario('condo view: the picture is read-only context (title, shared lot,
   await page.locator('#lot-map').screenshot({ path: `${SHOTS}/condo-picture-desktop.png` });
   // switching to "A house" gives the adjustable picture back; switching again returns to the read-only one
   await page.click('#own-house');
-  await page.waitForSelector('#lot-map .lm-h');
+  await page.waitForSelector('#lot-map .lm-frame[data-model]'); // the adjustable picture: outlines at rest, corners only once an area is being edited
   assert.equal(await text(page, '#lot-map .lm-title'), 'Your lot from above');
+  assert.ok(await page.locator('#lot-map .lm-editbtn').count() >= 2, 'the adjustable picture offers Edit buttons');
   await page.click('#own-condo');
   await page.waitForSelector('#lot-map.lm-context .lm-svg');
   assert.equal(await page.locator('#lot-map .lm-h').count(), 0);
+  assert.equal(await page.locator('#lot-map .lm-editbtn, .fact .lm-listedit').count(), 0, 'the read-only picture has no Edit buttons, and no list line offers one');
 });
 
 // ---- 4. the earnings page for a condo owner ---------------------------------------------------------------------------------------------------------------
@@ -481,7 +483,7 @@ await scenario('building view: its own lines first, then everything a house gets
   assert.deepEqual(await page.locator('.fact[data-key="roof_type"] .yn-b').allInnerTexts(), ['Flat', 'Gable', 'Hip', 'Not sure']);
   assert.equal(await page.locator('.fact[data-key="roof_type"] [aria-pressed="true"]').count(), 0);
   assert.equal(await page.inputValue('#f-roof_area_sqft'), '', 'the roof size waits for the roof type');
-  await page.waitForSelector('#lot-map .lm-h');
+  await page.waitForSelector('#lot-map .lm-frame[data-model]');
   assert.doesNotMatch(await text(page, '#lot-map'), /roof about/i, 'no roof figure in the picture before the roof type is given');
   assert.equal(await text(page, '#lot-map .lm-title'), 'Your lot from above');
   assert.ok(await page.locator('#lot-map [data-lm="addbld"]').count() === 1, 'the adjustable picture');
@@ -579,7 +581,7 @@ await scenario('a house flow is unchanged: the same lines, no unit step, no quan
   assert.equal(await page.isChecked('#own-house'), true);
   assert.equal(await page.locator('#condo-context').count(), 0);
   assert.equal(await text(page, '#facts .fact[data-key="living_area_sqft"] .flabel'), 'Home size');
-  await page.waitForSelector('#lot-map .lm-h');
+  await page.waitForSelector('#lot-map .lm-frame[data-model]');
   const c = await calls(page);
   assert.equal(c.length, 1);
   assert.deepEqual(Object.keys(c[0]).filter((k) => ['unit', 'ownsWholeBuilding', 'ownerPropertyType', 'roofType'].includes(k)), [], 'a house lookup carries no condo or building options');
@@ -608,6 +610,7 @@ await scenario('390 px phone: the condo view and its earnings page fit', async (
   assert.equal(await noHorizontalScroll(page), true, 'condo list');
   const own = await page.locator('.own-opt').evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().right)));
   assert.ok(own.every((r) => r <= 390), 'choices fit');
+  await page.waitForFunction(() => (document.querySelector('#lot-map .lm-frame')?.getBoundingClientRect().width ?? 0) > 0); // the picture is redrawn when the late outlines arrive
   const fr = await page.locator('#lot-map .lm-frame').boundingBox();
   assert.ok(fr.width <= 390 && fr.width > 200, `picture ${fr.width}`);
   await page.locator('#property').screenshot({ path: `${SHOTS}/condo-p1-phone.png` });

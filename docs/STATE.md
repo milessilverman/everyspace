@@ -13,6 +13,7 @@ Updated 2026-11-27. Read this first. Detail lives in the files named here.
 | Owner-first property screen, fast lookups, progress bar, nationwide autofill; City Pretty and StreetForge methods reused | done on branch | `estimate/`, `core/{roof,transit,building-size}.js`, `core/providers/{overture-buildings,parcel-registry,county-lookup,photon-address}.js`; `docs/audit/reuse-*.md`, `docs/zillow.md` |
 | Two-page flow (property, then Next to earnings), remodeled year, usable yard, satellite view with adjustable outlines, yards from street lines | done on branch | `estimate/{app,lot-map,county-path}.js`, `core/{measure,usable-yard,street-ref,aerial,lot-estimate}.js`, `core/providers/{overture-roads,naip-aerial}.js`; measurements in `docs/yard-accuracy.md` |
 | Condos and apartment buildings: unit picker, "What do you own here?", condo and building fact lists, earnings by quantity | done on branch | `core/property-profile.js`, `core/providers/la-assessor.js`, `core/opportunities.js`, `core/revenue.js`, `estimate/{app,county-path,unit-adapter,context-map}.js`; `docs/condos-and-buildings.md` |
+| Easier to use: picture pinned beside the list, edit one area at a time (lot, house, driveway, front yard, back yard), guided one-at-a-time questions with "I don't know" | done on branch | `estimate/{lot-map,questions}.js`, `core/measure.js` (yard overrides), `core/opportunities.js` (`ownerQuestions`, `askWhen`), `core/data/categories.js` |
 | Rename to "Spacavia" ("Your space, your way") and repository rename | on hold | waiting for the owner's go-ahead |
 | Backend from run 1 (orgs, conflict engine, adapters) | staging only | not applied to the live database |
 
@@ -29,8 +30,8 @@ Live backend functions (checked read-only 2026-11-27): `calendar-feed`, `calenda
 ## Test commands and last results
 | command | result |
 |---|---|
-| `npm test` (core unit tests) | 518 pass |
-| `npm run e2e` (every `tests/*.e2e.mjs`) | 11 files pass (adds condos and buildings; those scenarios use a stand-in for the lookup, checked separately against live county records) |
+| `npm test` (core unit tests) | 536 pass |
+| `npm run e2e` (every `tests/*.e2e.mjs`) | 12 files pass; takes about 12 minutes (the satellite-view file alone is over 6) |
 | `cd platform && npm test` | 264 pass |
 | `cd platform && npm run test:staging` | 16 pass |
 | demo repo: `node --test tests/*.test.mjs` | 15 pass |
@@ -101,6 +102,9 @@ All three need an account with the provider (and a billing account for Google), 
 | A8 | Go-ahead for the Spacavia rename and the repository rename | brand change; the public address changes and Supabase's allowed redirect addresses must be updated |
 
 ## Known limits
+- Questions are filtered by relevance rules Everyspace chose (camping and beehives only above half an acre, pasture above two acres, commercial ideas for buildings only, water access only with a water-nearby fact, which no lookup supplies yet). Filtered questions stay reachable under "less common ideas".
+- A size given for an attic, basement, shed or storage unit is recorded but does not change any estimate: the revenue model has no size input for them.
+- An owner-edited yard outline is measured on a 0.1 m grid (within about 1%). "Floors" can differ between visits because it depends on which outline source answered.
 - Condos are recognised from the county's condo use code or a condominium legal description with a unit number; other unit-style codes are not confirmed, so some condos read as a house until the owner picks "A condo or one unit". Mobile homes and rooming houses still read as houses. Outside LA County there is no unit list and the owner says what they own.
 - Earnings for several units multiply one unit's estimate by the count: every unit is assumed to perform alike, with no allowance for competing with yourself.
 - For an apartment building the footprint line is the largest building only; roof size needs the owner's roof type.

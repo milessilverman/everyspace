@@ -17,7 +17,7 @@
 // has a variable capacity: pass defaultResourceCapacity(profile) as constraints.resourceCapacity.
 // entire_home conflicts with everything inside or behind the home (private_room, backyard, pool, garage_storage,
 // kitchen, ...), ASSUMING a whole-home guest has the whole property, garage included.
-import { CATEGORIES, ATTRIBUTE_QUESTIONS, CONDO_OWNER_KEYS, BUILDING_OWNER_KEYS } from './data/categories.js';
+import { CATEGORIES, ATTRIBUTE_QUESTIONS, CONDO_OWNER_KEYS, BUILDING_OWNER_KEYS, QUESTION_DEFS, ASK_CUTOFFS, GEAR_CHOICES, SIZE_INPUTS, CATEGORY_SIZE_KEYS } from './data/categories.js';
 import { checkFeasibility } from './regulatory.js';
 
 /** @typedef {import('./types.js').Opportunity} Opportunity */
@@ -26,7 +26,7 @@ import { checkFeasibility } from './regulatory.js';
 /** @typedef {import('./data/categories.js').Rule} Rule */
 /** @typedef {'yes'|'no'|'unknown'} Tri */
 
-export { CONDO_OWNER_KEYS, BUILDING_OWNER_KEYS };
+export { CONDO_OWNER_KEYS, BUILDING_OWNER_KEYS, QUESTION_DEFS, ASK_CUTOFFS, GEAR_CHOICES, SIZE_INPUTS };
 /** Resources whose capacity is always 1 in defaultResourceCapacity, so sharing one is a hard conflict. */
 const EXCLUSIVE_RESOURCES = ['home_interior', 'yard', 'pool', 'garage', 'roof'];
 /** Boolean `*_present` style attributes that observe the asset itself (an estimate of them still shows the asset). */
@@ -38,7 +38,8 @@ const OBSERVED_ASSET_ATTRS = new Set(['pool_present', 'garage_present', 'adu_pre
  * @returns {string[]} sorted, unique
  */
 export function ownerAttributeKeys(categories = CATEGORIES) {
-  return [...new Set(categories.flatMap((c) => c.evidence?.ownerKeys ?? []))].sort();
+  const sizes = QUESTION_DEFS.filter((d) => d.size).map((d) => /** @type {string} */ (d.size?.key));
+  return [...new Set([...categories.flatMap((c) => c.evidence?.ownerKeys ?? []), ...sizes])].sort();
 }
 export const OWNER_ATTRIBUTE_KEYS = Object.freeze(ownerAttributeKeys());
 
@@ -186,6 +187,11 @@ export function identifyOpportunities(profile, { now, categories = CATEGORIES, j
     const est = evidence.filter((k) => read(profile, k)?.tag === 'estimated');
     if (est.length) notes.push(`Based on estimated values (${est.join(', ')}); confirm to improve accuracy.`);
     if (qf.note) notes.push(qf.note);
+    // a size the owner gave for this kind of space: kept and shown, but the estimate has no size-dependent input, so say so (never invent an effect)
+    for (const sk of CATEGORY_SIZE_KEYS[cat.key] ?? []) {
+      const sz = read(profile, sk);
+      if (sz && sz.tag === 'owner-confirmed' && typeof sz.value === 'number' && !SIZE_INPUTS[cat.key]) notes.push(`You told us about ${Math.round(sz.value).toLocaleString('en-US')} sq ft. The size is not yet used in this estimate.`);
+    }
     return {
       id: cat.key,
       categoryKey: cat.key,
@@ -240,18 +246,137 @@ export function defaultResourceCapacity(profile) {
  * @param {{categories?:CategoryDef[]}} [opts]
  * @returns {Array<{categoryKey:string, label:string, needs:string[], question:string, evidenceClass:string}>}
  */
-export function missingEvidence(profile, { categories = CATEGORIES } = {}) {
+export function missingEvidence(profile, { categories = CATEGORIES, asked = [] } = {}) {
   const out = [];
+  const skip = new Set(asked);
   for (const cat of categories) {
     const r = evaluateRule(cat.requires, profile);
     if (r.state !== 'unknown') continue;
-    const needs = [...r.missing].sort();
+    // a key the owner already answered "I don't know" is not asked again
+    const needs = [...r.missing].filter((k) => !skip.has(k)).sort();
+    if (!needs.length) continue;
     const ownerKeys = cat.evidence?.ownerKeys ?? [];
     const generic = (/** @type {string} */ k) => ATTRIBUTE_QUESTIONS[/** @type {keyof typeof ATTRIBUTE_QUESTIONS} */ (k)] ?? `Can you tell us about ${k.replace(/_/g, ' ')}?`;
-    // the condo / building keys have their own plain-language question (a category's question would talk about a basement or a shed)
-    const own = (/** @type {string} */ k) => [...CONDO_OWNER_KEYS, ...BUILDING_OWNER_KEYS].find((x) => x.key === k)?.question;
-    const question = needs.map((k) => (own(k) ?? (ownerKeys.includes(k) && cat.evidence.question ? cat.evidence.question : generic(k)))).filter((q, i, a) => a.indexOf(q) === i).join(' ');
+    // every key has its OWN question (a basement and a shed are two questions, never one); the category's question only when it has a single key
+    const own = (/** @type {string} */ k) => cat.evidence?.questions?.[k] ?? QUESTION_DEFS.find((d) => d.key === k)?.question ?? [...CONDO_OWNER_KEYS, ...BUILDING_OWNER_KEYS].find((x) => x.key === k)?.question;
+    const question = needs.map((k) => (own(k) ?? (ownerKeys.length === 1 && ownerKeys.includes(k) && cat.evidence.question ? cat.evidence.question : generic(k)))).filter((q, i, a) => a.indexOf(q) === i).join(' ');
     out.push({ categoryKey: cat.key, label: cat.label, needs, question, evidenceClass: cat.evidence?.class ?? 'auto' });
   }
   return out.sort((a, b) => (a.categoryKey < b.categoryKey ? -1 : 1));
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The guided owner questions
+// ---------------------------------------------------------------------------------------------------------------------
+
+/**
+ * Is a question worth asking for this profile? Pure. See QuestionDef.askWhen in core/data/categories.js for the rule language.
+ * An attribute the profile does not have is never "true" and a lot size that is not known is never "large".
+ * @param {any} rule @param {PropertyProfile} profile @returns {boolean}
+ */
+export function evaluateAskWhen(rule, profile) {
+  if (rule === undefined || rule === null) return true;
+  if (rule.all) return rule.all.every((/** @type {any} */ r) => evaluateAskWhen(r, profile));
+  if (rule.any) return rule.any.some((/** @type {any} */ r) => evaluateAskWhen(r, profile));
+  if ('not' in rule) return !evaluateAskWhen(rule.not, profile);
+  if (rule.never) return false;
+  if (rule.propertyType) { const t = read(profile, 'property_type')?.value; return typeof t === 'string' && rule.propertyType.includes(t); }
+  if (rule.lotAtLeast) {
+    const lot = read(profile, 'lot_area_sqft')?.value;
+    const min = /** @type {Record<string, number>} */ (ASK_CUTOFFS)[rule.lotAtLeast];
+    return typeof lot === 'number' && Number.isFinite(lot) && typeof min === 'number' && lot >= min;
+  }
+  if (rule.attrTrue) return read(profile, rule.attrTrue)?.value === true;
+  if (rule.attrKnown) return read(profile, rule.attrKnown) !== null;
+  if (rule.attrUnknown) return read(profile, rule.attrUnknown) === null;
+  return false;
+}
+
+/** Attribute keys whose answer could still decide this rule (leaves already ruled out, by an answer or by the property type, do not count). @param {Rule} rule @param {PropertyProfile} profile @returns {Set<string>} */
+function reach(rule, profile) {
+  if ('never' in rule) return new Set();
+  if ('all' in rule || 'any' in rule) {
+    const isAll = 'all' in rule;
+    const kids = isAll ? rule.all : rule.any;
+    if (isAll && kids.some((k) => evaluateRule(k, profile).state === 'no')) return new Set();
+    const out = new Set();
+    for (const k of kids) for (const x of reach(k, profile)) out.add(x);
+    return out;
+  }
+  return evaluateRule(rule, profile).state === 'no' ? new Set() : new Set([rule.attr]);
+}
+
+/**
+ * @typedef {{key:string, question:string, type:'yesno'|'number'|'choice'|'gear', unit?:string, choices?:Array<{value:string,label:string}>, unknownValue?:string, parent?:string, order:number, hold:string}} OwnerQuestion
+ */
+/**
+ * The owner questions for this profile, in the order to ask them: what is relevant to what the owner owns and could still change an option
+ * (`ask`), what is relevant but not by default (`lessCommon`: shown only when the owner asks for them), what they already answered
+ * (`answered`) and what they said "I don't know" to (`unknown`, never asked again).
+ * Nothing is asked until the property type is known. A Yes to a space that has a size is followed by its own "about how big" question.
+ * @param {PropertyProfile} profile
+ * @param {{asked?:string[], categories?:CategoryDef[]}} [opts] asked: keys answered "I don't know" this visit
+ * @returns {{ask:OwnerQuestion[], lessCommon:OwnerQuestion[], answered:Array<OwnerQuestion & {value:any}>, unknown:OwnerQuestion[]}}
+ */
+export function ownerQuestions(profile, { asked = [], categories = CATEGORIES } = {}) {
+  const out = { ask: [], lessCommon: [], answered: [], unknown: [] };
+  const ptype = read(profile, 'property_type')?.value;
+  if (typeof ptype !== 'string' || ptype === 'unknown') return out;
+  const dk = new Set(asked);
+  const reachable = new Set();
+  for (const c of categories) if (c.evidence?.class !== 'none') for (const k of reach(c.requires, profile)) reachable.add(k);
+  const seen = new Set();
+  /** @param {any} d @param {string} key @param {string} question @param {string} [parent] @param {number} order */
+  const q = (d, key, question, parent, order) => ({ key, question: d.questionFor?.[ptype] ?? question, type: parent ? 'number' : d.type, ...(parent ? { unit: 'sq ft' } : d.unit ? { unit: d.unit } : {}), ...(d.choices && !parent ? { choices: d.choices } : {}), ...(d.unknownValue && !parent ? { unknownValue: d.unknownValue } : {}), ...(parent ? { parent } : {}), order, hold: d.hold });
+  for (const d of QUESTION_DEFS) {
+    if (seen.has(d.key)) continue;
+    const relevant = d.types ? d.types.includes(ptype) : reachable.has(d.key);
+    if (d.types && !relevant) continue; // another definition of the same key may be the one for this property type
+    seen.add(d.key);
+    const attr = read(profile, d.key);
+    const mine = q(d, d.key, d.question, undefined, d.order);
+    // the size follow-up of a space that is there (answered Yes now, or known from the picture) and has no size yet
+    /** @type {OwnerQuestion|null} */
+    let follow = null;
+    if (d.size && attr && attr.value === true && (relevant || attr.tag === 'owner-confirmed')) {
+      const sz = read(profile, d.size.key);
+      follow = q(d, d.size.key, d.size.question, d.key, d.order + 0.5);
+      if (sz) { if (sz.tag === 'owner-confirmed') out.answered.push({ ...follow, value: sz.value }); follow = null; }
+    }
+    const answeredHere = attr?.tag === 'owner-confirmed';
+    if (answeredHere) out.answered.push({ ...mine, value: attr.value });
+    else if (!attr && dk.has(d.key)) out.unknown.push(mine);
+    else if (!attr && (relevant)) (evaluateAskWhen(d.askWhen, profile) ? out.ask : out.lessCommon).push(mine);
+    if (follow) (dk.has(follow.key) ? out.unknown : out.ask).push(follow);
+  }
+  const by = (/** @type {{order:number}} */ a, /** @type {{order:number}} */ b) => a.order - b.order;
+  for (const k of ['ask', 'lessCommon', 'answered', 'unknown']) /** @type {any} */ (out)[k].sort(by);
+  return out;
+}
+
+/**
+ * Options that wait for an answer the owner gave as "I don't know": one plain line per question, with what it would unlock.
+ * @param {PropertyProfile} profile @param {string[]} asked keys answered "I don't know"
+ * @param {{categories?:CategoryDef[]}} [opts]
+ * @returns {Array<{key:string, line:string, labels:string[]}>}
+ */
+export function heldBack(profile, asked, { categories = CATEGORIES } = {}) {
+  const dk = new Set(asked);
+  /** @type {Map<string,{key:string, line:string, labels:string[]}>} */
+  const out = new Map();
+  if (!dk.size) return [];
+  for (const cat of categories) {
+    if (cat.evidence?.class === 'none') continue;
+    const r = evaluateRule(cat.requires, profile);
+    if (r.state !== 'unknown') continue;
+    for (const k of [...r.missing].sort()) {
+      if (!dk.has(k)) continue;
+      const d = QUESTION_DEFS.find((x) => x.key === k);
+      if (!d) continue;
+      const e = out.get(k) ?? { key: k, line: d.hold, labels: [] };
+      e.labels.push(cat.label);
+      out.set(k, e);
+    }
+  }
+  return [...out.values()].sort((a, b) => (QUESTION_DEFS.find((x) => x.key === a.key)?.order ?? 0) - (QUESTION_DEFS.find((x) => x.key === b.key)?.order ?? 0));
 }

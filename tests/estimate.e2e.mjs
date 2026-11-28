@@ -374,8 +374,8 @@ await scenario('editing: owner correction, answers, price override and investmen
   await assertMatchesCore(page, corePipeline(p, { overrides: ov }), 'after reset');
   // 4. a question: "yes" adds that idea, and the answer becomes a line in the list
   await toProperty(page);
-  await page.click('details[data-dk="questions"] > summary');
-  assert.match(await text(page, 'details[data-dk="questions"] > summary'), /^More things you could rent \(\d+ questions?\)$/);
+  assert.match(await text(page, '#q-progress'), /^\d+ of \d+$/);
+  await page.click('#qcard .q-dot[data-key="workspace_available"]');
   await page.click('#q-workspace_available-yes');
   p = owner(p, [['workspace_available', true]]);
   assert.equal(await page.getAttribute('#f-workspace_available-yes', 'aria-pressed'), 'true');
@@ -485,7 +485,6 @@ await scenario('nothing found: one sentence, empty list, owner basics still give
 
 await scenario('privacy and accessibility: nothing stored, labelled controls, only lookup hosts', async (page, rec, ctx) => {
   await happy(page, rec);
-  await page.click('details[data-dk="questions"] > summary');
   await ensureOpen(page, 'as-pool');
   const unlabeled = await page.evaluate(() => [...document.querySelectorAll('input, select')].filter((el) => !(el.labels && el.labels.length) && !el.getAttribute('aria-label') && !el.closest('label')).map((el) => el.id || el.outerHTML.slice(0, 60)));
   assert.deepEqual(unlabeled, [], 'every control has a label');
@@ -521,7 +520,6 @@ await scenario('mobile 390px: no horizontal scroll at any stage; screenshot', as
   await page.waitForSelector('#facts');
   await fits('loading');
   await settled(page);
-  await page.click('details[data-dk="questions"] > summary');
   await page.click('details.sources > summary');
   await fits('results');
   await typeFact(page, 'bedrooms', 'x');

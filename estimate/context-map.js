@@ -2,7 +2,7 @@
 // outlines on it, for context only. No corners to drag, no zones, no driveway, no "Add a building", and no size pushed into the list:
 // the grounds, roof and driveway of a building are shared, so none of them is the owner's number.
 // It draws into the same mount as lot-map.js; app.js hands the mount to one of the two (see renderAll). Nothing is stored.
-import { sourceFromProfile, frameFor, frameProject, photoUrl, NAIP_BACKDROP } from './lot-map.js';
+import { sourceFromProfile, frameFor, frameProject, photoUrl, NAIP_BACKDROP, syncPicLayout } from './lot-map.js';
 
 const SVGNS = 'http://www.w3.org/2000/svg';
 const USGS_FALLBACK = 'https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPPlus/ImageServer/exportImage';
@@ -33,8 +33,10 @@ export function initContextMap({ getProfile, mount }) {
     const body = el('div', { class: 'lm-body' }, null, mount);
     const stage = el('div', { class: 'lm-stage' }, null, body);
     const cw = stage.clientWidth || mount.clientWidth || 600;
-    const maxH = Math.min(520, Math.max(280, (window.innerHeight || 800) * 0.6));
-    const Wd = Math.max(160, Math.floor(Math.min(cw, maxH * fr.aspect))), Hd = Math.round(Wd / fr.aspect);
+    const ph = typeof matchMedia === 'function' && matchMedia('(max-width: 899px)').matches; // the same pinned strip as the lot picture on a phone
+    mount.classList.toggle('lm-phone', ph); mount.classList.toggle('lm-compact', ph);
+    const maxH = ph ? Math.max(110, (window.innerHeight || 800) * 0.3 - 46) : Math.min(520, Math.max(280, (window.innerHeight || 800) * 0.6));
+    const Wd = Math.max(80, Math.floor(Math.min(cw, maxH * fr.aspect))), Hd = Math.round(Wd / fr.aspect);
     const frame = el('div', { class: 'lm-frame', 'data-bbox': fr.bbox.map((v) => v.toFixed(9)).join(',') }, null, stage);
     frame.style.width = `${Wd}px`; frame.style.height = `${Hd}px`;
     const img = el('img', { class: 'lm-img', alt: '', 'aria-hidden': 'true', decoding: 'async', referrerpolicy: 'no-referrer', draggable: 'false', hidden: '' }, null, frame);
@@ -61,6 +63,7 @@ export function initContextMap({ getProfile, mount }) {
     const url = photoUrl(fr.bbox, long, core?.usgs ?? USGS_FALLBACK);
     frame.dataset.photoUrl = url; img.src = url;
     mount.hidden = false; shown = true;
+    syncPicLayout(true);
   }
 
   function update() {
@@ -69,7 +72,7 @@ export function initContextMap({ getProfile, mount }) {
     const src = profile ? sourceFromProfile(profile) : null;
     if (!src || (!src.parcel && !src.buildings.length)) { hide(); return; }
     const sg = sigOf(src);
-    if (shown && sg === sig) { mount.hidden = false; return; }
+    if (shown && sg === sig) { mount.hidden = false; syncPicLayout(true); return; }
     sig = sg;
     if (!coreTried) {
       coreTried = true;
