@@ -1387,6 +1387,13 @@ try { if (location.hash === '#earn') history.replaceState(null, '', location.pat
 renderAll();
 attachAddressSuggest(els.input);
 
+// Firefox can restore the previous address on reload even though the estimate has been cleared.
+if (performance.getEntriesByType('navigation')[0]?.type === 'reload') {
+  window.addEventListener('pageshow', () => {
+    if (!S.address && S.phase === 'address') els.input.value = '';
+  }, { once: true });
+}
+
 // An address submitted on the homepage arrives in the URL fragment (#address=...) or, without JavaScript there,
 // the query (?address=...). Start the lookup once, as if the button had been pressed, then clear it from the address bar.
 (function startFromUrl() {

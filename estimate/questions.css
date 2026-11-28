@@ -1,4 +1,6 @@
 /* The guided owner questions (estimate/questions.js). Uses the page's own colours and tokens; nothing new. */
+/* The property list and question are redrawn together. Let the guided flow decide when to scroll. */
+:root:has(#view-property:not([hidden]) #qcard) { overflow-anchor: none; }
 .qcard { margin: 14px 0 6px; padding: 14px 14px 12px; border: 1px solid var(--accent-line); border-radius: var(--card-radius); background: var(--accent-soft); scroll-margin-top: 76px; }
 .q-reassure { margin: 0 0 8px; color: var(--ink-2); }
 .q-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; min-height: 22px; }
