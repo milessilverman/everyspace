@@ -489,6 +489,56 @@ function dKey(key, label, body, _unused = false, cls = 'panel') {
 }
 
 function renderLookup() {
+  const found = S.phase === 'results' && S.result?.kind === 'ok' && !S.notFound;
+  const heading = $('#h-address');
+  const headingRow = heading.parentElement;
+  let changeAddress = $('#change-address');
+  if (found && !changeAddress) {
+    changeAddress = document.createElement('button');
+    changeAddress.type = 'button';
+    changeAddress.id = 'change-address';
+    changeAddress.className = 'linkbtn address-change';
+    changeAddress.setAttribute('aria-controls', els.form.id);
+    changeAddress.setAttribute('aria-expanded', 'false');
+    headingRow.append(changeAddress);
+    changeAddress.addEventListener('click', () => {
+      const expand = els.form.hidden;
+      changeAddress.setAttribute('aria-expanded', String(expand));
+      renderLookup();
+      if (expand) els.input.focus();
+    });
+    $('.skip').addEventListener('click', (event) => {
+      if (!els.form.hidden || els.viewProperty.hidden) return;
+      event.preventDefault();
+      changeAddress.click();
+    });
+  }
+  if (changeAddress) {
+    if (!found) changeAddress.setAttribute('aria-expanded', 'false');
+    const collapsed = found && changeAddress.getAttribute('aria-expanded') !== 'true';
+    if (collapsed) {
+      const address = S.profile?.attributes.address;
+      const full = String(hasValue(address) ? address.value : S.address);
+      const comma = full.indexOf(',');
+      heading.textContent = comma < 0 ? full : full.slice(0, comma);
+      if (comma >= 0) {
+        const locality = document.createElement('span');
+        locality.className = 'address-locality';
+        locality.textContent = full.slice(comma);
+        heading.append(locality);
+      }
+      heading.title = full;
+    } else {
+      heading.textContent = 'Your property';
+      heading.removeAttribute('title');
+    }
+    changeAddress.hidden = !found;
+    changeAddress.textContent = collapsed ? 'Change address' : 'Hide address form';
+    els.form.hidden = collapsed;
+    els.status.classList.toggle('sr-only', collapsed);
+    headingRow.parentElement.classList.toggle('address-compact', collapsed);
+  }
+
   const parts = [];
   if (S.phase === 'confirm' && S.result) {
     parts.push(`<section class="card" aria-labelledby="h-confirm"><h2 id="h-confirm">Is this your property?</h2>
@@ -746,17 +796,47 @@ function scenarioTable(o, e) {
 
 function inputValueText(key, s) {
   if (s.tag === 'unavailable') return 'Not set';
-  if (key === 'seasonality') return s.value.every((x) => x === s.value[0]) ? 'Flat across the year (no seasonal data)' : '12 monthly multipliers';
+  if (key === 'seasonality') return s.value.every((x) => x === s.value[0]) ? 'Flat across the year (no seasonal data)' : 'Varies by month';
   if (CENTS_KEYS.has(key)) return money2(s.value);
   if (RATE_KEYS.has(key)) return pct.format(s.value);
   return nf.format(s.value);
 }
-function inputEditor(o, key, idp) {
+function inputEditor(o, key, idp, { prompt = '', showLabel = false } = {}) {
   const id = `${idp}-${safeId(o.id)}-${key}`;
   const unit = CENTS_KEYS.has(key) ? '$' : RATE_KEYS.has(key) ? '%' : '';
-  return `<div class="edit-inline"><label class="sr-only" for="${id}">${esc(INPUT_LABEL(key, o.unit))}</label>${unit === '$' ? '<span aria-hidden="true">$</span>' : ''}<input id="${id}" type="number" min="0" step="any" inputmode="decimal" data-input-edit="${esc(o.id)}|${key}">${unit === '%' ? '<span aria-hidden="true">%</span>' : ''}
+  const promptAttrs = prompt ? ` placeholder="Add" aria-describedby="${esc(prompt)}"` : '';
+  return `<div class="edit-inline"><label class="${showLabel ? 'f earn-field-label' : 'sr-only'}" for="${id}">${esc(INPUT_LABEL(key, o.unit))}</label>${unit === '$' ? '<span aria-hidden="true">$</span>' : ''}<input id="${id}" type="number" min="0" step="any" inputmode="decimal"${promptAttrs} data-input-edit="${esc(o.id)}|${key}">${unit === '%' ? '<span aria-hidden="true">%</span>' : ''}
     <button class="btn sm primary" id="${idp}-save-${safeId(o.id)}-${key}" type="button" data-act="save-input" data-oid="${esc(o.id)}" data-key="${key}" data-field="${id}">Apply</button>
     ${idp === 'ei' ? `<button class="btn sm" id="ei-cancel-${safeId(o.id)}-${key}" type="button" data-act="cancel-input">Cancel</button>` : ''}</div>`;
+}
+
+function seasonalityEditor(o, values) {
+  const id = `ei-${safeId(o.id)}-seasonality`;
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return `<form class="earn-seasonality" data-seasonality-edit="${esc(o.id)}" aria-describedby="${id}-help">
+    <p class="small muted" id="${id}-help">Use higher values for busier months and lower values for quieter months. Keep the yearly average at 1.</p>
+    <div class="earn-months">${values.map((value, month) => `<label class="f">${months[month]}
+      <input id="${month === 0 ? id : `${id}-${month}`}" type="number" min="0" step="any" inputmode="decimal" value="${esc(value)}" required></label>`).join('')}</div>
+    <p class="inline-err" role="alert"></p>
+    <div class="row"><button type="submit" class="btn sm primary" id="${id}-apply">Apply</button>
+      <button type="button" class="btn sm" id="ei-cancel-${safeId(o.id)}-seasonality" data-act="cancel-input">Cancel</button></div>
+  </form>`;
+}
+
+function applySeasonality(form, view) {
+  const id = form.dataset.seasonalityEdit;
+  const seasonality = [...form.querySelectorAll('input')].map((input) => input.valueAsNumber);
+  try {
+    withOverrides(view.estimates[id].inputs, { seasonality }, view.now);
+  } catch {
+    form.querySelector('[role="alert"]').textContent = 'Enter a value for each month so the average across the year is 1.';
+    return;
+  }
+  S.dirty = true;
+  S.overrides[id] = { ...S.overrides[id], seasonality };
+  S.editInput = null;
+  S.focusId = `ei-edit-${safeId(id)}-seasonality`;
+  renderAll();
 }
 
 function assumptionsHtml(o, e) {
@@ -764,8 +844,8 @@ function assumptionsHtml(o, e) {
     const s = e.inputs[key];
     const editing = S.editInput && S.editInput.oppId === o.id && S.editInput.key === key;
     const overridden = S.overrides[o.id] && key in S.overrides[o.id];
-    const actions = key === 'seasonality' ? '<span class="small muted">Not editable</span>'
-      : editing ? inputEditor(o, key, 'ei')
+    const actions = editing
+      ? (key === 'seasonality' ? seasonalityEditor(o, s.value) : inputEditor(o, key, 'ei'))
         : `<button class="btn sm" id="ei-edit-${safeId(o.id)}-${key}" type="button" data-act="edit-input" data-oid="${esc(o.id)}" data-key="${key}" aria-label="${s.tag === 'unavailable' ? 'Fill in' : 'Edit'} ${esc(INPUT_LABEL(key, o.unit))}">${s.tag === 'unavailable' ? 'Fill in' : 'Edit'}</button>`
         + (overridden ? ` <button class="btn sm ghost" id="ei-reset-${safeId(o.id)}-${key}" type="button" data-act="reset-input" data-oid="${esc(o.id)}" data-key="${key}" aria-label="Reset ${esc(INPUT_LABEL(key, o.unit))} to the planning default">Reset</button>` : '');
     return `<tr data-input="${key}"><th scope="row">${esc(INPUT_LABEL(key, o.unit))}</th>
@@ -795,19 +875,25 @@ function ruleHtml(o) {
     ${rules ? `<ul class="plain small" style="margin-top:6px">${rules}</ul>` : ''}${reqs}`;
 }
 
+function needQuestion(keys, unit) {
+  if (keys.length > 1) return 'What would you charge, and how often could you rent it?';
+  if (keys[0] === 'priceCents') return `What would you charge per ${unit}?`;
+  if (keys[0] === 'capacityUnitsPerMonth') return `How many ${unit}s a month is it available?`;
+  return unit === 'month' ? 'How much of each month could you rent it?' : `How many ${unit}s a month could you rent it?`;
+}
+
 function needHtml(o, e) {
-  const need = e.missing.filter((k) => NEEDED_KEYS.includes(k));
-  const keys = need.length ? need : e.missing.filter((k) => k !== 'seasonality');
-  return `<div class="callout warn" data-unavailable="${esc(o.id)}"><strong>No estimate yet.</strong> We need: ${keys.map((k) => esc(INPUT_LABEL(k, o.unit).toLowerCase())).join(', ')}. Enter ${keys.length === 1 ? 'it' : 'them'} to see a range.
-    <div class="stack" style="margin-top:8px">${keys.map((k) => `<div><div class="small"><strong>${esc(INPUT_LABEL(k, o.unit))}</strong></div>${inputEditor(o, k, 'need')}</div>`).join('')}</div></div>`;
+  const keys = e.missing.filter((k) => NEEDED_KEYS.includes(k));
+  if (!keys.length) return '';
+  const question = needQuestion(keys, o.unit);
+  const id = `need-label-${safeId(o.id)}`;
+  return `<div class="earn-need" data-unavailable="${esc(o.id)}">
+    <p class="earn-question" id="${id}">${esc(question)}</p>
+    ${keys.map((k) => `<div class="earn-answer">${inputEditor(o, k, 'need', { prompt: id, showLabel: keys.length > 1 })}</div>`).join('')}
+  </div>`;
 }
 
-/** A way's yearly range, or why there is none yet. */
-function rangeText(e, suffix = '') {
-  return e?.available ? `About ${money(e.scenarios.conservative.noiCentsPerYear)} to ${money(e.scenarios.optimistic.noiCentsPerYear)} a year${suffix}` : '';
-}
-
-/** One way to earn as a compact card: name, yearly range, and the full breakdown, assumptions and editors under "Details". */
+/** One way to earn, with its full breakdown and editable assumptions under "Details". */
 function earnCard(o, e, { suffix = '', reason = '' } = {}) {
   const q = quantityOf(o);
   const view = viewNow().view;
@@ -816,18 +902,24 @@ function earnCard(o, e, { suffix = '', reason = '' } = {}) {
   const perLo = q > 1 && e?.available ? perUnitYearCents(e, o, 'conservative') : null, perHi = q > 1 && e?.available ? perUnitYearCents(e, o, 'optimistic') : null;
   const perUnit = perLo !== null && perHi !== null ? `<p class="small muted per-unit" data-per-unit="${esc(o.id)}">about ${money(perLo)} to ${money(perHi)} a year each</p>` : '';
   const notes = o.notes.length ? `<ul class="plain small muted">${o.notes.map((n) => `<li>${esc(humanKeys(n))}</li>`).join('')}</ul>` : '';
-  const range = rangeText(e, suffix);
-  const inner = `<div class="chips">${ruleHtml(o)}</div>
+  const basis = esc(BASIS_WORDS[o.basis] ?? o.basis);
+  const range = e.available ? `<p class="range" data-range="${esc(o.id)}">About <strong>${money(e.scenarios.conservative.noiCentsPerYear)} to ${money(e.scenarios.optimistic.noiCentsPerYear)}</strong> a year${suffix}</p>` : '';
+  const inner = `<div class="earn-details-body">
+    <div class="chips"><span class="chip">${basis}</span> ${ruleHtml(o)}</div>
     ${e.available ? `${scenarioTable(o, e)}<p class="why small" data-confidence="${esc(e.confidenceLabel)}">${esc(whyConfidence(o, e))}</p>` : ''}
     ${notes}
-    <div style="margin-top:8px">${assumptionsHtml(o, e)}</div>`;
-  return `<article class="card opp compact" data-opp-card="${esc(o.id)}" aria-labelledby="oh-${safeId(o.id)}">
-    <header><h3 id="oh-${safeId(o.id)}">${esc(o.label)}</h3><span class="chip">${esc(BASIS_WORDS[o.basis] ?? o.basis)}</span></header>
-    ${q > 1 ? `<p class="qty" data-qty="${esc(o.id)}">${esc(quantityWords(o))}</p>` : ''}
-    ${range ? `<p class="range" data-range="${esc(o.id)}">${esc(range)}</p>` : ''}${perUnit}${hoaCheck}
-    ${reason ? `<p class="small muted reason" data-rejected="${esc(o.id)}">${esc(reason)}</p>` : ''}
+    ${assumptionsHtml(o, e)}
+  </div>`;
+  return `<article class="opp earn-idea" id="idea-${safeId(o.id)}" data-opp-card="${esc(o.id)}" aria-labelledby="oh-${safeId(o.id)}">
+    <div class="earn-idea-copy">
+      <h3 id="oh-${safeId(o.id)}">${esc(o.label)}</h3>
+      ${q > 1 ? `<p class="qty" data-qty="${esc(o.id)}">${esc(quantityWords(o))}</p>` : ''}
+      ${range}${perUnit}${hoaCheck}
+      ${suffix ? `<p class="small muted">${basis}</p>` : ''}
+      ${reason ? `<p class="small muted reason" data-rejected="${esc(o.id)}">${esc(reason)}</p>` : ''}
+    </div>
     ${e.available ? '' : needHtml(o, e)}
-    ${dKey(`det-${o.id}`, 'Details', inner, false, 'panel opp-details')}
+    ${dKey(`det-${o.id}`, 'Details', inner, false, 'opp-details')}
   </article>`;
 }
 
@@ -841,92 +933,118 @@ function nameize(text, byId) {
 
 const BACK_LINK = '<a href="./" class="back" id="back-property" data-act="back-property">&larr; Back to my property</a>';
 
+function combinationDetails(opt, estimates) {
+  if (!opt.selected.length) return '';
+  const sameSet = opt.eligibleIds.length === opt.selected.length && opt.eligibleIds.every((id) => opt.selected.includes(id));
+  const totals = SCENARIO_NAMES.map((s) => ({ s, t: summarize(estimates, opt.selected, s) }));
+  const th = SCENARIO_NAMES.map((s) => `<th scope="col">${cap(s)}</th>`).join('');
+  const shown = (f, t) => (f === 'upfrontCents' && t.upfrontUnknownIds.length ? (t[f] === 0 ? 'Unknown' : `${money(t[f])} + unknown`) : money(t[f]));
+  const row = (title, f, cls = '', attr = '') => `<tr><th scope="row">${title}</th>${totals.map(({ s, t }) => `<td class="${cls}" ${attr ? `data-scenario="${s}" data-period="${attr}" data-cents="${t[f]}"` : ''}>${shown(f, t)}</td>`).join('')}</tr>`;
+  return dKey('combo-details', 'How the total adds up', `<div class="tablewrap"><table class="scen" id="combo-totals"><caption class="sr-only">Combined net income of the best combination</caption>
+      <thead><tr><th scope="col">Combined</th>${th}</tr></thead><tbody>
+      ${row('Net income per month', 'noiCentsPerMonth', '', 'month')}${row('Net income per year', 'noiCentsPerYear', 'big', 'year')}
+      ${row('Gross income per year', 'grossCentsPerYear')}${row('Start-up cost', 'upfrontCents')}</tbody></table></div>
+    ${sameSet ? '' : `<p class="why" id="combo-naive" style="margin-top:10px">Adding everything up would give <strong data-naive-cents="${opt.naiveSumNoiCentsPerYear}">${money(opt.naiveSumNoiCentsPerYear)}</strong>, but some of these cannot run together (they share the same space or resources, or would go over your start-up budget), so the realistic total is <strong data-real-cents="${opt.totals.noiCentsPerYear}">${money(opt.totals.noiCentsPerYear)}</strong>.
+      <span class="muted small">Baseline net income per year.</span></p>`}
+    <p class="small muted">Confidence: ${esc(CONF_WORDS[totals[1].t.confidenceLabel])}. ${totals[1].t.upfrontUnknownIds.length ? 'Start-up cost is unknown for some of these.' : ''}</p>`, false, 'panel');
+}
+
 function controlsHtml() {
   const goalOpts = GOALS.map((g) => `<option value="${g}"${S.goal === g ? ' selected' : ''}>${GOAL_LABELS[g] ?? g}</option>`).join('');
-  return `<section class="card" aria-labelledby="h-goal"><h2 id="h-goal">What matters to you</h2>
-    <div class="fields" style="margin-top:10px">
-      <label class="f" for="goal">What matters most to you?<select id="goal" data-change="goal">${goalOpts}</select></label>
+  return `<details class="card earn-settings" data-dk="earn-settings"${S.open.has('earn-settings') ? ' open' : ''}>
+    <summary><h2 id="h-goal">What matters to you <span>${esc(GOAL_LABELS[S.goal] ?? S.goal)}</span></h2></summary>
+    <div class="earn-settings-body stack">
+      <label class="f" for="goal">What matters most to you?<select id="goal" data-change="goal" aria-describedby="goal-help">${goalOpts}</select></label>
+      <p class="small muted" id="goal-help">${esc(GOAL_HELP[S.goal] ?? '')}</p>
       <label class="f" for="max-upfront">Most you would spend up front (optional)<input id="max-upfront" type="number" min="0" step="any" inputmode="decimal" data-change="maxUpfront" value="${esc(S.maxUpfront)}" placeholder="No limit"></label>
+      <div class="stack">
+        <label class="check" for="no-strangers"><input type="checkbox" id="no-strangers" data-change="noStrangers"${S.noStrangers ? ' checked' : ''}>No strangers inside my home</label>
+        <label class="check" for="only-known"><input type="checkbox" id="only-known" data-change="onlyKnown"${S.onlyKnownRules ? ' checked' : ''}>Only include uses whose local rules are on file</label>
+        <label class="check" for="include-investments"><input type="checkbox" id="include-investments" data-change="investments"${S.includeInvestments ? ' checked' : ''}>Also show ideas that need building work or permits</label>
+      </div>
     </div>
-    <p class="small muted" id="goal-help" style="margin-top:6px">${esc(GOAL_HELP[S.goal] ?? '')}</p>
-    <div class="stack" style="margin-top:8px">
-      <label class="check" for="no-strangers"><input type="checkbox" id="no-strangers" data-change="noStrangers"${S.noStrangers ? ' checked' : ''}>No strangers inside my home</label>
-      <label class="check" for="only-known"><input type="checkbox" id="only-known" data-change="onlyKnown"${S.onlyKnownRules ? ' checked' : ''}>Only include uses whose local rules are on file</label>
-      <label class="check" for="include-investments"><input type="checkbox" id="include-investments" data-change="investments"${S.includeInvestments ? ' checked' : ''}>Also show ideas that need building work or permits</label>
-    </div></section>`;
+  </details>`;
+}
+
+function earnHeadline(view, hasNextSteps) {
+  const { opt, estimates, opps, hoaBlocked } = view;
+  if (opt.selected.length) {
+    const lo = summarize(estimates, opt.selected, 'conservative').noiCentsPerYear;
+    const hi = summarize(estimates, opt.selected, 'optimistic').noiCentsPerYear;
+    if (hi > 0) {
+      return `<p class="earn-goal">Best combination · ${esc(GOAL_LABELS[S.goal] ?? S.goal)}</p>
+        <p class="headline" id="earn-headline" data-low-cents="${lo}" data-high-cents="${hi}"><strong>${money(lo)} to ${money(hi)}</strong> a year</p>
+        <p class="small muted">After the costs we could count.</p>`;
+    }
+  }
+  if (hoaBlocked) {
+    return `<p class="headline none" id="earn-headline" data-empty="true">No options fit your HOA's rules yet.</p>
+      <p id="hoa-rule" class="small muted">The HOA rule you reported rules these options out; if the rule changes, or you learn it allows rentals, change your answer on your property page.</p>`;
+  }
+  const message = hasNextSteps ? 'Answer a question below or add more property details.'
+    : opps.length ? 'Review what matters to you below or add more property details.'
+      : 'Add a few details on your property page to check for ideas.';
+  return `<p class="headline none" id="earn-headline" data-empty="true">No estimate yet</p><p class="small muted">${message}</p>`;
 }
 
 function earnHtml(view) {
   const { opt, estimates, byId, opps, hold } = view;
   const err = S.error ? `<div class="callout bad" role="alert" id="input-error">${esc(S.error)}</div>` : '';
   S.error = '';
-  const totalsFor = (scn) => summarize(estimates, opt.selected, scn);
-  const lo = opt.selected.length ? totalsFor('conservative').noiCentsPerYear : 0;
-  const hi = opt.selected.length ? totalsFor('optimistic').noiCentsPerYear : 0;
-  const found = opt.selected.length > 0 && hi > 0;
-  const notice = `<div class="callout warn notice" id="notice"><p id="plan-note"><strong>These are planning estimates, not promises.</strong> Prices and bookings are Everyspace planning defaults unless you enter your own.</p>${S.onlyKnownRules ? '' : '<p id="rules-caution"><strong>Caution:</strong> local rules were not checked for the uses listed here. Confirm each one with your city before you start.</p>'}</div>`;
-  let head;
-  if (found) {
-    head = `<p class="headline" id="earn-headline" data-low-cents="${lo}" data-high-cents="${hi}">Your property could earn about <strong>${money(lo)} to ${money(hi)}</strong> a year</p>
-      <p class="small muted">After the costs we could count, for the best combination for the goal "${esc(GOAL_LABELS[S.goal] ?? S.goal)}". It is a range, not a promise.</p>`;
-  } else if (view.hoaBlocked) {
-    head = `<p class="headline none" id="earn-headline" data-empty="true">No options fit your HOA's rules yet.</p>
-      <p id="hoa-rule" style="margin-top:8px">The HOA rule you reported rules these options out; if the rule changes, or you learn it allows rentals, change your answer on your property page.</p>
-      <p style="margin-top:8px">${BACK_LINK}</p>`;
-  } else if (!opps.length) {
-    head = `<p class="headline none" id="earn-headline" data-empty="true">We have not found a way to earn yet. Add a few details about your property and we can show what it could earn.</p>
-      <p style="margin-top:8px">${BACK_LINK}</p>`;
-  } else {
-    head = `<p class="headline none" id="earn-headline" data-empty="true">No combination fits your choices yet. Loosen a choice below, or add a few details about your property and we can show what it could earn.</p>
-      <p style="margin-top:8px">${BACK_LINK}</p>`;
-  }
-  const inSel = new Set(opt.selected), inInv = new Set(opt.investments);
-  const included = opt.selected.map((id) => earnCard(byId[id], estimates[id])).join('');
-  const sameSet = opt.eligibleIds.length === opt.selected.length && opt.eligibleIds.every((id) => opt.selected.includes(id));
-  let totalsBlock = '';
-  if (opt.selected.length) {
-    const totals = SCENARIO_NAMES.map((s) => ({ s, t: summarize(estimates, opt.selected, s) }));
-    const th = SCENARIO_NAMES.map((s) => `<th scope="col">${cap(s)}</th>`).join('');
-    const shown = (f, t) => (f === 'upfrontCents' && t.upfrontUnknownIds.length ? (t[f] === 0 ? 'Unknown' : `${money(t[f])} + unknown`) : money(t[f]));
-    const row = (title, f, cls = '', attr = '') => `<tr><th scope="row">${title}</th>${totals.map(({ s, t }) => `<td class="${cls}" ${attr ? `data-scenario="${s}" data-period="${attr}" data-cents="${t[f]}"` : ''}>${shown(f, t)}</td>`).join('')}</tr>`;
-    totalsBlock = dKey('combo-details', 'How the total adds up', `<div class="tablewrap"><table class="scen" id="combo-totals"><caption class="sr-only">Combined net income of the best combination</caption>
-        <thead><tr><th scope="col">Combined</th>${th}</tr></thead><tbody>
-        ${row('Net income per month', 'noiCentsPerMonth', '', 'month')}${row('Net income per year', 'noiCentsPerYear', 'big', 'year')}
-        ${row('Gross income per year', 'grossCentsPerYear')}${row('Start-up cost', 'upfrontCents')}</tbody></table></div>
-      ${sameSet ? '' : `<p class="why" id="combo-naive" style="margin-top:10px">Adding everything up would give <strong data-naive-cents="${opt.naiveSumNoiCentsPerYear}">${money(opt.naiveSumNoiCentsPerYear)}</strong>, but some of these cannot run together (they share the same space or resources, or would go over your start-up budget), so the realistic total is <strong data-real-cents="${opt.totals.noiCentsPerYear}">${money(opt.totals.noiCentsPerYear)}</strong>.
-        <span class="muted small">Baseline net income per year.</span></p>`}
-      <p class="small muted">Confidence: ${esc(CONF_WORDS[totals[1].t.confidenceLabel])}. ${totals[1].t.upfrontUnknownIds.length ? 'Start-up cost is unknown for some of these.' : ''}</p>`, false, 'panel');
-  }
-  const rejectedIds = new Map(opt.rejected.filter((r) => !inInv.has(r.id)).map((r) => [r.id, r.reason]));
-  const leftIds = opps.map((o) => o.id).filter((id) => !inSel.has(id) && !inInv.has(id));
-  const left = leftIds.length ? `<section aria-labelledby="h-left" id="combo-rejected"><div class="section-title"><h2 id="h-left">Left out of the best combination</h2><span class="small muted">${leftIds.length} option${leftIds.length === 1 ? '' : 's'}</span></div>
-    ${leftIds.map((id) => earnCard(byId[id], estimates[id], { reason: rejectedIds.has(id) ? nameize(rejectedIds.get(id), byId).replace(/^Estimate unavailable: missing (.*)$/i, (_, k) => `No estimate yet. We need: ${humanKeys(k).replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase()}.`) : '' })).join('')}</section>` : '';
-  const inv = opt.investments.length ? `<section aria-labelledby="h-inv" id="combo-investments"><div class="section-title"><h2 id="h-inv">Needs a permit or building work first</h2><span class="small muted">Not in the total above</span></div>
-    <p class="small muted">These need a permit, registration or building work before they can start. Start-up costs are unknown unless you enter them.</p>
-    ${opt.investments.map((id) => earnCard(byId[id], estimates[id], { suffix: ' before start-up costs' })).join('')}</section>` : '';
-  return `<div class="stack">
+  const caution = S.onlyKnownRules ? 'Confirm the rules for any use with your city before you start.'
+    : 'Local rules were not checked for the uses listed here. Confirm each one with your city before you start.';
+  const notice = `<div class="callout warn notice" id="notice"><p id="plan-note"><strong>These are planning estimates, not promises.</strong> Prices and bookings are Everyspace planning defaults unless you enter your own.</p><p id="rules-caution"><strong>Caution:</strong> ${caution}</p></div>`;
+  const includedIds = new Set(opt.selected), investmentIds = new Set(opt.investments);
+  const otherIdeas = opps.filter((o) => !includedIds.has(o.id) && !investmentIds.has(o.id));
+  const waiting = otherIdeas.filter((o) => !estimates[o.id].available);
+  const ready = otherIdeas.filter((o) => estimates[o.id].available);
+  const rejected = new Map(opt.rejected.map(({ id, reason }) => [id, reason]));
+  const heldQuestions = Q.heldHtml();
+  const waitingForUnits = holdHtml(hold);
+  const nextSteps = waitingForUnits + heldQuestions + waiting.map((o) => earnCard(o, estimates[o.id])).join('');
+  const justParking = waiting.length === 1 && waiting[0].id === 'parking_spot' && !waitingForUnits && !heldQuestions;
+  const nextLink = nextSteps ? `<a class="earn-next-link" href="#earn-next">${justParking ? 'Add parking hours' : 'See what’s needed'}</a>` : '';
+  const totalsBlock = combinationDetails(opt, estimates);
+  const included = opt.selected.length ? `<section class="earn-included" aria-labelledby="h-incl">
+    <h2 id="h-incl">Included in this total</h2>
+    <div id="combo-selected">${opt.selected.map((id) => earnCard(byId[id], estimates[id])).join('')}</div>
+    <div class="earn-summary-links">${totalsBlock}${nextLink}</div>
+  </section>` : '';
+  const other = ready.length ? `<section class="card earn-group" aria-labelledby="h-left" id="combo-rejected">
+    <h2 id="h-left">Other ideas</h2>
+    ${ready.map((o) => earnCard(o, estimates[o.id], { reason: nameize(rejected.get(o.id) ?? '', byId) })).join('')}
+  </section>` : '';
+  const permits = opt.investments.length ? `<section class="card earn-group earn-permits" aria-labelledby="h-inv" id="combo-investments">
+    <h2 id="h-inv">Needs a permit or building work</h2>
+    <p class="small muted">Outside this total</p>
+    ${opt.investments.map((id) => earnCard(byId[id], estimates[id], { suffix: ' before start-up costs' })).join('')}
+  </section>` : '';
+  const address = S.profile.attributes.address;
+  const street = hasValue(address) ? String(address.value).split(',')[0] : S.address;
+  return `<div class="earn-page">
     <p>${BACK_LINK}</p>
-    <h1 id="h-earn" tabindex="-1">What your property could earn</h1>
-    <section class="card headcard" aria-label="Summary">${head}</section>
+    <div class="earn-title"><h1 id="h-earn" tabindex="-1">What your property could earn</h1>
+      ${street ? `<p class="muted">${esc(street)}</p>` : ''}</div>
+    <section class="card earn-overview" aria-label="Summary">
+      <div class="earn-total">${earnHeadline(view, Boolean(nextSteps))}</div>
+      ${included}
+    </section>
     ${notice}
     ${err}
-    ${controlsHtml()}
-    ${opt.selected.length ? `<section aria-labelledby="h-incl"><div class="section-title"><h2 id="h-incl">Ways in your best combination</h2><span class="small muted">${opt.selected.length} of ${opps.length} option${opps.length === 1 ? '' : 's'}</span></div>
-      <div id="combo-selected" class="stack">${included}</div>${totalsBlock ? `<div style="margin-top:12px">${totalsBlock}</div>` : ''}</section>` : ''}
-    ${holdHtml(hold)}
-    ${Q.heldHtml()}
-    ${left}
-    ${inv}
-    <p><a href="../host/">Already renting? Manage your spaces in the Host Console</a></p>
+    <div class="earn-columns">
+      ${nextSteps ? `<section class="card earn-next" id="earn-next" aria-labelledby="h-next"><h2 id="h-next" tabindex="-1">What to do next</h2>${nextSteps}</section>` : ''}
+      ${other || permits ? `<div class="earn-ideas">${other}${permits}</div>` : ''}
+      ${controlsHtml()}
+    </div>
   </div>`;
 }
 
 /** Options that wait for one answer from the owner: no number, one question, a link back to the line. */
 function holdHtml(hold) {
   if (!hold?.length) return '';
-  return `<section aria-labelledby="h-hold" id="needs-answer"><div class="section-title"><h2 id="h-hold">One answer needed</h2></div>
-    ${hold.map((o) => `<article class="card opp compact" data-opp-card="${esc(o.id)}" data-needs-units="true" aria-labelledby="oh-${safeId(o.id)}"><header><h3 id="oh-${safeId(o.id)}">${esc(o.label)}</h3></header>
-      <p>How many units could you offer this way? Tell us on your property page and the income for the units shows here.</p>
+  return `<section aria-labelledby="h-hold" id="needs-answer"><h3 class="sr-only" id="h-hold">Units available to rent</h3>
+    ${hold.map((o) => `<article class="opp earn-idea" data-opp-card="${esc(o.id)}" data-needs-units="true" aria-labelledby="oh-${safeId(o.id)}"><header><h3 id="oh-${safeId(o.id)}">${esc(o.label)}</h3></header>
+      <p class="earn-question">How many units could you offer this way?</p>
       <p style="margin-top:8px"><a href="./" class="back" id="back-units" data-act="back-units">Add the number of units</a></p></article>`).join('')}</section>`;
 }
 
@@ -938,8 +1056,28 @@ function renderEarn() {
     els.earn.innerHTML = `<div class="stack"><p>${BACK_LINK}</p><h1 id="h-earn" tabindex="-1">What your property could earn</h1><div class="callout bad" role="alert">Something went wrong while working out the estimates. Go back, change a value and try again.</div></div>`;
     return;
   }
+  const activeIdea = document.activeElement?.closest('.earn-need')?.closest('.earn-idea');
+  const activeId = document.activeElement?.id;
+  const drafts = [...els.earn.querySelectorAll('.earn-need input, .earn-seasonality input')].map((input) => [input.id, input.value]);
   S.view = view;
   els.earn.innerHTML = earnHtml(view);
+  for (const [id, value] of drafts) {
+    const input = document.getElementById(id);
+    if (input) input.value = value;
+  }
+  if (activeIdea && activeId && !document.getElementById(activeId)) {
+    const idea = document.getElementById(activeIdea.id);
+    (idea?.querySelector('.earn-need input, .opp-details > summary') ?? $('#h-next', els.earn))?.focus();
+  }
+  $('[data-seasonality-edit]', els.earn)?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    applySeasonality(event.currentTarget, view);
+  });
+  $('.earn-next-link', els.earn)?.addEventListener('click', (event) => {
+    event.preventDefault();
+    $('#earn-next', els.earn).scrollIntoView({ block: 'start' });
+    $('#h-next', els.earn).focus({ preventScroll: true });
+  });
   if (S.keepStatus) { S.keepStatus = false; return; }
   const n = view.opps.length;
   announce(`Estimates updated: ${n} way${n === 1 ? '' : 's'} to earn found.`);

@@ -1088,6 +1088,9 @@ await scenario('dragging is direct (the corner follows the pointer in the same e
 await scenario('the list drives the picture: focusing or hovering a line lights its area and fades the others; tapping an area scrolls its line into view and flashes it', async (page) => {
   world = 'county'; photoMode = 'png';
   await open(page); await mapReady(page); await settled(page);
+  // Keep the fact rows below the center of the screen until this scenario focuses one.
+  await page.getByRole('button', { name: 'Change address' }).click();
+  await page.mouse.move(5, 5); await frames(page);
   const hl = (area) => page.evaluate((a) => ({ svg: document.querySelector('#lot-map .lm-svg').classList.contains('has-hl'), lit: [...document.querySelectorAll('#lot-map .lm-svg [data-area].is-hl:not(.lm-area)')].map((e) => e.getAttribute('data-area')), canvas: document.querySelector('#lot-map .lm-canvas').classList.contains('is-hl') }), area);
   assert.equal((await hl()).svg, false, 'nothing lit at rest');
   await page.focus('#f-back_yard_sqft');

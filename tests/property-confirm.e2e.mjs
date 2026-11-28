@@ -347,6 +347,7 @@ await scenario('owner questions: a yes answer becomes a line in the list; a type
     await page.waitForSelector('#q-err');
   }
   await toEarn(page);
+  await page.click('details[data-dk="earn-settings"] > summary');
   await page.fill('#max-upfront', '-100');
   await page.locator('#max-upfront').blur();
   await page.waitForSelector('#input-error');
@@ -358,6 +359,7 @@ await scenario('re-searching does not silently drop the owner\'s changes', async
   await typeFact(page, 'bedrooms', '6');
   await page.waitForSelector(`${row('bedrooms')}[data-state="edited"]`);
   const calls = nominatim(rec);
+  await page.getByRole('button', { name: 'Change address' }).click();
   await page.click('#address-submit');
   assert.match(await text(page, '#status'), /You have changes on this page/);
   assert.equal(nominatim(rec), calls, 'nothing looked up on the first press');
